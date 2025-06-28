@@ -32,15 +32,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.linkedin.com/*",
-        "https://*.indeed.com/*",
-        "https://*.glassdoor.com/*",
-        "https://*.recruitee.com/*",
-        "https://*.myworkdayjobs.com/*",
-        "https://*.lever.co/*",
-        "https://*.greenhouse.io/*",
-        "https://www.google.com/*",
-        "https://google.com/*"
+        "<all_urls>"
       ],
       "js": [
         "content/content-main.js"
@@ -64,15 +56,7 @@
         "platforms/*/config.json"
       ],
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://www.indeed.com/*",
-        "https://www.glassdoor.com/*",
-        "https://recruitee.com/*",
-        "https://*.recruitee.com/*",
-        "https://*.workday.com/*",
-        "https://*.myworkdayjobs.com/*",
-        "https://www.google.com/*",
-        "https://google.com/*"
+        "<all_urls>"
       ]
     }
   ],
