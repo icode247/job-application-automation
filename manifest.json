@@ -1,34 +1,107 @@
 {
   "manifest_version": 3,
-  "name": "Window-Specific Automation Demo",
-  "version": "1.0",
-  "description": "Demonstrates running automation only in extension-opened windows",
-  
+  "name": "AI Job Application Assistant",
+  "version": "2.1.0",
+  "description": "Intelligent job application automation across LinkedIn, Indeed, Glassdoor, Recruitee, and Workday platforms",
+  "author": "FastApply Team",
   "permissions": [
     "storage",
     "tabs",
     "activeTab",
-    "scripting"
+    "scripting",
+    "background",
+    "declarativeNetRequest"
   ],
-  
+  "externally_connectable": {
+    "matches": [
+      "https://yourdomain.com/*",
+      "https://*.yourdomain.com/*",
+      "https://app.yourdomain.com/*",
+      "https://staging.yourdomain.com/*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*"
+    ]
+  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background/background.js",
+    "type": "module"
   },
-  
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_start"
-    }
-  ],
-  
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Window Automation Demo"
-  },
-  
   "host_permissions": [
     "<all_urls>"
-  ]
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.linkedin.com/*",
+        "https://*.indeed.com/*",
+        "https://*.glassdoor.com/*",
+        "https://*.recruitee.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://*.lever.co/*",
+        "https://*.greenhouse.io/*",
+        "https://www.google.com/*",
+        "https://google.com/*"
+      ],
+      "js": [
+        "content/content-main.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "platforms/linkedin/linkedin.js",
+        "platforms/indeed/indeed.js",
+        "platforms/recruitee/recruitee.js",
+        "platforms/glassdoor/glassdoor.js",
+        "platforms/workday/workday.js",
+        "platforms/base-platform.js",
+        "platforms/platform-registry.js",
+        "ui/styles/automation.css",
+        "ui/components/*.js",
+        "platforms/*/config.json"
+      ],
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://www.indeed.com/*",
+        "https://www.glassdoor.com/*",
+        "https://recruitee.com/*",
+        "https://*.recruitee.com/*",
+        "https://*.workday.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://www.google.com/*",
+        "https://google.com/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_title": "Job Application Assistant",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "24": "icons/icon16.png",
+      "32": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "24": "icons/icon16.png",
+    "32": "icons/icon48.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "anti_detection_rules",
+        "enabled": true,
+        "path": "rules/anti_detection.json"
+      }
+    ]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://yourdomain.com https://*.yourdomain.com"
+  },
+  "minimum_chrome_version": "88"
 }
