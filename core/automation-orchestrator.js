@@ -1,14 +1,12 @@
 // core/automation-orchestrator.js
-import PlatformRegistry from "../platforms/platform-registry.js";
-import WindowManager from "../background/window-manager.js";
-import Logger from "./logger.js";
+import WindowManager from '../background/window-manager.js';
+import Logger from './logger.js';
 
 export default class AutomationOrchestrator {
   constructor() {
-    this.platformRegistry = new PlatformRegistry();
     this.windowManager = new WindowManager();
     this.logger = new Logger();
-    this.activeAutomations = new Map();
+    this.activeSessions = new Map();
   }
 
   async startAutomation(params) {
@@ -25,84 +23,70 @@ export default class AutomationOrchestrator {
       dailyRemaining,
       resumeUrl,
       coverLetterTemplate,
-      preferences,
+      preferences
     } = params;
 
     try {
-      this.logger.info(`🚀 Starting automation for platform: ${platform}`, {
-        sessionId,
-      });
-
-      // Get platform handler
-      const PlatformClass = await this.platformRegistry.getPlatform(platform);
-      console.log(PlatformClass, platform)
-      if (!PlatformClass) {
-        throw new Error(`Platform ${platform} not supported`);
-      }
+      this.logger.info(`🚀 Starting automation for platform: ${platform}`, { sessionId });
 
       // Create automation window
-      const automationWindow = await this.createAutomationWindow(
-        platform,
-        sessionId
-      );
+      const automationWindow = await this.createAutomationWindow(platform, sessionId);
       if (!automationWindow) {
-        throw new Error("Failed to create automation window");
+        throw new Error('Failed to create automation window');
       }
 
-      // Initialize platform automation
-      const platformAutomation = new PlatformClass({
-        sessionId,
-        windowId: automationWindow.id,
-        userId,
-        jobsToApply,
-        submittedLinks,
-        devMode,
-        country,
-        userPlan,
-        userCredits,
-        dailyRemaining,
-        resumeUrl,
-        coverLetterTemplate,
-        preferences,
-        logger: this.logger,
-      });
-
-      // Create automation session
-      const automationSession = new AutomationSession({
+      // Create session tracking object (no platform automation here)
+      const sessionTracker = new AutomationSessionTracker({
         sessionId,
         platform,
-        platformAutomation,
         windowId: automationWindow.id,
         params,
-        orchestrator: this,
+        orchestrator: this
       });
 
-      // Store active automation
-      this.activeAutomations.set(sessionId, automationSession);
+      // Store active session
+      this.activeSessions.set(sessionId, sessionTracker);
 
-      // Start the automation
-      await automationSession.start();
+      // Wait for content script to load, then send start message
+      setTimeout(async () => {
+        await this.sendStartMessageToContentScript(automationWindow.id, {
+          sessionId,
+          platform,
+          config: {
+            jobsToApply,
+            submittedLinks,
+            preferences,
+            resumeUrl,
+            coverLetterTemplate,
+            userPlan,
+            userCredits,
+            dailyRemaining,
+            userId,
+            devMode,
+            country
+          }
+        });
+      }, 2000);
 
-      this.logger.info(`✅ Automation started successfully`, {
-        sessionId,
-        platform,
-      });
+      this.logger.info(`✅ Automation session created successfully`, { sessionId, platform });
 
       return {
         success: true,
-        automationInstance: automationSession,
-        windowId: automationWindow.id,
-      };
-    } catch (error) {
-      this.logger.error(`❌ Failed to start automation: ${error.message}`, {
         sessionId,
-        platform,
-        error: error.stack,
+        windowId: automationWindow.id,
+        sessionTracker
+      };
+
+    } catch (error) {
+      this.logger.error(`❌ Failed to start automation: ${error.message}`, { 
+        sessionId, 
+        platform, 
+        error: error.stack 
       });
 
       return {
         success: false,
-        error: error.message,
+        error: error.message
       };
     }
   }
@@ -111,23 +95,23 @@ export default class AutomationOrchestrator {
     try {
       // Get platform-specific starting URL
       const startUrl = this.getStartingUrl(platform);
-
+      
       const window = await chrome.windows.create({
         url: startUrl,
-        type: "normal",
+        type: 'normal',
         focused: true,
         width: 1200,
-        height: 800,
+        height: 800
       });
 
       // Register as automation window
       await this.windowManager.registerAutomationWindow(window.id, {
         sessionId,
         platform,
-        createdAt: Date.now(),
+        createdAt: Date.now()
       });
 
-      // Inject automation flag
+      // Inject automation context
       setTimeout(async () => {
         try {
           if (window.tabs && window.tabs[0]) {
@@ -137,224 +121,222 @@ export default class AutomationOrchestrator {
                 window.automationSessionId = sessionId;
                 window.automationPlatform = platform;
                 window.isAutomationWindow = true;
-                sessionStorage.setItem("automationSessionId", sessionId);
-                sessionStorage.setItem("automationPlatform", platform);
-                sessionStorage.setItem("automationWindow", "true");
+                sessionStorage.setItem('automationSessionId', sessionId);
+                sessionStorage.setItem('automationPlatform', platform);
+                sessionStorage.setItem('automationWindow', 'true');
               },
-              args: [sessionId, platform],
+              args: [sessionId, platform]
             });
           }
         } catch (error) {
-          console.error("Error injecting automation context:", error);
+          console.error('Error injecting automation context:', error);
         }
       }, 100);
 
       return window;
+
     } catch (error) {
       throw new Error(`Failed to create automation window: ${error.message}`);
     }
   }
 
+  async sendStartMessageToContentScript(windowId, automationConfig) {
+    try {
+      // Get the active tab in the automation window
+      const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
+      if (tabs.length === 0) {
+        throw new Error('No active tab found in automation window');
+      }
+
+      const tabId = tabs[0].id;
+
+      // Send message to content script to start automation
+      await chrome.tabs.sendMessage(tabId, {
+        action: 'startAutomation',
+        config: automationConfig
+      });
+
+      this.logger.info('📤 Sent start message to content script', { windowId, tabId });
+
+    } catch (error) {
+      this.logger.error('❌ Failed to send start message to content script:', error);
+      
+      // Retry after a delay
+      setTimeout(() => {
+        this.sendStartMessageToContentScript(windowId, automationConfig);
+      }, 2000);
+    }
+  }
+
   getStartingUrl(platform) {
     const urls = {
-      linkedin: "https://www.linkedin.com/jobs/search/",
-      indeed: "https://www.indeed.com/jobs",
-      recruitee:
-        "https://www.google.com/search?q=site:recruitee.com+software+engineer",
-      glassdoor: "https://www.glassdoor.com/Job/index.htm",
-      workday:
-        "https://www.google.com/search?q=site:myworkdayjobs.com+software+engineer",
+      linkedin: 'https://www.linkedin.com/jobs/search/',
+      indeed: 'https://www.indeed.com/jobs',
+      recruitee: 'https://www.google.com/search?q=site:recruitee.com+software+engineer',
+      glassdoor: 'https://www.glassdoor.com/Job/index.htm',
+      workday: 'https://www.google.com/search?q=site:myworkdayjobs.com+software+engineer'
     };
 
-    return (
-      urls[platform] || "https://www.google.com/search?q=software+engineer+jobs"
-    );
+    return urls[platform] || 'https://www.google.com/search?q=software+engineer+jobs';
   }
 
   async stopAutomation(sessionId) {
-    const automation = this.activeAutomations.get(sessionId);
-    if (automation) {
-      await automation.stop();
-      this.activeAutomations.delete(sessionId);
+    const sessionTracker = this.activeSessions.get(sessionId);
+    if (sessionTracker) {
+      await sessionTracker.stop();
+      this.activeSessions.delete(sessionId);
       return true;
     }
     return false;
   }
 
   async pauseAutomation(sessionId) {
-    const automation = this.activeAutomations.get(sessionId);
-    if (automation) {
-      await automation.pause();
+    const sessionTracker = this.activeSessions.get(sessionId);
+    if (sessionTracker) {
+      await sessionTracker.pause();
       return true;
     }
     return false;
   }
 
   async resumeAutomation(sessionId) {
-    const automation = this.activeAutomations.get(sessionId);
-    if (automation) {
-      await automation.resume();
+    const sessionTracker = this.activeSessions.get(sessionId);
+    if (sessionTracker) {
+      await sessionTracker.resume();
       return true;
     }
     return false;
   }
 
   getAutomationStatus(sessionId) {
-    const automation = this.activeAutomations.get(sessionId);
-    return automation ? automation.getStatus() : null;
+    const sessionTracker = this.activeSessions.get(sessionId);
+    return sessionTracker ? sessionTracker.getStatus() : null;
+  }
+
+  // Handle progress updates from content script
+  handleProgressUpdate(sessionId, progress) {
+    const sessionTracker = this.activeSessions.get(sessionId);
+    if (sessionTracker) {
+      sessionTracker.updateProgress(progress);
+    }
+  }
+
+  // Handle error reports from content script
+  handleErrorReport(sessionId, error, context) {
+    const sessionTracker = this.activeSessions.get(sessionId);
+    if (sessionTracker) {
+      sessionTracker.addError(error, context);
+    }
+  }
+
+  // Handle application submissions from content script
+  handleApplicationSubmitted(sessionId, jobData, applicationData) {
+    const sessionTracker = this.activeSessions.get(sessionId);
+    if (sessionTracker) {
+      sessionTracker.addApplication(jobData, applicationData);
+    }
   }
 
   // Clean up automation when window is closed
   async handleWindowClosed(windowId) {
-    for (const [sessionId, automation] of this.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        await automation.stop();
-        this.activeAutomations.delete(sessionId);
-        this.logger.info(`🧹 Cleaned up automation for closed window`, {
-          sessionId,
-          windowId,
-        });
+    for (const [sessionId, sessionTracker] of this.activeSessions.entries()) {
+      if (sessionTracker.windowId === windowId) {
+        await sessionTracker.stop();
+        this.activeSessions.delete(sessionId);
+        this.logger.info(`🧹 Cleaned up automation for closed window`, { sessionId, windowId });
       }
     }
   }
 }
 
-class AutomationSession {
-  constructor({
-    sessionId,
-    platform,
-    platformAutomation,
-    windowId,
-    params,
-    orchestrator,
-  }) {
+// Session tracking class (runs in background, tracks state only)
+class AutomationSessionTracker {
+  constructor({ sessionId, platform, windowId, params, orchestrator }) {
     this.sessionId = sessionId;
     this.platform = platform;
-    this.platformAutomation = platformAutomation;
     this.windowId = windowId;
     this.params = params;
     this.orchestrator = orchestrator;
-
-    this.status = "created";
-    this.startTime = null;
+    
+    this.status = 'created';
+    this.startTime = Date.now();
     this.endTime = null;
     this.progress = {
-      total: params.jobsToApply,
+      total: params.jobsToApply || 0,
       completed: 0,
       failed: 0,
       skipped: 0,
-      current: null,
+      current: null
     };
     this.errors = [];
+    this.applications = [];
     this.isPaused = false;
-  }
-
-  async start() {
-    try {
-      this.status = "running";
-      this.startTime = Date.now();
-
-      // Set up progress monitoring
-      this.platformAutomation.onProgress = (progress) => {
-        this.updateProgress(progress);
-      };
-
-      this.platformAutomation.onError = (error) => {
-        this.handleError(error);
-      };
-
-      this.platformAutomation.onComplete = () => {
-        this.handleComplete();
-      };
-
-      // Start platform automation
-      await this.platformAutomation.start();
-    } catch (error) {
-      this.status = "failed";
-      this.errors.push({
-        message: error.message,
-        timestamp: Date.now(),
-        context: "start",
-      });
-      throw error;
-    }
   }
 
   async pause() {
     this.isPaused = true;
-    this.status = "paused";
-
-    if (this.platformAutomation.pause) {
-      await this.platformAutomation.pause();
-    }
+    this.status = 'paused';
+    
+    // Send pause message to content script
+    await this.sendMessageToContentScript({
+      action: 'pauseAutomation'
+    });
   }
 
   async resume() {
     this.isPaused = false;
-    this.status = "running";
-
-    if (this.platformAutomation.resume) {
-      await this.platformAutomation.resume();
-    }
+    this.status = 'running';
+    
+    // Send resume message to content script
+    await this.sendMessageToContentScript({
+      action: 'resumeAutomation'  
+    });
   }
 
   async stop() {
-    this.status = "stopped";
+    this.status = 'stopped';
     this.endTime = Date.now();
+    
+    // Send stop message to content script
+    await this.sendMessageToContentScript({
+      action: 'stopAutomation'
+    });
+  }
 
-    if (this.platformAutomation.stop) {
-      await this.platformAutomation.stop();
+  async sendMessageToContentScript(message) {
+    try {
+      const tabs = await chrome.tabs.query({ windowId: this.windowId, active: true });
+      if (tabs.length > 0) {
+        await chrome.tabs.sendMessage(tabs[0].id, {
+          ...message,
+          sessionId: this.sessionId
+        });
+      }
+    } catch (error) {
+      console.error('Error sending message to content script:', error);
     }
   }
 
   updateProgress(progressUpdate) {
     this.progress = { ...this.progress, ...progressUpdate };
-
-    // Report progress to background
-    chrome.runtime.sendMessage({
-      action: "reportProgress",
-      sessionId: this.sessionId,
-      progress: this.progress,
-    });
+    this.status = 'running';
   }
 
-  handleError(error) {
+  addError(error, context) {
     this.errors.push({
-      message: error.message,
-      timestamp: Date.now(),
-      context: error.context || "unknown",
-    });
-
-    // Report error to background
-    chrome.runtime.sendMessage({
-      action: "reportError",
-      sessionId: this.sessionId,
-      error: error.message,
-      context: error.context,
+      message: error.message || error,
+      context,
+      timestamp: Date.now()
     });
   }
 
-  handleComplete() {
-    this.status = "completed";
-    this.endTime = Date.now();
-
-    // Report completion
-    chrome.runtime.sendMessage({
-      action: "automationComplete",
-      sessionId: this.sessionId,
-      progress: this.progress,
-      duration: this.endTime - this.startTime,
+  addApplication(jobData, applicationData) {
+    this.applications.push({
+      jobData,
+      applicationData,
+      timestamp: Date.now()
     });
-  }
-
-  getProgress() {
-    return {
-      ...this.progress,
-      status: this.status,
-      isPaused: this.isPaused,
-      duration: this.startTime ? Date.now() - this.startTime : 0,
-      errors: this.errors,
-    };
+    this.progress.completed = this.applications.length;
   }
 
   getStatus() {
@@ -365,11 +347,21 @@ class AutomationSession {
       progress: this.progress,
       startTime: this.startTime,
       endTime: this.endTime,
-      duration: this.startTime
-        ? (this.endTime || Date.now()) - this.startTime
-        : 0,
+      duration: this.startTime ? (this.endTime || Date.now()) - this.startTime : 0,
       errors: this.errors,
+      applications: this.applications,
       isPaused: this.isPaused,
+      windowId: this.windowId
+    };
+  }
+
+  getProgress() {
+    return {
+      ...this.progress,
+      status: this.status,
+      isPaused: this.isPaused,
+      duration: this.startTime ? Date.now() - this.startTime : 0,
+      errorCount: this.errors.length
     };
   }
 }
