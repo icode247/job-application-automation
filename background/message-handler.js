@@ -1,4 +1,4 @@
-// background/message-handler.js - Simplified approach
+// background/message-handler.js
 import AutomationOrchestrator from "../core/automation-orchestrator.js";
 import SessionManager from "./session-manager.js";
 import WindowManager from "./window-manager.js";
@@ -10,9 +10,9 @@ export default class MessageHandler {
     this.windowManager = new WindowManager();
     this.activeAutomations = new Map();
     this.backgroundService = null;
+    this.processingRequests = new Set(); // Track processing requests to prevent duplicates
   }
 
-  // Set reference to background service
   setBackgroundService(backgroundService) {
     this.backgroundService = backgroundService;
   }
@@ -48,9 +48,20 @@ export default class MessageHandler {
     return true; // Keep message channel open for async response
   }
 
-  // Handle internal messages from content scripts (simplified)
+  // Handle internal messages from content scripts
   handleInternalMessage(request, sender, sendResponse) {
     switch (request.action) {
+      case "checkIfAutomationWindow":
+        return this.windowManager.checkIfAutomationWindow(sender, sendResponse);
+
+      case "contentScriptReady":
+        this.handleContentScriptReady(request, sender, sendResponse);
+        break;
+
+      case "contentScriptError":
+        this.handleContentScriptError(request, sender, sendResponse);
+        break;
+
       case "reportProgress":
         this.handleProgressReport(request, sender, sendResponse);
         break;
@@ -63,16 +74,12 @@ export default class MessageHandler {
         this.handleApplicationSubmitted(request, sender, sendResponse);
         break;
 
-      case "contentScriptReady":
-        this.handleContentScriptReady(request, sender, sendResponse);
+      case "statusUpdate":
+        this.handleStatusUpdate(request, sender, sendResponse);
         break;
 
-      case "domChanged":
-        this.handleDOMChanged(request, sender, sendResponse);
-        break;
-
-      case "navigationDetected":
-        this.handleNavigationDetected(request, sender, sendResponse);
+      case "platformNotification":
+        this.handlePlatformNotification(request, sender, sendResponse);
         break;
 
       default:
@@ -85,7 +92,20 @@ export default class MessageHandler {
   async handleStartApplying(request, sendResponse) {
     try {
       console.log("📨 Start applying request received:", request);
-
+      
+      // Create unique request ID to prevent duplicates
+      const requestId = `${request.platform}_${request.userId}_${Date.now()}`;
+      
+      // Check if we're already processing a similar request
+      if (this.processingRequests.has(requestId.substring(0, requestId.lastIndexOf('_')))) {
+        console.log("🔄 Duplicate request detected, ignoring");
+        sendResponse({
+          status: "error",
+          message: "Request already being processed"
+        });
+        return;
+      }
+      
       // Validate required parameters
       const validation = this.validateStartApplyingRequest(request);
       if (!validation.valid) {
@@ -111,66 +131,81 @@ export default class MessageHandler {
         preferences = {},
       } = request;
 
-      // Create automation session
-      const sessionId = await this.sessionManager.createSession({
-        userId,
-        platform,
-        jobsToApply,
-        submittedLinks,
-        userPlan,
-        userCredits,
-        dailyRemaining,
-        startTime: Date.now(),
-        status: "starting",
-        preferences,
-      });
+      // Mark request as processing
+      const processingKey = `${platform}_${userId}`;
+      this.processingRequests.add(processingKey);
 
-      // Start automation
-      const result = await this.orchestrator.startAutomation({
-        sessionId,
-        platform,
-        userId,
-        jobsToApply,
-        submittedLinks,
-        devMode,
-        country,
-        userPlan,
-        userCredits,
-        dailyRemaining,
-        resumeUrl,
-        coverLetterTemplate,
-        preferences,
-      });
-
-      if (result.success) {
-        this.activeAutomations.set(sessionId, result.automationInstance);
-
-        sendResponse({
-          status: "started",
-          platform: platform,
-          sessionId: sessionId,
-          windowId: result.windowId,
-          message: `Job search started for ${platform}! Applying to ${jobsToApply} jobs.`,
-        });
-
-        // Notify frontend about successful start
-        this.notifyFrontend({
-          type: "automation_started",
-          sessionId,
+      try {
+        // Create automation session
+        const sessionId = await this.sessionManager.createSession({
+          userId,
           platform,
           jobsToApply,
-          windowId: result.windowId,
-        });
-      } else {
-        await this.sessionManager.updateSession(sessionId, {
-          status: "failed",
-          error: result.error,
+          submittedLinks,
+          userPlan,
+          userCredits,
+          dailyRemaining,
+          startTime: Date.now(),
+          status: "starting",
         });
 
-        sendResponse({
-          status: "error",
-          message: result.error || "Failed to start automation",
+        // Start automation using orchestrator
+        const result = await this.orchestrator.startAutomation({
+          sessionId,
+          platform,
+          userId,
+          jobsToApply,
+          submittedLinks,
+          devMode,
+          country,
+          userPlan,
+          userCredits,
+          dailyRemaining,
+          resumeUrl,
+          coverLetterTemplate,
+          preferences,
         });
+
+        if (result.success) {
+          this.activeAutomations.set(sessionId, result.automationInstance);
+
+          await this.sessionManager.updateSession(sessionId, {
+            status: "running",
+            windowId: result.windowId
+          });
+
+          sendResponse({
+            status: "started",
+            platform: platform,
+            sessionId: sessionId,
+            windowId: result.windowId,
+            message: `Job search started for ${platform}! Applying to ${jobsToApply} jobs.`,
+          });
+
+          // Notify frontend about successful start
+          this.notifyFrontend({
+            type: "automation_started",
+            sessionId,
+            platform,
+            jobsToApply,
+            windowId: result.windowId
+          });
+        } else {
+          await this.sessionManager.updateSession(sessionId, {
+            status: "failed",
+            error: result.error,
+          });
+
+          sendResponse({
+            status: "error",
+            message: result.error || "Failed to start automation",
+          });
+        }
+      } finally {
+        // Remove from processing set after delay to prevent rapid duplicate requests
+        setTimeout(() => {
+          this.processingRequests.delete(processingKey);
+        }, 5000);
       }
     } catch (error) {
       console.error("Error in handleStartApplying:", error);
@@ -197,6 +232,12 @@ export default class MessageHandler {
         status: "paused",
         sessionId,
       });
+
+      // Notify frontend
+      this.notifyFrontend({
+        type: "automation_paused",
+        sessionId
+      });
     } else {
       sendResponse({
         status: "error",
@@ -221,6 +262,12 @@ export default class MessageHandler {
       sendResponse({
         status: "stopped",
         sessionId,
+      });
+
+      // Notify frontend
+      this.notifyFrontend({
+        type: "automation_stopped",
+        sessionId
       });
     } else {
       sendResponse({
@@ -255,22 +302,56 @@ export default class MessageHandler {
     }
   }
 
+  handleContentScriptReady(request, sender, sendResponse) {
+    const { sessionId, platform, url } = request;
+    
+    console.log(`📱 Content script ready: ${platform} session ${sessionId}`);
+    
+    // Update session with tab info
+    if (sender.tab) {
+      this.sessionManager.updateSession(sessionId, {
+        tabId: sender.tab.id,
+        currentUrl: url,
+        contentScriptReady: true,
+        readyAt: Date.now()
+      });
+    }
+
+    sendResponse({ success: true });
+  }
+
+  handleContentScriptError(request, sender, sendResponse) {
+    const { sessionId, platform, error, url } = request;
+
+    console.error(`❌ Content script error in ${platform} session ${sessionId}:`, error);
+
+    // Update session with error
+    this.sessionManager.updateSession(sessionId, {
+      status: "error",
+      error,
+      errorTime: Date.now(),
+      currentUrl: url
+    });
+
+    // Notify frontend
+    this.notifyFrontend({
+      type: "content_script_error",
+      sessionId,
+      platform,
+      error,
+      url
+    });
+
+    sendResponse({ success: true });
+  }
+
   handleProgressReport(request, sender, sendResponse) {
     const { sessionId, progress } = request;
-    const tabId = sender.tab?.id;
-    const windowId = sender.tab?.windowId;
-
-    console.log(
-      `📊 Progress report from window ${windowId}, tab ${tabId}:`,
-      progress
-    );
 
     // Update session with progress
     this.sessionManager.updateSession(sessionId, {
       progress,
       lastActivity: Date.now(),
-      activeTabId: tabId,
-      activeWindowId: windowId,
     });
 
     // Notify frontend
@@ -278,8 +359,6 @@ export default class MessageHandler {
       type: "progress_update",
       sessionId,
       progress,
-      tabId,
-      windowId,
     });
 
     sendResponse({ success: true });
@@ -287,13 +366,8 @@ export default class MessageHandler {
 
   handleErrorReport(request, sender, sendResponse) {
     const { sessionId, error, context } = request;
-    const tabId = sender.tab?.id;
-    const windowId = sender.tab?.windowId;
 
-    console.error(
-      `💥 Automation error in window ${windowId}, tab ${tabId}:`,
-      error
-    );
+    console.error(`❌ Automation error in session ${sessionId}:`, error);
 
     // Update session
     this.sessionManager.updateSession(sessionId, {
@@ -301,8 +375,6 @@ export default class MessageHandler {
       error,
       errorContext: context,
       errorTime: Date.now(),
-      errorTabId: tabId,
-      errorWindowId: windowId,
     });
 
     // Notify frontend
@@ -311,8 +383,6 @@ export default class MessageHandler {
       sessionId,
       error,
       context,
-      tabId,
-      windowId,
     });
 
     sendResponse({ success: true });
@@ -320,21 +390,13 @@ export default class MessageHandler {
 
   handleApplicationSubmitted(request, sender, sendResponse) {
     const { sessionId, jobData, applicationData } = request;
-    const tabId = sender.tab?.id;
-    const windowId = sender.tab?.windowId;
-
-    console.log(
-      `📝 Application submitted in window ${windowId}, tab ${tabId}:`,
-      jobData.title
-    );
 
     // Track application
     this.sessionManager.addApplication(sessionId, {
       jobData,
       applicationData,
       submittedAt: Date.now(),
-      tabId: tabId,
-      windowId: windowId,
+      tabId: sender.tab?.id,
       url: sender.tab?.url,
     });
 
@@ -344,70 +406,41 @@ export default class MessageHandler {
       sessionId,
       jobData,
       applicationData,
-      tabId,
-      windowId,
     });
 
     sendResponse({ success: true });
   }
 
-  handleContentScriptReady(request, sender, sendResponse) {
-    const { sessionId, platform } = request;
-    const tabId = sender.tab?.id;
-    const windowId = sender.tab?.windowId;
+  handleStatusUpdate(request, sender, sendResponse) {
+    const { status, message, timestamp } = request;
 
-    console.log(
-      `✅ Content script ready in window ${windowId}, tab ${tabId}: ${platform}`
-    );
-
-    // Update session with ready tab info
-    this.sessionManager.updateSession(sessionId, {
-      lastReadyTab: {
-        tabId,
-        windowId,
-        platform,
-        readyAt: Date.now(),
-        url: sender.tab?.url,
-      },
-    });
-
-    sendResponse({ success: true, message: "Content script registered" });
-  }
-
-  handleDOMChanged(request, sender, sendResponse) {
-    const { sessionId } = request;
-    const tabId = sender.tab?.id;
-    const windowId = sender.tab?.windowId;
-
-    // Update last activity
-    this.sessionManager.updateSession(sessionId, {
-      lastActivity: Date.now(),
-      lastDOMChangeTabId: tabId,
-      lastDOMChangeWindowId: windowId,
+    // Forward status update to frontend
+    this.notifyFrontend({
+      type: "status_update",
+      status,
+      message,
+      timestamp: timestamp || Date.now()
     });
 
     sendResponse({ success: true });
   }
 
-  handleNavigationDetected(request, sender, sendResponse) {
-    const { sessionId, oldUrl, newUrl } = request;
-    const tabId = sender.tab?.id;
-    const windowId = sender.tab?.windowId;
+  handlePlatformNotification(request, sender, sendResponse) {
+    const { type, data, sessionId, platform } = request;
 
-    console.log(
-      `🔄 Navigation in window ${windowId}, tab ${tabId}: ${oldUrl} → ${newUrl}`
-    );
-
-    // Update session with navigation info
+    // Update session activity
     this.sessionManager.updateSession(sessionId, {
-      lastNavigation: {
-        tabId,
-        windowId,
-        oldUrl,
-        newUrl,
-        navigatedAt: Date.now(),
-      },
       lastActivity: Date.now(),
+      lastNotification: { type, data, timestamp: Date.now() }
+    });
+
+    // Forward to frontend
+    this.notifyFrontend({
+      type: "platform_notification",
+      sessionId,
+      platform,
+      notificationType: type,
+      data
     });
 
     sendResponse({ success: true });
@@ -453,36 +486,16 @@ export default class MessageHandler {
 
   // Notify your frontend web application
   notifyFrontend(data) {
-    console.log("📤 Notifying frontend:", data);
     // This would send messages back to your web app
     // You might need to implement this based on your specific setup
-  }
+    console.log("📤 Notifying frontend:", data);
 
-  // Clean up finished automations
-  async cleanupFinishedAutomations() {
-    for (const [sessionId, automation] of this.activeAutomations.entries()) {
-      const status = automation.getStatus();
-
-      if (["completed", "stopped", "failed"].includes(status.status)) {
-        console.log(`🧹 Cleaning up finished automation: ${sessionId}`);
-        this.activeAutomations.delete(sessionId);
-
-        // Cleanup the automation instance
-        if (automation.cleanup) {
-          automation.cleanup();
-        }
-      }
+    // Example: You could use chrome.tabs.sendMessage to active tabs
+    // or implement a webhook/websocket connection to your frontend
+    
+    // For now, we'll store the notification for potential retrieval
+    if (data.sessionId) {
+      this.sessionManager.addNotification(data.sessionId, data);
     }
-  }
-
-  // Get automation statistics
-  getAutomationStats() {
-    return {
-      activeAutomations: this.activeAutomations.size,
-      activeSessions: Array.from(this.activeAutomations.keys()),
-      automationWindows: this.backgroundService
-        ? this.backgroundService.getAutomationWindowsCount()
-        : 0,
-    };
   }
 }

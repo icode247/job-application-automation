@@ -50,6 +50,7 @@ export default class SessionManager {
         skipped: 0,
       },
       applications: [],
+      notifications: [],
     };
 
     this.sessions.set(sessionId, session);
@@ -87,6 +88,38 @@ export default class SessionManager {
       this.sessions.set(sessionId, session);
       await this.saveSessions();
     }
+  }
+
+  async addNotification(sessionId, notificationData) {
+    if (!sessionId) {
+      // Handle cases where sessionId might be null
+      console.warn('Cannot add notification: sessionId is null');
+      return false;
+    }
+    
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      if (!session.notifications) {
+        session.notifications = [];
+      }
+      
+      session.notifications.push({
+        ...notificationData,
+        id: this.generateNotificationId(),
+        timestamp: Date.now()
+      });
+
+      // Keep only last 50 notifications per session
+      if (session.notifications.length > 50) {
+        session.notifications = session.notifications.slice(-50);
+      }
+
+      session.updatedAt = Date.now();
+      this.sessions.set(sessionId, session);
+      await this.saveSessions();
+      return true;
+    }
+    return false;
   }
 
   async handleWindowClosed(windowId) {
@@ -130,6 +163,10 @@ export default class SessionManager {
       "_" +
       Math.random().toString(36).substr(2, 5)
     );
+  }
+
+  generateNotificationId() {
+    return 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5);
   }
 
   async cleanupOldSessions(maxAge = 7 * 24 * 60 * 60 * 1000) {

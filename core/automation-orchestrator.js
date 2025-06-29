@@ -1,4 +1,4 @@
-// core/automation-orchestrator.js - Simplified approach
+// core/automation-orchestrator.js
 import WindowManager from '../background/window-manager.js';
 import Logger from './logger.js';
 
@@ -29,25 +29,13 @@ export default class AutomationOrchestrator {
     try {
       this.logger.info(`🚀 Starting automation for platform: ${platform}`, { sessionId });
 
-      // Create automation window with simplified approach
-      const automationWindow = await this.createAutomationWindow(platform, sessionId, preferences);
+      // Create automation window
+      const automationWindow = await this.createAutomationWindow(platform, sessionId);
       if (!automationWindow) {
         throw new Error('Failed to create automation window');
       }
 
-      // Register window with background service
-      if (globalThis.backgroundService) {
-        await globalThis.backgroundService.addAutomationWindow(automationWindow.id, {
-          sessionId,
-          platform,
-          createdAt: Date.now(),
-          preferences,
-          jobsToApply,
-          submittedLinks
-        });
-      }
-
-      // Create automation session
+      // Create automation session (background tracking only)
       const automationSession = new AutomationSession({
         sessionId,
         platform,
@@ -58,6 +46,25 @@ export default class AutomationOrchestrator {
 
       // Store active automation
       this.activeAutomations.set(sessionId, automationSession);
+
+      // Wait for content script to load, then send start message
+      setTimeout(async () => {
+        await this.sendStartMessageToContentScript(automationWindow.id, {
+          sessionId,
+          platform,
+          config: {
+            jobsToApply,
+            submittedLinks,
+            preferences,
+            resumeUrl,
+            coverLetterTemplate,
+            userPlan,
+            userCredits,
+            dailyRemaining,
+            userId
+          }
+        });
+      }, 3000); // Increased delay to ensure content script is ready
 
       this.logger.info(`✅ Automation started successfully`, { sessionId, platform });
 
@@ -81,7 +88,7 @@ export default class AutomationOrchestrator {
     }
   }
 
-  async createAutomationWindow(platform, sessionId, preferences = {}) {
+  async createAutomationWindow(platform, sessionId) {
     try {
       // Get platform-specific starting URL
       const startUrl = this.getStartingUrl(platform);
@@ -94,8 +101,34 @@ export default class AutomationOrchestrator {
         height: 800
       });
 
-      // Enhanced: Inject automation context with better timing and debugging
-      await this.injectAutomationContextWithRetry(window, sessionId, platform, preferences);
+      // Register as automation window
+      await this.windowManager.registerAutomationWindow(window.id, {
+        sessionId,
+        platform,
+        createdAt: Date.now()
+      });
+
+      // Inject automation context after a delay to ensure page is loaded
+      setTimeout(async () => {
+        try {
+          if (window.tabs && window.tabs[0]) {
+            await chrome.scripting.executeScript({
+              target: { tabId: window.tabs[0].id },
+              func: (sessionId, platform) => {
+                window.automationSessionId = sessionId;
+                window.automationPlatform = platform;
+                window.isAutomationWindow = true;
+                sessionStorage.setItem('automationSessionId', sessionId);
+                sessionStorage.setItem('automationPlatform', platform);
+                sessionStorage.setItem('automationWindow', 'true');
+              },
+              args: [sessionId, platform]
+            });
+          }
+        } catch (error) {
+          console.error('Error injecting automation context:', error);
+        }
+      }, 1000);
 
       return window;
 
@@ -104,77 +137,35 @@ export default class AutomationOrchestrator {
     }
   }
 
-  // Enhanced context injection with retry logic
-  async injectAutomationContextWithRetry(window, sessionId, platform, preferences = {}) {
-    const maxAttempts = 3;
-    let attempt = 0;
-
-    const attemptInjection = async () => {
-      try {
-        attempt++;
-        console.log(`🎯 Attempting context injection ${attempt}/${maxAttempts} for ${platform} session ${sessionId.slice(-6)}`);
-        
-        if (!window.tabs || window.tabs.length === 0) {
-          if (attempt <= maxAttempts) {
-            console.log(`⏳ No tabs yet, waiting... (attempt ${attempt})`);
-            setTimeout(attemptInjection, 1000);
-            return;
-          } else {
-            throw new Error('No tabs available after maximum attempts');
-          }
-        }
-
-        const tabId = window.tabs[0].id;
-        
-        // Inject automation context
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: (sessionId, platform, preferences) => {
-            console.log(`🎯 Injecting context: sessionId=${sessionId}, platform=${platform}`);
-            
-            // Set window-level flags
-            window.isAutomationWindow = true;
-            window.automationSessionId = sessionId;
-            window.automationPlatform = platform;
-            
-            // Store in sessionStorage (more persistent for tab navigation)
-            sessionStorage.setItem('automationWindow', 'true');
-            sessionStorage.setItem('automationSessionId', sessionId);
-            sessionStorage.setItem('automationPlatform', platform);
-            
-            // Store preferences if available
-            if (preferences && Object.keys(preferences).length > 0) {
-              sessionStorage.setItem('automationPreferences', JSON.stringify(preferences));
-            }
-            
-            // Verify storage
-            const storedSessionId = sessionStorage.getItem('automationSessionId');
-            const storedPlatform = sessionStorage.getItem('automationPlatform');
-            console.log(`✅ Context stored: sessionId=${storedSessionId}, platform=${storedPlatform}`);
-            
-            // Dispatch event to notify any existing content scripts
-            window.dispatchEvent(new CustomEvent('automationContextReady', {
-              detail: { sessionId, platform, preferences }
-            }));
-          },
-          args: [sessionId, platform, preferences]
-        });
-
-        console.log(`✅ Successfully injected automation context for ${platform} session ${sessionId.slice(-6)}`);
-        return true;
-
-      } catch (error) {
-        console.error(`❌ Context injection attempt ${attempt} failed:`, error);
-        if (attempt < maxAttempts) {
-          setTimeout(attemptInjection, 1000);
-        } else {
-          throw error;
-        }
+  async sendStartMessageToContentScript(windowId, automationConfig) {
+    try {
+      // Get the active tab in the automation window
+      const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
+      if (tabs.length === 0) {
+        throw new Error('No active tab found in automation window');
       }
-    };
 
-    // Start injection immediately
-    await attemptInjection();
+      const tabId = tabs[0].id;
+
+      // Send message to content script to start automation
+      const response = await chrome.tabs.sendMessage(tabId, {
+        action: 'startAutomation',
+        config: automationConfig
+      });
+
+      this.logger.info('📤 Sent start message to content script', { windowId, tabId, response });
+
+    } catch (error) {
+      this.logger.error('❌ Failed to send start message to content script:', error);
+      // Retry after a delay
+      setTimeout(async () => {
+        try {
+          await this.sendStartMessageToContentScript(windowId, automationConfig);
+        } catch (retryError) {
+          this.logger.error('❌ Retry failed:', retryError);
+        }
+      }, 2000);
+    }
   }
 
   getStartingUrl(platform) {
@@ -235,65 +226,79 @@ export default class AutomationOrchestrator {
 }
 
 class AutomationSession {
-  constructor({
-    sessionId,
-    platform,
-    windowId,
-    params,
-    orchestrator,
-  }) {
+  constructor({ sessionId, platform, windowId, params, orchestrator }) {
     this.sessionId = sessionId;
     this.platform = platform;
     this.windowId = windowId;
     this.params = params;
     this.orchestrator = orchestrator;
-
-    this.status = "created";
-    this.startTime = null;
+    
+    this.status = 'created';
+    this.startTime = Date.now();
     this.endTime = null;
     this.progress = {
       total: params.jobsToApply,
       completed: 0,
       failed: 0,
       skipped: 0,
-      current: null,
+      current: null
     };
     this.errors = [];
     this.isPaused = false;
   }
 
-  async start() {
-    try {
-      this.status = "running";
-      this.startTime = Date.now();
-      
-      // The automation will be handled by content scripts in each tab
-      // This session just tracks the state
-      
-    } catch (error) {
-      this.status = "failed";
-      this.errors.push({
-        message: error.message,
-        timestamp: Date.now(),
-        context: "start",
-      });
-      throw error;
-    }
-  }
-
   async pause() {
     this.isPaused = true;
-    this.status = "paused";
+    this.status = 'paused';
+    
+    // Send pause message to content script
+    await this.sendMessageToContentScript({
+      action: 'pauseAutomation'
+    });
   }
 
   async resume() {
     this.isPaused = false;
-    this.status = "running";
+    this.status = 'running';
+    
+    // Send resume message to content script
+    await this.sendMessageToContentScript({
+      action: 'resumeAutomation'  
+    });
   }
 
   async stop() {
-    this.status = "stopped";
+    this.status = 'stopped';
     this.endTime = Date.now();
+    
+    // Send stop message to content script
+    await this.sendMessageToContentScript({
+      action: 'stopAutomation'
+    });
+
+    // Close the window after a short delay
+    setTimeout(async () => {
+      try {
+        await chrome.windows.remove(this.windowId);
+      } catch (error) {
+        // Window might already be closed
+        console.log('Window already closed or could not be closed');
+      }
+    }, 1000);
+  }
+
+  async sendMessageToContentScript(message) {
+    try {
+      const tabs = await chrome.tabs.query({ windowId: this.windowId, active: true });
+      if (tabs.length > 0) {
+        await chrome.tabs.sendMessage(tabs[0].id, {
+          ...message,
+          sessionId: this.sessionId
+        });
+      }
+    } catch (error) {
+      console.error('Error sending message to content script:', error);
+    }
   }
 
   updateProgress(progressUpdate) {
@@ -304,23 +309,8 @@ class AutomationSession {
     this.errors.push({
       message: error.message,
       timestamp: Date.now(),
-      context: error.context || "unknown",
+      context: error.context || 'unknown'
     });
-  }
-
-  handleComplete() {
-    this.status = "completed";
-    this.endTime = Date.now();
-  }
-
-  getProgress() {
-    return {
-      ...this.progress,
-      status: this.status,
-      isPaused: this.isPaused,
-      duration: this.startTime ? Date.now() - this.startTime : 0,
-      errors: this.errors,
-    };
   }
 
   getStatus() {
@@ -331,12 +321,10 @@ class AutomationSession {
       progress: this.progress,
       startTime: this.startTime,
       endTime: this.endTime,
-      duration: this.startTime
-        ? (this.endTime || Date.now()) - this.startTime
-        : 0,
+      duration: this.startTime ? (this.endTime || Date.now()) - this.startTime : 0,
       errors: this.errors,
       isPaused: this.isPaused,
-      windowId: this.windowId,
+      windowId: this.windowId
     };
   }
 }

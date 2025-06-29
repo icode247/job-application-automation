@@ -1,518 +1,815 @@
-// content/content-main.js - Simplified approach based on working code
-// Flag to prevent multiple initializations
-let automationInitialized = false;
+// content/content-main.js
+class ContentScriptManager {
+  constructor() {
+    this.isInitialized = false;
+    this.automationActive = false;
+    this.sessionId = null;
+    this.platform = null;
+    this.platformAutomation = null;
+    this.domObserver = null;
+    this.indicator = null;
+    this.config = {};
+    this.initAttempts = 0;
+    this.maxInitAttempts = 3;
+  }
 
-// Check if this is an automation window and initialize if needed
-async function initializeAutomation() {
-  if (automationInitialized) return;
-  
-  try {
-    // Check multiple sources to determine if this is an automation window
-    const isAutomationWindow = await checkIfAutomationWindow();
+  async initialize() {
+    // Prevent multiple initialization attempts
+    if (this.isInitialized || this.initAttempts >= this.maxInitAttempts) return;
     
-    if (isAutomationWindow) {
-      automationInitialized = true;
-      await runAutomation();
+    this.initAttempts++;
+    
+    try {
+      // Add a small delay to ensure page is ready
+      await this.delay(1000);
+      
+      // Check if this is an automation window
+      const isAutomationWindow = await this.checkIfAutomationWindow();
+
+      if (isAutomationWindow) {
+        this.automationActive = true;
+        this.sessionId = this.getSessionId();
+        this.platform = this.getPlatform();
+
+        if (this.platform && this.platform !== "unknown") {
+          await this.setupAutomation();
+          this.isInitialized = true;
+
+          console.log(`🤖 Content script initialized for ${this.platform}`, {
+            sessionId: this.sessionId,
+            url: window.location.href,
+          });
+
+          // Start auto-start timer (fallback if no message from background)
+          this.startAutoStartTimer();
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error initializing content script:", error);
     }
-  } catch (error) {
-    console.error('Error initializing automation:', error);
   }
-}
 
-// Check if current window/tab is part of automation (based on working code)
-async function checkIfAutomationWindow() {
-  console.log('🔍 Checking automation window status...');
-  
-  // Method 1: Check window flag (set by background script)
-  if (window.isAutomationWindow) {
-    console.log('✅ Method 1: Window flag detected');
-    return true;
-  }
-  
-  // Method 2: Check sessionStorage flag (more persistent)
-  const automationFlag = sessionStorage.getItem('automationWindow');
-  const sessionId = sessionStorage.getItem('automationSessionId');
-  const platform = sessionStorage.getItem('automationPlatform');
-  
-  console.log('🔍 SessionStorage check:', { automationFlag, sessionId, platform });
-  
-  if (automationFlag === 'true') {
-    window.isAutomationWindow = true;
-    // Also set the session data on window object
-    if (sessionId) window.automationSessionId = sessionId;
-    if (platform) window.automationPlatform = platform;
-    console.log('✅ Method 2: SessionStorage flag detected');
-    return true;
-  }
-  
-  // Method 3: Ask background script to check window ID (like working code)
-  try {
-    console.log('🔍 Method 3: Asking background script...');
-    const response = await chrome.runtime.sendMessage({
-      action: 'checkIfAutomationWindow'
-    });
-    
-    console.log('🔍 Background response:', response);
-    
-    if (response && response.isAutomationWindow) {
-      window.isAutomationWindow = true;
-      sessionStorage.setItem('automationWindow', 'true');
-      console.log('✅ Method 3: Background confirmed automation window');
+  async checkIfAutomationWindow() {
+    // Method 1: Check window flags set by background script
+    if (window.isAutomationWindow && window.automationSessionId) {
       return true;
     }
-  } catch (error) {
-    console.error('❌ Error checking automation window status:', error);
-  }
-  
-  console.log('❌ Not an automation window');
-  return false;
-}
 
-// Main automation logic - enhanced version of working code
-async function runAutomation() {
-  console.log('🤖 Automation is ACTIVE in this window!');
-  
-  // Get session data from multiple sources
-  let sessionId = window.automationSessionId || sessionStorage.getItem('automationSessionId');
-  let platform = window.automationPlatform || sessionStorage.getItem('automationPlatform');
-  const preferencesJson = sessionStorage.getItem('automationPreferences');
-  let preferences = {};
-  
-  // Try to parse preferences
-  try {
-    if (preferencesJson) {
-      preferences = JSON.parse(preferencesJson);
+    // Method 2: Check sessionStorage
+    const sessionId = sessionStorage.getItem("automationSessionId");
+    const platform = sessionStorage.getItem("automationPlatform");
+    if (sessionId && platform) {
+      window.automationSessionId = sessionId;
+      window.automationPlatform = platform;
+      window.isAutomationWindow = true;
+      return true;
     }
-  } catch (e) {
-    console.warn('Could not parse automation preferences');
-  }
-  
-  console.log('🔍 Session data:', { sessionId, platform, preferences });
-  
-  // If we don't have session data yet, wait for it or detect platform
-  if (!sessionId || !platform) {
-    console.log('⏳ Missing session data, setting up listener and fallback detection...');
-    
-    // Set up listener for context injection
-    window.addEventListener('automationContextReady', (event) => {
-      console.log('🎯 Automation context ready event received:', event.detail);
-      sessionId = event.detail.sessionId;
-      platform = event.detail.platform;
-      preferences = event.detail.preferences || {};
-      
-      // Update session storage
-      sessionStorage.setItem('automationSessionId', sessionId);
-      sessionStorage.setItem('automationPlatform', platform);
-      
-      // Re-run automation with new data
-      setTimeout(() => {
-        addAutomationIndicator(platform, sessionId);
-        setupPageAutomation(platform, preferences);
-      }, 500);
-    });
-    
-    // Fallback: detect platform from URL
-    platform = detectPlatformFromUrl(window.location.href);
-    sessionId = sessionId || 'unknown-' + Date.now();
-    
-    console.log('🔄 Using fallback detection:', { platform, sessionId });
-  }
-  
-  // Add visual indicator
-  addAutomationIndicator(platform, sessionId);
-  
-  // Set up automation for current page
-  await setupPageAutomation(platform, preferences);
-  
-  // Listen for navigation within the window
-  setupNavigationListener(platform, preferences);
-  
-  // Handle new tabs opened in this window (simplified)
-  setupNewTabHandler();
-}
 
-// Add visual indicator that automation is active (enhanced from working code)
-function addAutomationIndicator(platform, sessionId) {
-  // Remove existing indicator if present
-  const existing = document.getElementById('automation-indicator');
-  if (existing) existing.remove();
-  
-  // Handle undefined/null values
-  const displayPlatform = platform && platform !== 'unknown' ? platform.toUpperCase() : 'UNKNOWN';
-  const displaySessionId = sessionId && sessionId !== 'unknown' ? sessionId.slice(-6) : 'NO-ID';
-  
-  console.log(`🎯 Adding indicator: ${displayPlatform} • ${displaySessionId}`);
-  
-  const indicator = document.createElement('div');
-  indicator.id = 'automation-indicator';
-  indicator.innerHTML = `
-    <div style="
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      background: linear-gradient(135deg, #4CAF50, #45a049);
-      color: white;
-      padding: 12px 16px;
-      border-radius: 8px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-      font-size: 13px;
-      font-weight: 600;
-      z-index: 999999;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      border: 1px solid rgba(255,255,255,0.2);
-      backdrop-filter: blur(10px);
-      cursor: pointer;
-      transition: all 0.3s ease;
-    " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 16px;">🤖</span>
-        <div>
-          <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
-          <div style="font-size: 11px; opacity: 0.9;">${displayPlatform} • ${displaySessionId}</div>
+    // Method 3: Ask background script
+    try {
+      const response = await this.sendMessageToBackground({
+        action: "checkIfAutomationWindow",
+      });
+
+      if (response && response.isAutomationWindow) {
+        window.isAutomationWindow = true;
+        return true;
+      }
+    } catch (error) {
+      console.error("Error checking automation window status:", error);
+    }
+
+    return false;
+  }
+
+  getSessionId() {
+    return (
+      window.automationSessionId ||
+      sessionStorage.getItem("automationSessionId") ||
+      null
+    );
+  }
+
+  getPlatform() {
+    return (
+      window.automationPlatform ||
+      sessionStorage.getItem("automationPlatform") ||
+      this.detectPlatformFromUrl()
+    );
+  }
+
+  detectPlatformFromUrl() {
+    const url = window.location.href.toLowerCase();
+
+    if (url.includes("linkedin.com")) return "linkedin";
+    if (url.includes("indeed.com")) return "indeed";
+    if (url.includes("recruitee.com")) return "recruitee";
+    if (url.includes("glassdoor.com")) return "glassdoor";
+    if (url.includes("myworkdayjobs.com")) return "workday";
+    if (url.includes("lever.co")) return "lever";
+    if (url.includes("greenhouse.io")) return "greenhouse";
+
+    // Handle Google search for specific platforms
+    if (url.includes("google.com/search")) {
+      if (url.includes("site:recruitee.com") || url.includes("recruitee.com"))
+        return "recruitee";
+      if (
+        url.includes("site:myworkdayjobs.com") ||
+        url.includes("myworkdayjobs.com")
+      )
+        return "workday";
+      if (url.includes("site:lever.co") || url.includes("lever.co"))
+        return "lever";
+    }
+
+    return "unknown";
+  }
+
+  async setupAutomation() {
+    try {
+      // Load platform-specific automation module
+      const PlatformClass = await this.loadPlatformModule(this.platform);
+
+      if (!PlatformClass) {
+        throw new Error(`Platform ${this.platform} not supported`);
+      }
+
+      // Create platform automation instance
+      this.platformAutomation = new PlatformClass({
+        sessionId: this.sessionId,
+        platform: this.platform,
+        contentScript: this,
+        config: this.config,
+      });
+
+      // Set up automation UI
+      this.addAutomationIndicator();
+      this.setupMessageListeners();
+      this.setupDOMObserver();
+      this.setupNavigationListeners();
+
+      // Notify background script that content script is ready
+      this.notifyBackgroundReady();
+
+      // Initialize platform automation (but don't start yet)
+      await this.platformAutomation.initialize();
+    } catch (error) {
+      console.error(
+        `❌ Failed to setup automation for ${this.platform}:`,
+        error
+      );
+      this.notifyBackgroundError(error);
+    }
+  }
+
+  async loadPlatformModule(platform) {
+    try {
+      switch (platform) {
+        case "linkedin":
+          const { default: LinkedInPlatform } = await import(
+            "../platforms/linkedin/linkedin.js"
+          );
+          return LinkedInPlatform;
+
+        case "indeed":
+          const { default: IndeedPlatform } = await import(
+            "../platforms/indeed/indeed.js"
+          );
+          return IndeedPlatform;
+
+        case "recruitee":
+          const { default: RecruiteePlatform } = await import(
+            "../platforms/recruitee/recruitee.js"
+          );
+          return RecruiteePlatform;
+
+        case "glassdoor":
+          const { default: GlassdoorPlatform } = await import(
+            "../platforms/glassdoor/glassdoor.js"
+          );
+          return GlassdoorPlatform;
+
+        case "workday":
+          const { default: WorkdayPlatform } = await import(
+            "../platforms/workday/workday.js"
+          );
+          return WorkdayPlatform;
+
+        default:
+          console.warn(`Platform ${platform} not supported`);
+          return null;
+      }
+    } catch (error) {
+      console.error(`Failed to load platform module for ${platform}:`, error);
+      return null;
+    }
+  }
+
+  addAutomationIndicator() {
+    // Remove existing indicator
+    const existing = document.getElementById("automation-indicator");
+    if (existing) existing.remove();
+
+    const indicator = document.createElement("div");
+    indicator.id = "automation-indicator";
+    indicator.innerHTML = `
+      <div style="
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background: linear-gradient(135deg, #4CAF50, #45a049);
+        color: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        z-index: 999999;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        border: 1px solid rgba(255,255,255,0.2);
+        backdrop-filter: blur(10px);
+        cursor: pointer;
+        transition: all 0.3s ease;
+      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">🤖</span>
+          <div>
+            <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
+            <div style="font-size: 11px; opacity: 0.9;">${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
+      -6
+    )}</div>
+          </div>
         </div>
       </div>
-    </div>
-  `;
-  
-  // Add click handler to show debug info
-  indicator.addEventListener('click', () => {
-    console.log('🔍 Debug Info:', {
-      platform,
-      sessionId,
-      url: window.location.href,
-      windowFlags: {
-        isAutomationWindow: window.isAutomationWindow,
-        automationSessionId: window.automationSessionId,
-        automationPlatform: window.automationPlatform
-      },
-      sessionStorage: {
-        automationWindow: sessionStorage.getItem('automationWindow'),
-        automationSessionId: sessionStorage.getItem('automationSessionId'),
-        automationPlatform: sessionStorage.getItem('automationPlatform')
-      }
+    `;
+
+    // Add click handler to show status
+    indicator.addEventListener("click", () => {
+      this.showAutomationStatus();
     });
-  });
-  
-  document.documentElement.appendChild(indicator);
-}
 
-// Set up automation for the current page (enhanced from working code)
-async function setupPageAutomation(platform, preferences = {}) {
-  const currentUrl = window.location.href;
-  console.log(`🔧 Setting up automation for: ${currentUrl}`);
-  console.log(`🔧 Platform: ${platform}, Preferences:`, preferences);
-  
-  // Detect platform from URL if not provided or unknown
-  let detectedPlatform = platform;
-  if (!platform || platform === 'unknown') {
-    detectedPlatform = detectPlatformFromUrl(currentUrl);
-    console.log(`🔍 Detected platform from URL: ${detectedPlatform}`);
+    document.documentElement.appendChild(indicator);
+    this.indicator = indicator;
   }
-  
-  // Load and run platform-specific automation
-  try {
-    console.log(`📦 Attempting to load platform module: ${detectedPlatform}`);
-    const PlatformClass = await loadPlatformModule(detectedPlatform);
-    
-    if (PlatformClass) {
-      console.log(`✅ Platform module loaded: ${detectedPlatform}`);
-      const platformAutomation = new PlatformClass({
-        sessionId: sessionStorage.getItem('automationSessionId'),
-        platform: detectedPlatform,
-        preferences: preferences,
-        config: preferences
-      });
-      
-      await platformAutomation.initialize();
-      
-      // Store platform automation globally for navigation events
-      window.currentPlatformAutomation = platformAutomation;
-      
-      // Start platform automation if it has a start method
-      if (platformAutomation.start) {
-        console.log(`🚀 Starting platform automation: ${detectedPlatform}`);
-        await platformAutomation.start(preferences);
-      }
-    } else {
-      console.log(`⚠️ No platform module for ${detectedPlatform}, using generic automation`);
-      // Fallback to basic automation for unsupported platforms
-      await handleGenericJob(currentUrl);
-    }
-  } catch (error) {
-    console.error(`❌ Error setting up platform automation for ${detectedPlatform}:`, error);
-    console.log(`🔄 Falling back to generic automation`);
-    // Fallback to basic automation
-    await handleGenericJob(currentUrl);
-  }
-}
 
-// Load platform-specific automation module
-async function loadPlatformModule(platform) {
-  try {
-    switch (platform) {
-      case 'linkedin':
-        const { default: LinkedInPlatform } = await import('../platforms/linkedin/linkedin.js');
-        return LinkedInPlatform;
-        
-      case 'indeed':
-        const { default: IndeedPlatform } = await import('../platforms/indeed/indeed.js');
-        return IndeedPlatform;
-        
-      case 'recruitee':
-        const { default: RecruiteePlatform } = await import('../platforms/recruitee/recruitee.js');
-        return RecruiteePlatform;
-        
-      case 'glassdoor':
-        const { default: GlassdoorPlatform } = await import('../platforms/glassdoor/glassdoor.js');
-        return GlassdoorPlatform;
-        
-      case 'workday':
-        const { default: WorkdayPlatform } = await import('../platforms/workday/workday.js');
-        return WorkdayPlatform;
-        
-      default:
-        console.warn(`Platform ${platform} not supported, using generic automation`);
-        return null;
-    }
-  } catch (error) {
-    console.error(`Failed to load platform module for ${platform}:`, error);
-    return null;
-  }
-}
-
-// Detect platform from URL
-function detectPlatformFromUrl(url) {
-  const urlLower = url.toLowerCase();
-  
-  if (urlLower.includes('linkedin.com')) return 'linkedin';
-  if (urlLower.includes('indeed.com')) return 'indeed';
-  if (urlLower.includes('recruitee.com')) return 'recruitee';
-  if (urlLower.includes('glassdoor.com')) return 'glassdoor';
-  if (urlLower.includes('myworkdayjobs.com')) return 'workday';
-  if (urlLower.includes('lever.co')) return 'lever';
-  if (urlLower.includes('greenhouse.io')) return 'greenhouse';
-  
-  // Handle Google search for specific platforms
-  if (urlLower.includes('google.com/search')) {
-    const urlObj = new URL(url);
-    const query = urlObj.searchParams.get('q') || '';
-    
-    if (query.includes('site:recruitee.com') || query.includes('recruitee.com')) return 'recruitee';
-    if (query.includes('site:myworkdayjobs.com') || query.includes('myworkdayjobs.com')) return 'workday';
-    if (query.includes('site:lever.co') || query.includes('lever.co')) return 'lever';
-    if (query.includes('site:linkedin.com') || query.includes('linkedin.com/jobs')) return 'linkedin';
-    if (query.includes('site:indeed.com') || query.includes('indeed.com')) return 'indeed';
-    if (query.includes('site:glassdoor.com') || query.includes('glassdoor.com')) return 'glassdoor';
-  }
-  
-  return 'unknown';
-}
-
-// Handle Google search page (from working code)
-async function handleGoogleSearch() {
-  console.log('🔍 Automating Google search page');
-  
-  // Wait for search results to load
-  await waitForElement('.g');
-  
-  // Highlight job-related links
-  const jobLinks = document.querySelectorAll('a[href*="recruitee"], a[href*="linkedin.com/jobs"], a[href*="indeed"], a[href*="glassdoor"], a[href*="myworkdayjobs"], a[href*="lever.co"]');
-  
-  jobLinks.forEach((link, index) => {
-    link.style.border = '2px solid #4CAF50';
-    link.style.backgroundColor = '#e8f5e8';
-    
-    // Auto-click first job link after 3 seconds (demo purposes)
-    if (index === 0) {
-      setTimeout(() => {
-        console.log('🎯 Auto-clicking first job link');
-        link.click();
-      }, 3000);
-    }
-  });
-}
-
-// Handle Recruitee job pages (from working code)
-async function handleRecruiteeJob() {
-  console.log('💼 Automating Recruitee job page');
-  
-  // Wait for apply button
-  await waitForElement('[data-testid="apply-button"], .apply-button, button[type="submit"]');
-  
-  // Highlight apply button
-  const applyButton = document.querySelector('[data-testid="apply-button"], .apply-button, button[type="submit"]');
-  if (applyButton) {
-    applyButton.style.border = '3px solid #FF9800';
-    applyButton.style.boxShadow = '0 0 10px #FF9800';
-    
-    // Add click handler (for demo - in real automation you'd fill forms first)
-    applyButton.addEventListener('click', (e) => {
-      console.log('📝 Apply button clicked - automation would handle form filling here');
+  setupMessageListeners() {
+    // Listen for messages from background script
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      this.handleMessage(request, sender, sendResponse);
+      return true; // Keep message channel open for async responses
     });
   }
-}
 
-// Handle LinkedIn job pages (from working code)
-async function handleLinkedInJob() {
-  console.log('💼 Automating LinkedIn job page');
-  
-  // Similar to Recruitee but with LinkedIn-specific selectors
-  await waitForElement('.jobs-apply-button, .jobs-s-apply__button');
-  
-  const applyButton = document.querySelector('.jobs-apply-button, .jobs-s-apply__button');
-  if (applyButton) {
-    applyButton.style.border = '3px solid #0077B5';
-    applyButton.style.boxShadow = '0 0 10px #0077B5';
-  }
-}
-
-// Handle other job sites (from working code)
-async function handleGenericJob(currentUrl) {
-  console.log('🌐 Automating generic job page');
-  
-  // Handle specific platforms first
-  if (currentUrl.includes('google.com/search')) {
-    return await handleGoogleSearch();
-  } else if (currentUrl.includes('recruitee.com')) {
-    return await handleRecruiteeJob();
-  } else if (currentUrl.includes('linkedin.com/jobs')) {
-    return await handleLinkedInJob();
-  }
-  
-  // Look for common apply button patterns
-  const applySelectors = [
-    'button[class*="apply"]',
-    'a[class*="apply"]',
-    'button[id*="apply"]',
-    'a[href*="apply"]',
-    'input[value*="Apply"]'
-  ];
-  
-  for (const selector of applySelectors) {
-    const button = document.querySelector(selector);
-    if (button) {
-      button.style.border = '3px solid #9C27B0';
-      button.style.boxShadow = '0 0 10px #9C27B0';
-      break;
-    }
-  }
-}
-
-// Set up listener for navigation within the automation window (from working code)
-function setupNavigationListener(platform, preferences) {
-  // Listen for URL changes (for SPAs)
-  let currentUrl = window.location.href;
-  
-  const urlChangeObserver = new MutationObserver(() => {
-    if (window.location.href !== currentUrl) {
-      const oldUrl = currentUrl;
-      currentUrl = window.location.href;
-      console.log(`🔄 Navigation detected: ${oldUrl} → ${currentUrl}`);
-      
-      // Re-run automation for new page
-      setTimeout(() => setupPageAutomation(platform, preferences), 1000);
-    }
-  });
-  
-  urlChangeObserver.observe(document, {
-    subtree: true,
-    childList: true
-  });
-
-  // Also listen for popstate events
-  window.addEventListener('popstate', () => {
-    setTimeout(() => setupPageAutomation(platform, preferences), 1000);
-  });
-}
-
-// Handle new tabs opened within the automation window (from working code)
-function setupNewTabHandler() {
-  // Override window.open to mark new tabs as automation tabs
-  const originalOpen = window.open;
-  window.open = function(...args) {
-    const newWindow = originalOpen.apply(this, args);
-    
-    // Try to set automation flag in new window (might be blocked by CORS)
+  async handleMessage(request, sender, sendResponse) {
     try {
-      if (newWindow) {
-        setTimeout(() => {
-          try {
-            newWindow.isAutomationWindow = true;
-            newWindow.sessionStorage.setItem('automationWindow', 'true');
-            
-            // Also transfer session data
-            const sessionId = sessionStorage.getItem('automationSessionId');
-            const platform = sessionStorage.getItem('automationPlatform');
-            const preferences = sessionStorage.getItem('automationPreferences');
-            
-            if (sessionId) newWindow.sessionStorage.setItem('automationSessionId', sessionId);
-            if (platform) newWindow.sessionStorage.setItem('automationPlatform', platform);
-            if (preferences) newWindow.sessionStorage.setItem('automationPreferences', preferences);
-          } catch (e) {
-            // Silently fail if blocked by CORS
-          }
-        }, 100);
-      }
-    } catch (e) {
-      // Silently fail
-    }
-    
-    return newWindow;
-  };
-  
-  // Also handle clicks on links that open in new tabs
-  document.addEventListener('click', (e) => {
-    const link = e.target.closest('a');
-    if (link && (link.target === '_blank' || e.ctrlKey || e.metaKey)) {
-      // Link will open in new tab - the new tab should inherit automation status
-      // through sessionStorage or background script tracking
-      console.log('🔗 Link opening in new tab detected');
-    }
-  });
-}
+      switch (request.action) {
+        case "startAutomation":
+          await this.handleStartAutomation(request, sendResponse);
+          break;
 
-// Utility function to wait for an element (from working code)
-function waitForElement(selector, timeout = 10000) {
-  return new Promise((resolve) => {
-    const element = document.querySelector(selector);
-    if (element) {
-      resolve(element);
-      return;
+        case "pauseAutomation":
+          await this.handlePauseAutomation(request, sendResponse);
+          break;
+
+        case "resumeAutomation":
+          await this.handleResumeAutomation(request, sendResponse);
+          break;
+
+        case "stopAutomation":
+          await this.handleStopAutomation(request, sendResponse);
+          break;
+
+        case "getPageData":
+          this.handleGetPageData(sendResponse);
+          break;
+
+        case "executeAction":
+          await this.handleExecuteAction(request, sendResponse);
+          break;
+
+        case "extractJobData":
+          this.handleExtractJobData(sendResponse);
+          break;
+
+        default:
+          sendResponse({ success: false, error: "Unknown action" });
+      }
+    } catch (error) {
+      console.error("Error handling message:", error);
+      sendResponse({ success: false, error: error.message });
     }
-    
-    const observer = new MutationObserver((mutations, obs) => {
+  }
+
+  async handleStartAutomation(request, sendResponse) {
+    try {
+      if (this.platformAutomation) {
+        // Clear any auto-start timer
+        this.clearAutoStartTimer();
+        
+        // Update config and start automation
+        this.config = { ...this.config, ...request.config };
+
+        this.log("🚀 Starting platform automation in content script");
+        await this.platformAutomation.start(request.config);
+
+        sendResponse({
+          success: true,
+          message: "Automation started in content script",
+        });
+      } else {
+        sendResponse({
+          success: false,
+          error: "Platform automation not initialized",
+        });
+      }
+    } catch (error) {
+      this.log(`❌ Error starting automation: ${error.message}`);
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  async handlePauseAutomation(request, sendResponse) {
+    if (this.platformAutomation && this.platformAutomation.pause) {
+      await this.platformAutomation.pause();
+      sendResponse({ success: true, message: "Automation paused" });
+    } else {
+      sendResponse({ success: false, error: "Cannot pause automation" });
+    }
+  }
+
+  async handleResumeAutomation(request, sendResponse) {
+    if (this.platformAutomation && this.platformAutomation.resume) {
+      await this.platformAutomation.resume();
+      sendResponse({ success: true, message: "Automation resumed" });
+    } else {
+      sendResponse({ success: false, error: "Cannot resume automation" });
+    }
+  }
+
+  async handleStopAutomation(request, sendResponse) {
+    if (this.platformAutomation && this.platformAutomation.stop) {
+      await this.platformAutomation.stop();
+      sendResponse({ success: true, message: "Automation stopped" });
+    } else {
+      sendResponse({ success: false, error: "Cannot stop automation" });
+    }
+  }
+
+  handleGetPageData(sendResponse) {
+    const pageData = {
+      url: window.location.href,
+      title: document.title,
+      platform: this.platform,
+      sessionId: this.sessionId,
+      readyState: document.readyState,
+      timestamp: Date.now(),
+    };
+
+    sendResponse({ success: true, data: pageData });
+  }
+
+  async handleExecuteAction(request, sendResponse) {
+    const { actionType, selector, value, options = {} } = request;
+
+    try {
+      let result = false;
+
+      switch (actionType) {
+        case "click":
+          result = await this.clickElement(selector, options);
+          break;
+
+        case "fill":
+          result = await this.fillElement(selector, value, options);
+          break;
+
+        case "wait":
+          result = await this.waitForElement(
+            selector,
+            options.timeout || 10000
+          );
+          break;
+
+        case "scroll":
+          result = await this.scrollToElement(selector, options);
+          break;
+
+        default:
+          throw new Error(`Unknown action type: ${actionType}`);
+      }
+
+      sendResponse({ success: true, result });
+    } catch (error) {
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  handleExtractJobData(sendResponse) {
+    try {
+      const jobData = this.extractCurrentJobData();
+      sendResponse({ success: true, data: jobData });
+    } catch (error) {
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  setupDOMObserver() {
+    // Set up MutationObserver to detect significant DOM changes
+    this.domObserver = new MutationObserver((mutations) => {
+      this.handleDOMChanges(mutations);
+    });
+
+    this.domObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: false,
+    });
+  }
+
+  handleDOMChanges(mutations) {
+    let significantChange = false;
+
+    for (const mutation of mutations) {
+      if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
+        // Check if new content suggests page change or important updates
+        const addedElements = Array.from(mutation.addedNodes).filter(
+          (node) => node.nodeType === 1
+        );
+
+        if (addedElements.some((el) => this.isSignificantElement(el))) {
+          significantChange = true;
+          break;
+        }
+      }
+    }
+
+    if (significantChange) {
+      this.notifyDOMChange();
+
+      // Notify platform automation of DOM changes
+      if (this.platformAutomation && this.platformAutomation.onDOMChange) {
+        this.platformAutomation.onDOMChange();
+      }
+    }
+  }
+
+  isSignificantElement(element) {
+    const significantSelectors = [
+      "form",
+      ".job",
+      ".application",
+      ".modal",
+      ".dialog",
+      '[class*="job"]',
+      '[class*="apply"]',
+      '[class*="form"]',
+    ];
+
+    return significantSelectors.some((selector) => {
+      try {
+        return (
+          element.matches &&
+          (element.matches(selector) || element.querySelector(selector))
+        );
+      } catch (e) {
+        return false;
+      }
+    });
+  }
+
+  setupNavigationListeners() {
+    // Listen for URL changes (for SPAs)
+    let currentUrl = window.location.href;
+
+    const checkUrlChange = () => {
+      if (window.location.href !== currentUrl) {
+        const oldUrl = currentUrl;
+        currentUrl = window.location.href;
+
+        console.log(`🔄 Navigation detected: ${oldUrl} → ${currentUrl}`);
+        this.notifyNavigation(oldUrl, currentUrl);
+
+        // Notify platform automation of navigation
+        if (this.platformAutomation && this.platformAutomation.onNavigation) {
+          this.platformAutomation.onNavigation(oldUrl, currentUrl);
+        }
+      }
+    };
+
+    // Check for URL changes periodically
+    setInterval(checkUrlChange, 1000);
+
+    // Listen for popstate events
+    window.addEventListener("popstate", checkUrlChange);
+
+    // Override pushState and replaceState to catch programmatic navigation
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function (...args) {
+      originalPushState.apply(this, args);
+      setTimeout(checkUrlChange, 100);
+    };
+
+    history.replaceState = function (...args) {
+      originalReplaceState.apply(this, args);
+      setTimeout(checkUrlChange, 100);
+    };
+  }
+
+  // Utility methods for DOM manipulation
+  async clickElement(selector, options = {}) {
+    const element = document.querySelector(selector);
+    if (!element) {
+      throw new Error(`Element not found: ${selector}`);
+    }
+
+    // Scroll into view
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    // Wait a bit for scroll
+    await this.delay(options.delay || 500);
+
+    // Click the element
+    element.click();
+
+    return true;
+  }
+
+  async fillElement(selector, value, options = {}) {
+    const element = document.querySelector(selector);
+    if (!element) {
+      throw new Error(`Element not found: ${selector}`);
+    }
+
+    // Focus and fill
+    element.focus();
+    element.value = value;
+
+    // Trigger events
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+
+    if (options.blur) {
+      element.blur();
+    }
+
+    return true;
+  }
+
+  async scrollToElement(selector, options = {}) {
+    const element = document.querySelector(selector);
+    if (!element) {
+      throw new Error(`Element not found: ${selector}`);
+    }
+
+    const scrollOptions = {
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest",
+      ...options,
+    };
+
+    element.scrollIntoView(scrollOptions);
+    return true;
+  }
+
+  async waitForElement(selector, timeout = 10000) {
+    return new Promise((resolve) => {
       const element = document.querySelector(selector);
       if (element) {
-        obs.disconnect();
         resolve(element);
+        return;
       }
+
+      const observer = new MutationObserver((mutations, obs) => {
+        const element = document.querySelector(selector);
+        if (element) {
+          obs.disconnect();
+          resolve(element);
+        }
+      });
+
+      observer.observe(document, {
+        childList: true,
+        subtree: true,
+      });
+
+      setTimeout(() => {
+        observer.disconnect();
+        resolve(null);
+      }, timeout);
     });
-    
-    observer.observe(document, {
-      childList: true,
-      subtree: true
+  }
+
+  extractCurrentJobData() {
+    // Extract job information from current page
+    const jobData = {
+      title: this.extractText([
+        "h1",
+        ".job-title",
+        '[data-testid="job-title"]',
+        ".jobsearch-JobInfoHeader-title",
+      ]),
+      company: this.extractText([
+        ".company",
+        ".company-name",
+        '[data-testid="company-name"]',
+        ".jobsearch-InlineCompanyRating",
+      ]),
+      location: this.extractText([
+        ".location",
+        ".job-location",
+        '[data-testid="job-location"]',
+        ".jobsearch-JobLocation",
+      ]),
+      description: this.extractText([
+        ".job-description",
+        ".description",
+        '[data-testid="job-description"]',
+      ]),
+      url: window.location.href,
+      platform: this.platform,
+      extractedAt: Date.now(),
+    };
+
+    return jobData;
+  }
+
+  extractText(selectors) {
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        return element.textContent?.trim() || "";
+      }
+    }
+    return "";
+  }
+
+  // Communication methods
+  async sendMessageToBackground(message) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
     });
+  }
+
+  notifyBackgroundReady() {
+    this.sendMessageToBackground({
+      action: "contentScriptReady",
+      sessionId: this.sessionId,
+      platform: this.platform,
+      url: window.location.href,
+    }).catch(console.error);
+  }
+
+  notifyBackgroundError(error) {
+    this.sendMessageToBackground({
+      action: "contentScriptError",
+      sessionId: this.sessionId,
+      platform: this.platform,
+      error: error.message,
+      url: window.location.href,
+    }).catch(console.error);
+  }
+
+  notifyDOMChange() {
+    this.sendMessageToBackground({
+      action: "domChanged",
+      sessionId: this.sessionId,
+      url: window.location.href,
+      timestamp: Date.now(),
+    }).catch(console.error);
+  }
+
+  notifyNavigation(oldUrl, newUrl) {
+    this.sendMessageToBackground({
+      action: "navigationDetected",
+      sessionId: this.sessionId,
+      oldUrl,
+      newUrl,
+      timestamp: Date.now(),
+    }).catch(console.error);
+  }
+
+  showAutomationStatus() {
+    // Show modal with current automation status
+    const modal = document.createElement("div");
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.5); z-index: 1000000; display: flex;
+      align-items: center; justify-content: center;
+    `;
+
+    modal.innerHTML = `
+      <div style="background: white; padding: 24px; border-radius: 12px; max-width: 400px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+        <h3 style="margin: 0 0 16px 0; color: #333;">Automation Status</h3>
+        <p><strong>Platform:</strong> ${this.platform}</p>
+        <p><strong>Session ID:</strong> ${this.sessionId}</p>
+        <p><strong>Current URL:</strong> ${window.location.href}</p>
+        <p><strong>Status:</strong> ${
+          this.automationActive ? "Active" : "Inactive"
+        }</p>
+        <button onclick="this.closest('div').remove()" style="
+          background: #4CAF50; color: white; border: none; padding: 8px 16px;
+          border-radius: 4px; cursor: pointer; margin-top: 16px;
+        ">Close</button>
+      </div>
+    `;
+
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    document.body.appendChild(modal);
+  }
+
+  startAutoStartTimer() {
+    // Wait for background script message, but if none comes, auto-start with basic config
+    this.autoStartTimer = setTimeout(async () => {
+      if (this.platformAutomation && !this.platformAutomation.isRunning) {
+        this.log("🔄 Auto-starting automation with basic config");
+        try {
+          await this.platformAutomation.start({
+            jobsToApply: 10, // Default value
+            submittedLinks: [],
+            preferences: {},
+          });
+        } catch (error) {
+          this.log(`❌ Auto-start failed: ${error.message}`);
+        }
+      }
+    }, 8000); // Wait 8 seconds for background message
+  }
+
+  clearAutoStartTimer() {
+    if (this.autoStartTimer) {
+      clearTimeout(this.autoStartTimer);
+      this.autoStartTimer = null;
+    }
+  }
+
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  log(message, data = {}) {
+    console.log(`🤖 [ContentScript-${this.platform}] ${message}`, data);
+  }
+
+  cleanup() {
+    // Clear timers
+    this.clearAutoStartTimer();
     
-    // Timeout fallback
-    setTimeout(() => {
-      observer.disconnect();
-      resolve(null);
-    }, timeout);
-  });
+    // Remove automation indicator
+    if (this.indicator) {
+      this.indicator.remove();
+      this.indicator = null;
+    }
+
+    // Disconnect DOM observer
+    if (this.domObserver) {
+      this.domObserver.disconnect();
+      this.domObserver = null;
+    }
+
+    // Stop platform automation
+    if (this.platformAutomation && this.platformAutomation.cleanup) {
+      this.platformAutomation.cleanup();
+    }
+
+    this.isInitialized = false;
+    this.automationActive = false;
+  }
 }
 
-// Initialize automation when page loads (from working code)
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeAutomation);
-} else {
-  initializeAutomation();
-}
+// Initialize content script manager
+const contentManager = new ContentScriptManager();
 
-// Also initialize on page show (for back/forward navigation)
-window.addEventListener('pageshow', initializeAutomation);
+// Single initialization point to prevent double initialization
+let initialized = false;
 
-// Re-initialize after a short delay (for dynamic content)
-setTimeout(initializeAutomation, 1000);
+const initializeOnce = () => {
+  if (initialized) return;
+  initialized = true;
+  
+  // Wait for DOM to be ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => contentManager.initialize(), 2000);
+    });
+  } else {
+    setTimeout(() => contentManager.initialize(), 2000);
+  }
+};
 
-// Mark content script as loaded
-window.contentScriptLoaded = true;
+// Only initialize once
+initializeOnce();
+
+// Cleanup on page unload
+window.addEventListener("beforeunload", () => contentManager.cleanup());
