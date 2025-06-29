@@ -1,7 +1,7 @@
 // services/file-handler-service.js
 export default class FileHandlerService {
   constructor(config) {
-    this.apiHost = config.apiHost || "https://api.yourdomain.com";
+    this.apiHost = config.apiHost || "http://localhost:3000";
   }
 
   async handleFileUpload(container, userDetails, jobDescription) {

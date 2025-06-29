@@ -1,14 +1,16 @@
 // services/user-service.js
 export default class UserService {
   constructor(config) {
-    this.apiHost = config.apiHost || "https://api.yourdomain.com";
-    this.userId = config.userId;
+    this.apiHost = config.apiHost || "http://localhost:3000";
+    this.userId = config.userId || "adDnGPfd4fCzQ9xb8Ymm";
     this.userDetailsCache = null;
   }
 
   async fetchUserDetails() {
     try {
+      console.log(`${this.apiHost}/api/user/${this.userId}`);
       const response = await fetch(`${this.apiHost}/api/user/${this.userId}`);
+      
       if (!response.ok) throw new Error("Failed to fetch user details");
 
       const data = await response.json();

@@ -1,7 +1,7 @@
 // services/ai-service.js
 export default class AIService {
   constructor(config) {
-    this.apiHost = config.apiHost || "https://api.yourdomain.com";
+    this.apiHost = config.apiHost || "http://localhost:3000";
     this.answerCache = new Map();
   }
 
