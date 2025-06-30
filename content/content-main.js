@@ -139,6 +139,7 @@ class ContentScriptManager {
     try {
       // Load platform-specific automation module
       const PlatformClass = await this.loadPlatformModule(this.platform);
+      console.log("PlatformClass", PlatformClass);
 
       if (!PlatformClass) {
         throw new Error(`Platform ${this.platform} not supported`);
@@ -814,11 +815,13 @@ class ContentScriptManager {
 
 // Initialize content script manager
 const contentManager = new ContentScriptManager();
-
+console.log("📝 Content script manager created");
 // Initialize when DOM is ready
 const initializeWhenReady = () => {
+  console.log("📝 Initializing content script manager...");
   if (document.readyState === "complete") {
     contentManager.initialize();
+    console.log("✅ Content script manager initialized");
   } else {
     setTimeout(initializeWhenReady, 100);
   }

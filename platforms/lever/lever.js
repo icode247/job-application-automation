@@ -1,4 +1,4 @@
-// platforms/lever/lever.js - COMPLETE FILE WITH ALL UPDATES
+// platforms/lever/lever.js - UPDATED WITH PROPER COMMUNICATION FLOW
 import BasePlatform from '../base-platform.js';
 import LeverFormHandler from './lever-form-handler.js';
 import LeverFileHandler from './lever-file-handler.js';
@@ -26,15 +26,12 @@ export default class LeverPlatform extends BasePlatform {
       apiHost: this.getApiHost() 
     });
     
-    // State management
-    this.searchData = {
-      limit: 0,
-      current: 0,
-      domain: ['lever.co'],
-      submittedLinks: [],
-      searchLinkPattern: /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/
-    };
+    // Communication state
+    this.port = null;
+    this.connectionRetries = 0;
+    this.maxRetries = 3;
     
+    // Application state
     this.applicationState = {
       isApplicationInProgress: false,
       applicationStartTime: null,
@@ -43,8 +40,17 @@ export default class LeverPlatform extends BasePlatform {
       processedLinksCount: 0
     };
     
-    this.debounceTimers = {};
+    // Search data (will be populated from background)
+    this.searchData = {
+      limit: 0,
+      current: 0,
+      domain: ['lever.co'],
+      submittedLinks: [],
+      searchLinkPattern: null
+    };
+    
     this.healthCheckTimer = null;
+    this.keepAliveInterval = null;
   }
 
   getApiHost() {
@@ -55,31 +61,271 @@ export default class LeverPlatform extends BasePlatform {
     await super.initialize();
     this.log('🎯 Lever platform initialized');
     
-    // Set up health monitoring
-    this.healthCheckTimer = setInterval(() => this.checkHealth(), 30000);
+    // Set up communication with background script
+    this.initializePortConnection();
     
-    // Initialize form and file handlers
+    // Set up health monitoring
+    this.healthCheckTimer = setInterval(() => this.checkHealth(), 60000);
+    
+    // Initialize form handler
     this.formHandler = new LeverFormHandler({
       logger: (message) => this.log(message),
       host: this.getApiHost(),
       userData: null, // Will be set when user data is loaded
       jobDescription: ''
     });
-    
-    // Set up message listener for background script communication
-    this.setupMessageListener();
   }
 
-  // NEW: Set up message listener for SEARCH_NEXT notifications
-  setupMessageListener() {
-    // Listen for messages from background script
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.type === 'SEARCH_NEXT' && this.isRunning) {
-        this.handleSearchNext(message.data);
-        sendResponse({ success: true });
-        return true;
+  initializePortConnection() {
+    try {
+      this.log('📡 Initializing port connection with background script');
+      
+      // Disconnect existing port if any
+      if (this.port) {
+        try {
+          this.port.disconnect();
+        } catch (e) {
+          // Ignore errors when disconnecting
+        }
       }
-    });
+      
+      // Determine port name based on page type
+      const isApplyPage = window.location.href.includes('/apply') || 
+                          window.location.pathname.includes('/apply');
+      
+      const timestamp = Date.now();
+      const portName = isApplyPage 
+        ? `lever-apply-${timestamp}` 
+        : `lever-search-${timestamp}`;
+      
+      this.log(`🔌 Creating connection with port name: ${portName}`);
+      
+      // Create the connection
+      this.port = chrome.runtime.connect({ name: portName });
+      
+      if (!this.port) {
+        throw new Error('Failed to establish connection with background script');
+      }
+      
+      // Set up message handler
+      this.port.onMessage.addListener((message) => {
+        this.handlePortMessage(message);
+      });
+      
+      // Handle port disconnection
+      this.port.onDisconnect.addListener(() => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          this.log('❌ Port disconnected due to error:', error);
+        } else {
+          this.log('🔌 Port disconnected');
+        }
+        
+        this.port = null;
+        
+        // Attempt to reconnect
+        if (this.connectionRetries < this.maxRetries) {
+          this.connectionRetries++;
+          this.log(`🔄 Attempting to reconnect (${this.connectionRetries}/${this.maxRetries})...`);
+          setTimeout(() => this.initializePortConnection(), 5000);
+        }
+      });
+      
+      // Start keep-alive interval
+      this.startKeepAliveInterval();
+      
+      this.connectionRetries = 0;
+      this.log('✅ Port connection established successfully');
+      
+    } catch (error) {
+      this.log('❌ Error initializing port connection:', error);
+      if (this.connectionRetries < this.maxRetries) {
+        this.connectionRetries++;
+        setTimeout(() => this.initializePortConnection(), 5000);
+      }
+    }
+  }
+
+  startKeepAliveInterval() {
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+    }
+    
+    this.keepAliveInterval = setInterval(() => {
+      try {
+        if (this.port) {
+          this.safeSendPortMessage({ type: 'KEEPALIVE' });
+        } else {
+          this.log('🔄 Port is null during keepalive, attempting to reconnect');
+          this.initializePortConnection();
+        }
+      } catch (error) {
+        this.log('❌ Error sending keepalive, reconnecting:', error);
+        this.initializePortConnection();
+      }
+    }, 25000);
+  }
+
+  safeSendPortMessage(message) {
+    try {
+      if (!this.port) {
+        this.log('⚠️ Port not available, attempting to reconnect');
+        this.initializePortConnection();
+        return false;
+      }
+      
+      this.port.postMessage(message);
+      return true;
+    } catch (error) {
+      this.log('❌ Error sending port message:', error);
+      this.initializePortConnection();
+      return false;
+    }
+  }
+
+  handlePortMessage(message) {
+    try {
+      this.log('📨 Received port message:', message);
+      
+      const { type, data } = message || {};
+      if (!type) {
+        this.log('⚠️ Received message without type, ignoring');
+        return;
+      }
+      
+      switch (type) {
+        case 'SUCCESS':
+          this.handleSuccessMessage(data);
+          break;
+          
+        case 'SEARCH_NEXT':
+          this.handleSearchNext(data);
+          break;
+          
+        case 'APPLICATION_STATUS_RESPONSE':
+          this.handleApplicationStatusResponse(data);
+          break;
+          
+        case 'JOB_TAB_STATUS':
+          this.handleJobTabStatus(data);
+          break;
+          
+        case 'DUPLICATE':
+          this.handleDuplicateJob(data);
+          break;
+          
+        case 'ERROR':
+          this.handleErrorMessage(data);
+          break;
+          
+        case 'KEEPALIVE_RESPONSE':
+          // Just acknowledge keepalive
+          break;
+          
+        default:
+          this.log(`❓ Unhandled message type: ${type}`);
+      }
+    } catch (error) {
+      this.log('❌ Error handling port message:', error);
+    }
+  }
+
+  handleSuccessMessage(data) {
+    if (data) {
+      if (data.submittedLinks !== undefined) {
+        // This is search task data
+        this.processSearchTaskData(data);
+      } else if (data.profile !== undefined) {
+        // This is send CV task data
+        this.processSendCvTaskData(data);
+      }
+    }
+  }
+
+  handleSearchNext(data) {
+    this.log('🔄 Received search next notification', data);
+    
+    // Reset application state
+    this.applicationState.isApplicationInProgress = false;
+    this.applicationState.applicationUrl = null;
+    this.applicationState.applicationStartTime = null;
+    
+    // Update processed links if URL provided
+    if (data && data.url) {
+      this.searchData.submittedLinks.push({
+        url: data.url,
+        status: data.status || 'PROCESSED',
+        message: data.message || '',
+        timestamp: Date.now()
+      });
+      
+      // Update visual status of the link
+      this.updateLinkStatus(data.url, data.status, data.message);
+    }
+    
+    // Continue searching if running and haven't reached limit
+    if (this.isRunning && this.searchData.current < this.searchData.limit) {
+      this.log('🔄 Continuing job search...');
+      setTimeout(() => this.continueJobSearch(), 2000);
+    } else {
+      this.log('🏁 Search completed or limit reached');
+      this.reportComplete();
+    }
+  }
+
+  handleApplicationStatusResponse(data) {
+    this.log('📊 Application status response:', data);
+    
+    if (data && data.active === false && this.applicationState.isApplicationInProgress) {
+      this.log('⚠️ State mismatch detected! Resetting application progress flag');
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
+      this.statusService.show('Detected state mismatch - resetting flags', 'warning');
+      
+      // Continue search after brief delay
+      setTimeout(() => this.continueJobSearch(), 1000);
+    }
+  }
+
+  handleJobTabStatus(data) {
+    this.log('📊 Job tab status:', data);
+    
+    if (data.isOpen && data.isProcessing) {
+      this.applicationState.isApplicationInProgress = true;
+      this.statusService.show('Job application in progress, waiting...', 'info');
+      
+      // Check again after delay
+      setTimeout(() => {
+        if (this.applicationState.isApplicationInProgress) {
+          this.safeSendPortMessage({ type: 'CHECK_JOB_TAB_STATUS' });
+        }
+      }, 10000);
+    } else {
+      if (this.applicationState.isApplicationInProgress) {
+        this.log('🔄 Resetting application in progress flag');
+        this.applicationState.isApplicationInProgress = false;
+        this.applicationState.applicationStartTime = null;
+        this.statusService.show('No active job application, resuming search', 'info');
+        
+        setTimeout(() => this.continueJobSearch(), 1000);
+      }
+    }
+  }
+
+  handleDuplicateJob(data) {
+    this.log('⚠️ Duplicate job detected, resetting application state');
+    this.applicationState.isApplicationInProgress = false;
+    this.applicationState.applicationStartTime = null;
+    this.statusService.show(`Job already processed: ${data?.url || 'Unknown URL'}`, 'warning');
+    
+    // Continue to next job
+    setTimeout(() => this.continueJobSearch(), 1000);
+  }
+
+  handleErrorMessage(data) {
+    const errorMessage = data && data.message ? data.message : 'Unknown error from background script';
+    this.log('❌ Error from background script:', errorMessage);
+    this.statusService.show(`Background error: ${errorMessage}`, 'error');
   }
 
   async start(params = {}) {
@@ -89,11 +335,6 @@ export default class LeverPlatform extends BasePlatform {
       
       // Update config with parameters
       this.config = { ...this.config, ...params };
-      this.searchData.limit = this.config.jobsToApply || 10;
-      this.searchData.submittedLinks = this.formatSubmittedLinks(this.config.submittedLinks || []);
-      
-      // Get user details
-      await this.loadUserProfile();
       
       // Wait for page to be ready
       await this.waitForPageLoad();
@@ -103,21 +344,6 @@ export default class LeverPlatform extends BasePlatform {
       
     } catch (error) {
       this.reportError(error, { phase: 'start' });
-    }
-  }
-
-  async loadUserProfile() {
-    try {
-      this.userProfile = await this.userService.getUserDetails();
-      
-      if (this.formHandler) {
-        this.formHandler.userData = this.userProfile;
-      }
-      
-      this.log('✅ User profile loaded successfully');
-    } catch (error) {
-      this.log('❌ Failed to load user profile', error);
-      throw error;
     }
   }
 
@@ -135,7 +361,6 @@ export default class LeverPlatform extends BasePlatform {
       await this.startApplicationProcess();
     } else {
       this.log('❓ Unknown page type, waiting for navigation');
-      // Wait for navigation or user interaction
       await this.waitForValidPage();
     }
   }
@@ -144,38 +369,64 @@ export default class LeverPlatform extends BasePlatform {
     return /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/.test(url);
   }
 
-  async waitForValidPage(timeout = 30000) {
-    const startTime = Date.now();
-    
-    while (Date.now() - startTime < timeout) {
-      const url = window.location.href;
-      
-      if (url.includes('google.com/search') || this.isLeverJobPage(url)) {
-        await this.detectPageTypeAndStart();
-        return;
-      }
-      
-      await this.delay(1000);
-    }
-    
-    throw new Error('Timeout waiting for valid page');
-  }
-
   async startSearchProcess() {
     try {
       this.statusService.show('Starting job search process', 'info');
       this.updateProgress({ phase: 'searching' });
       
-      // Find and process job links
-      await this.findAndProcessJobs();
+      // Get search task data from background
+      await this.fetchSearchTaskData();
+      
+      // Start job search loop
+      await this.continueJobSearch();
       
     } catch (error) {
       this.reportError(error, { phase: 'search' });
     }
   }
 
-  // UPDATED: Modified search loop to wait for job completion before continuing
-  async findAndProcessJobs() {
+  async fetchSearchTaskData() {
+    this.log('📡 Fetching search task data from background');
+    this.statusService.show('Fetching search task data...', 'info');
+    
+    const success = this.safeSendPortMessage({ type: 'GET_SEARCH_TASK' });
+    if (!success) {
+      throw new Error('Failed to request search task data');
+    }
+    
+    // Data will be received via handlePortMessage
+  }
+
+  processSearchTaskData(data) {
+    try {
+      this.log('📊 Processing search task data:', data);
+      
+      if (!data) {
+        this.log('⚠️ No search task data provided');
+        return;
+      }
+      
+      this.searchData = {
+        tabId: data.tabId,
+        limit: data.limit || 10,
+        current: data.current || 0,
+        domain: data.domain || ['lever.co'],
+        submittedLinks: data.submittedLinks || [],
+        searchLinkPattern: data.searchLinkPattern ? 
+          new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, '')) : 
+          /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/
+      };
+      
+      this.log('✅ Search data initialized:', this.searchData);
+      this.statusService.show('Search initialization complete', 'success');
+      
+    } catch (error) {
+      this.log('❌ Error processing search task data:', error);
+      this.statusService.show(`Error processing search data: ${error.message}`, 'error');
+    }
+  }
+
+  async continueJobSearch() {
     while (this.isRunning && !this.isPaused) {
       try {
         // Check if we've reached the limit
@@ -185,7 +436,7 @@ export default class LeverPlatform extends BasePlatform {
           return;
         }
         
-        // Check if application is in progress and wait
+        // Check if application is in progress
         if (this.applicationState.isApplicationInProgress) {
           this.log('⏳ Application in progress, waiting...');
           await this.delay(5000);
@@ -201,20 +452,15 @@ export default class LeverPlatform extends BasePlatform {
         for (const link of jobLinks) {
           if (!this.isRunning || this.isPaused) break;
           
-          // Skip if application is in progress
           if (this.applicationState.isApplicationInProgress) {
             this.log('⏳ Application started, stopping job search loop');
-            return; // Exit the loop, will be resumed when application completes
+            return;
           }
           
           const processed = await this.processJobLink(link);
           if (processed) {
             processedAny = true;
-            this.searchData.current++;
-            
-            // After successfully starting an application, wait for it to complete
-            this.log('✅ Job application started, waiting for completion...');
-            return; // Exit the loop, will be resumed by handleSearchNext
+            return; // Exit and wait for application completion
           }
         }
         
@@ -228,73 +474,12 @@ export default class LeverPlatform extends BasePlatform {
           }
         }
         
-        // Small delay between batches
         await this.delay(2000);
         
       } catch (error) {
         this.reportError(error, { phase: 'job_processing' });
-        await this.delay(5000); // Wait before retrying
+        await this.delay(5000);
       }
-    }
-  }
-
-  // NEW: Handle notification that we should continue to the next job
-  handleSearchNext(data) {
-    try {
-      this.log('🔄 Received search next notification', data);
-      
-      // Reset application state
-      this.applicationState.isApplicationInProgress = false;
-      this.applicationState.applicationUrl = null;
-      this.applicationState.applicationStartTime = null;
-      
-      // Update processed links
-      if (data && data.url) {
-        this.searchData.submittedLinks.push({
-          url: data.url,
-          status: data.status || 'PROCESSED',
-          message: data.message || '',
-          timestamp: Date.now()
-        });
-        
-        // Update visual status of the link
-        this.updateLinkStatus(data.url, data.status, data.message);
-      }
-      
-      // Continue searching if we haven't reached the limit
-      if (this.isRunning && this.searchData.current < this.searchData.limit) {
-        this.log('🔄 Continuing job search...');
-        // Resume the job search process
-        this.debounce('continueSearch', () => this.findAndProcessJobs(), 2000);
-      } else {
-        this.log('🏁 Search completed or limit reached');
-        this.reportComplete();
-      }
-      
-    } catch (error) {
-      this.log(`❌ Error handling search next: ${error.message}`);
-      this.reportError(error, { phase: 'search_next' });
-    }
-  }
-
-  // NEW: Update visual status of a processed link
-  updateLinkStatus(url, status, message) {
-    try {
-      const links = this.findJobLinks();
-      for (const linkData of links) {
-        if (this.isUrlMatch(linkData.url, url)) {
-          if (status === 'SUCCESS') {
-            this.markLinkAsSuccess(linkData.element);
-          } else if (status === 'ERROR' || status === 'FAILED') {
-            this.markLinkAsError(linkData.element, message || 'Failed');
-          } else if (status === 'SKIPPED') {
-            this.markLinkAsSkipped(linkData.element, message || 'Skipped');
-          }
-          break;
-        }
-      }
-    } catch (error) {
-      this.log(`⚠️ Error updating link status: ${error.message}`);
     }
   }
 
@@ -323,6 +508,7 @@ export default class LeverPlatform extends BasePlatform {
   }
 
   isValidLeverJobLink(url) {
+    if (!this.searchData.searchLinkPattern) return false;
     return this.searchData.searchLinkPattern.test(url);
   }
 
@@ -344,12 +530,10 @@ export default class LeverPlatform extends BasePlatform {
     return element.textContent?.trim() || 'Job Application';
   }
 
-  // UPDATED: Now requests background script to open job in new tab instead of direct navigation
   async processJobLink(jobLink) {
     try {
       this.log(`🎯 Processing job: ${jobLink.url}`);
       
-      // Check if already processing a job
       if (this.applicationState.isApplicationInProgress) {
         this.log('⚠️ Already processing a job, skipping');
         return false;
@@ -367,14 +551,23 @@ export default class LeverPlatform extends BasePlatform {
         return false;
       }
       
-      // Request background script to open job in new tab
-      const success = await this.requestJobTabOpen(jobLink.url, jobLink.title);
+      // Send request to background to open job in new tab
+      const success = this.safeSendPortMessage({
+        type: 'SEND_CV_TASK',
+        data: {
+          url: jobLink.url,
+          title: jobLink.title
+        }
+      });
       
       if (success) {
+        this.applicationState.isApplicationInProgress = true;
+        this.applicationState.applicationUrl = jobLink.url;
+        this.applicationState.applicationStartTime = Date.now();
         this.markLinkAsSuccess(jobLink.element);
         return true;
       } else {
-        this.markLinkAsError(jobLink.element, 'Failed to open job tab');
+        this.markLinkAsError(jobLink.element, 'Failed to send job request');
         this.resetApplicationState();
         return false;
       }
@@ -387,61 +580,10 @@ export default class LeverPlatform extends BasePlatform {
     }
   }
 
-  // NEW: Request background script to open job in new tab
-  async requestJobTabOpen(url, title) {
-    try {
-      this.log(`📝 Requesting job tab open: ${url}`);
-      
-      // Send message to background script to open job in new tab
-      const response = await this.sendMessageToBackground({
-        action: 'openJobInNewTab',
-        url: url,
-        title: title,
-        sessionId: this.sessionId,
-        platform: this.platform
-      });
-      
-      if (response && response.success) {
-        // Set application state
-        this.applicationState.isApplicationInProgress = true;
-        this.applicationState.applicationUrl = url;
-        this.applicationState.applicationStartTime = Date.now();
-        
-        this.log('✅ Job tab opened successfully');
-        return true;
-      } else {
-        this.log('❌ Failed to open job tab');
-        return false;
-      }
-      
-    } catch (error) {
-      this.log(`❌ Error requesting job tab: ${error.message}`);
-      return false;
-    }
-  }
-
-  // NEW: Helper method for Chrome extension messaging
-  async sendMessageToBackground(message) {
-    return new Promise((resolve, reject) => {
-      try {
-        chrome.runtime.sendMessage(message, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-          } else {
-            resolve(response);
-          }
-        });
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
   async loadMoreResults() {
     try {
       this.log('🔄 Attempting to load more results');
       
-      // Look for "Next" or "More results" button
       const nextButton = this.findNextButton();
       if (nextButton) {
         this.log('⏭️ Found next button, clicking');
@@ -482,6 +624,9 @@ export default class LeverPlatform extends BasePlatform {
       this.log('📝 Starting application process');
       this.statusService.show('Starting application process', 'info');
       
+      // Get send CV task data from background
+      await this.fetchSendCvTaskData();
+      
       // Extract job details
       const jobDetails = this.extractJobDetails();
       this.log('📋 Job details extracted', jobDetails);
@@ -490,13 +635,9 @@ export default class LeverPlatform extends BasePlatform {
       const alreadyApplied = await this.applicationTracker.checkIfAlreadyApplied(jobDetails.jobId);
       if (alreadyApplied) {
         this.log('⚠️ Already applied to this job');
-        this.statusService.show('Already applied to this job', 'warning');
         await this.handleJobCompletion(jobDetails, 'SKIPPED', 'Already applied');
         return;
       }
-      
-      // Start countdown timer
-      this.startApplicationTimer();
       
       // Apply for the job
       const success = await this.applyToJob(jobDetails);
@@ -510,6 +651,42 @@ export default class LeverPlatform extends BasePlatform {
     } catch (error) {
       this.reportError(error, { phase: 'application' });
       await this.handleJobCompletion(null, 'ERROR', error.message);
+    }
+  }
+
+  async fetchSendCvTaskData() {
+    this.log('📡 Fetching send CV task data from background');
+    this.statusService.show('Fetching CV task data...', 'info');
+    
+    const success = this.safeSendPortMessage({ type: 'GET_SEND_CV_TASK' });
+    if (!success) {
+      throw new Error('Failed to request send CV task data');
+    }
+  }
+
+  processSendCvTaskData(data) {
+    try {
+      this.log('📊 Processing send CV task data:', data);
+      
+      if (!data) {
+        this.log('⚠️ No send CV task data provided');
+        return;
+      }
+      
+      // Store user profile data
+      this.userProfile = data.profile;
+      
+      // Update form handler
+      if (this.formHandler) {
+        this.formHandler.userData = this.userProfile;
+      }
+      
+      this.log('✅ CV task data processed successfully');
+      this.statusService.show('Apply initialization complete', 'success');
+      
+    } catch (error) {
+      this.log('❌ Error processing send CV task data:', error);
+      this.statusService.show(`Error processing CV data: ${error.message}`, 'error');
     }
   }
 
@@ -723,24 +900,23 @@ export default class LeverPlatform extends BasePlatform {
     return true;
   }
 
-  // UPDATED: Send completion message to background script instead of navigating back
   async handleJobCompletion(jobDetails, status, message = '') {
     try {
       this.log(`📊 Handling job completion: ${status}`);
       
       // Send completion message to background script
-      const completionData = {
-        action: status === 'SUCCESS' ? 'applicationCompleted' : 
-                status === 'FAILED' || status === 'ERROR' ? 'applicationError' : 
-                'applicationSkipped',
-        sessionId: this.sessionId,
-        platform: this.platform,
-        url: this.applicationState.applicationUrl,
-        data: jobDetails,
-        message: message
-      };
+      const messageType = status === 'SUCCESS' ? 'SEND_CV_TASK_DONE' : 
+                         status === 'FAILED' || status === 'ERROR' ? 'SEND_CV_TASK_ERROR' : 
+                         'SEND_CV_TASK_SKIP';
       
-      await this.sendMessageToBackground(completionData);
+      const success = this.safeSendPortMessage({
+        type: messageType,
+        data: status === 'SUCCESS' ? jobDetails : message
+      });
+      
+      if (!success) {
+        this.log('⚠️ Failed to send completion message to background');
+      }
       
       // Update application count if successful
       if (status === 'SUCCESS' && jobDetails) {
@@ -768,7 +944,7 @@ export default class LeverPlatform extends BasePlatform {
       
       this.updateProgress(this.progress);
       
-      // Reset application state - the tab will be closed by background script
+      // Reset application state
       this.resetApplicationState();
       
     } catch (error) {
@@ -776,12 +952,25 @@ export default class LeverPlatform extends BasePlatform {
     }
   }
 
-  buildSearchUrl() {
-    const preferences = this.config.preferences || {};
-    const positions = preferences.positions?.length ? preferences.positions.join(' OR ') : 'software engineer';
-    const location = preferences.location?.length && !preferences.remoteOnly ? ` "${preferences.location[0]}"` : '';
-    
-    return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(positions)}"${location}`;
+  // Update visual status of processed links
+  updateLinkStatus(url, status, message) {
+    try {
+      const links = this.findJobLinks();
+      for (const linkData of links) {
+        if (this.isUrlMatch(linkData.url, url)) {
+          if (status === 'SUCCESS') {
+            this.markLinkAsSuccess(linkData.element);
+          } else if (status === 'ERROR' || status === 'FAILED') {
+            this.markLinkAsError(linkData.element, message || 'Failed');
+          } else if (status === 'SKIPPED') {
+            this.markLinkAsSkipped(linkData.element, message || 'Skipped');
+          }
+          break;
+        }
+      }
+    } catch (error) {
+      this.log(`⚠️ Error updating link status: ${error.message}`);
+    }
   }
 
   // Utility methods
@@ -818,32 +1007,10 @@ export default class LeverPlatform extends BasePlatform {
     return this.normalizeUrl(url1) === this.normalizeUrl(url2);
   }
 
-  formatSubmittedLinks(links) {
-    return links.map(link => ({
-      url: link.url || link,
-      status: link.status || 'PROCESSED',
-      timestamp: link.timestamp || Date.now()
-    }));
-  }
-
-  startApplicationTimer() {
-    this.applicationTimer = setTimeout(() => {
-      if (this.applicationState.isApplicationInProgress) {
-        this.log('⏰ Application timeout, marking as failed');
-        this.handleJobCompletion(null, 'ERROR', 'Application timeout');
-      }
-    }, 5 * 60 * 1000); // 5 minute timeout
-  }
-
   resetApplicationState() {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationUrl = null;
     this.applicationState.applicationStartTime = null;
-    
-    if (this.applicationTimer) {
-      clearTimeout(this.applicationTimer);
-      this.applicationTimer = null;
-    }
   }
 
   checkHealth() {
@@ -934,15 +1101,21 @@ export default class LeverPlatform extends BasePlatform {
     });
   }
 
-  debounce(key, fn, delay) {
-    if (this.debounceTimers[key]) {
-      clearTimeout(this.debounceTimers[key]);
+  async waitForValidPage(timeout = 30000) {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeout) {
+      const url = window.location.href;
+      
+      if (url.includes('google.com/search') || this.isLeverJobPage(url)) {
+        await this.detectPageTypeAndStart();
+        return;
+      }
+      
+      await this.delay(1000);
     }
     
-    this.debounceTimers[key] = setTimeout(() => {
-      delete this.debounceTimers[key];
-      fn();
-    }, delay);
+    throw new Error('Timeout waiting for valid page');
   }
 
   cleanup() {
@@ -953,12 +1126,19 @@ export default class LeverPlatform extends BasePlatform {
       clearInterval(this.healthCheckTimer);
     }
     
-    if (this.applicationTimer) {
-      clearTimeout(this.applicationTimer);
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
     }
     
-    // Clear debounce timers
-    Object.values(this.debounceTimers).forEach(timer => clearTimeout(timer));
+    // Disconnect port
+    if (this.port) {
+      try {
+        this.port.disconnect();
+      } catch (e) {
+        // Ignore errors
+      }
+      this.port = null;
+    }
     
     // Reset state
     this.resetApplicationState();
@@ -966,12 +1146,13 @@ export default class LeverPlatform extends BasePlatform {
     this.log('🧹 Lever platform cleanup completed');
   }
 
+  // Required by base class
   async findJobs() {
     return this.findJobLinks();
   }
 
   async applyToJob(jobElement) {
-    // This method is called by base class, redirect to our implementation
+    // This method is called by base class if needed
     const jobDetails = this.extractJobDetails();
     return await this.applyToJob(jobDetails);
   }

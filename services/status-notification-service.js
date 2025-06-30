@@ -14,7 +14,7 @@ export default class StatusNotificationService {
     notification.className = `automation-notification automation-notification--${type}`;
     notification.style.cssText = `
       position: fixed;
-      top: 20px;
+      top: 200px;
       right: 20px;
       background: ${this.getBackgroundColor(type)};
       color: white;
