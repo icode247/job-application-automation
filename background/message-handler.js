@@ -22,7 +22,7 @@ export default class MessageHandler {
       console.log("🔄 Duplicate request detected, ignoring");
       sendResponse({
         status: "error",
-        message: "Duplicate request already in progress"
+        message: "Duplicate request already in progress",
       });
       return true;
     }
@@ -89,7 +89,7 @@ export default class MessageHandler {
   async handleStartApplying(request, sendResponse) {
     try {
       console.log("📨 Start applying request received:", request);
-      
+
       // Validate required parameters
       const validation = this.validateStartApplyingRequest(request);
       if (!validation.valid) {
@@ -113,6 +113,7 @@ export default class MessageHandler {
         resumeUrl,
         coverLetterTemplate,
         preferences = {},
+        apiHost = "http://localhost:3000", // Default API host
       } = request;
 
       // Create automation session
@@ -143,6 +144,7 @@ export default class MessageHandler {
         resumeUrl,
         coverLetterTemplate,
         preferences,
+        apiHost
       });
 
       if (result.success) {
@@ -194,13 +196,18 @@ export default class MessageHandler {
       setTimeout(async () => {
         try {
           await chrome.tabs.sendMessage(sender.tab.id, {
-            action: 'startAutomation',
+            action: "startAutomation",
             sessionId: sessionId,
-            config: automation.getConfig() // Get config from automation instance
+            config: automation.getConfig(), // Get config from automation instance
           });
-          console.log(`📤 Sent start message to content script for session ${sessionId}`);
+          console.log(
+            `📤 Sent start message to content script for session ${sessionId}`
+          );
         } catch (error) {
-          console.error(`❌ Failed to send start message to content script:`, error);
+          console.error(
+            `❌ Failed to send start message to content script:`,
+            error
+          );
         }
       }, 1000); // Wait 1 second for content script to be fully ready
     }
@@ -390,22 +397,24 @@ export default class MessageHandler {
   async handleWindowClosed(windowId) {
     for (const [sessionId, automation] of this.activeAutomations.entries()) {
       if (automation.windowId === windowId) {
-        console.log(`🪟 Window ${windowId} closed, stopping automation ${sessionId}`);
+        console.log(
+          `🪟 Window ${windowId} closed, stopping automation ${sessionId}`
+        );
         await automation.stop();
         this.activeAutomations.delete(sessionId);
-        
+
         // Update session status
         await this.sessionManager.updateSession(sessionId, {
           status: "stopped",
           stoppedAt: Date.now(),
-          reason: "Window closed"
+          reason: "Window closed",
         });
 
         // Notify frontend
         this.notifyFrontend({
           type: "automation_stopped",
           sessionId,
-          reason: "Window closed"
+          reason: "Window closed",
         });
       }
     }

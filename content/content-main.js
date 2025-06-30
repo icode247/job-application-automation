@@ -161,14 +161,7 @@ class ContentScriptManager {
 
       // Initialize platform automation
       await this.platformAutomation.initialize();
-      await this.platformAutomation.start({
-        jobsToApply: 10, // Default value
-        submittedLinks: [],
-        preferences: {
-
-        },
-        userId: this.userId, // Include userId
-      });
+      await this.platformAutomation.start(this.config);
     } catch (error) {
       console.error(
         `❌ Failed to setup automation for ${this.platform}:`,
@@ -280,7 +273,7 @@ class ContentScriptManager {
 
         // Update config and start automation
         this.config = { ...this.config, ...request.config };
-        console.log(`🤖 Starting automation for ${this.platform} with config:`, this.config);
+        this.log(`🤖 Starting automation for ${this.platform} with config:`, this.config);
         this.log("🚀 Starting platform automation in content script");
         await this.platformAutomation.start(this.config);
 

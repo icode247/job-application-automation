@@ -43,13 +43,18 @@ export default class AutomationOrchestrator {
         throw new Error("Failed to create automation window");
       }
 
+      const fullParams = {
+        ...params,
+        apiHost: params.apiHost || this.config.apiHost,
+      };
+
       // Create automation session (background tracking only)
       const automationSession = new AutomationSession({
         sessionId,
         platform,
         userId,
         windowId: automationWindow.id,
-        params,
+        params: fullParams,
         orchestrator: this,
       });
 
@@ -259,9 +264,19 @@ class AutomationSession {
       dailyRemaining: this.params.dailyRemaining,
       devMode: this.params.devMode || false,
       country: this.params.country || "US",
+      apiHost: this.params.apiHost || "http://localhost:3000",
     };
   }
 
+  getApiHost() {
+    // Check multiple sources for API host
+    return (
+      this.params.apiHost ||
+      this.orchestrator.config?.apiHost ||
+      process.env.API_HOST ||
+      "http://localhost:3000"
+    );
+  }
   async pause() {
     this.isPaused = true;
     this.status = "paused";

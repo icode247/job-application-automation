@@ -4,8 +4,8 @@ export const PRODUCTION_CONFIG = {
   extensionId: "your-production-extension-id",
 
   // API endpoints
-  apiBaseUrl: "https://api.yourdomain.com",
-  webhookUrl: "https://api.yourdomain.com/automation/webhook",
+  apiBaseUrl: "http://localhost:3000",
+  webhookUrl: "http://localhost:3000/automation/webhook",
 
   // Rate limiting
   requestDelay: { min: 3000, max: 8000 },
