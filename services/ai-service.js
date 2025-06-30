@@ -1,7 +1,9 @@
+import { API_HOST_URL } from "./constants.js";
+
 // services/ai-service.js
 export default class AIService {
   constructor(config) {
-    this.apiHost = config.apiHost || "http://localhost:3000";
+    this.apiHost = API_HOST_URL
     this.answerCache = new Map();
   }
 

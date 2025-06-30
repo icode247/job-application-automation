@@ -1,4 +1,4 @@
-// platforms/linkedin/linkedin.js
+// platforms/linkedin/linkedin.js - Full code with LinkedIn-specific validation
 import BasePlatform from '../base-platform.js';
 import AIService from '../../services/ai-service.js';
 import ApplicationTrackerService from '../../services/application-tracker-service.js';
@@ -32,8 +32,121 @@ export default class LinkedInPlatform extends BasePlatform {
     this.log(`🔧 Services initialized with API host: ${apiHost}`);
   }
 
-  // ===== USER AUTHORIZATION & SERVICES =====
+  // ===== LINKEDIN-SPECIFIC VALIDATION =====
+  validateLinkedInPreferences(preferences) {
+    const errors = [];
+    const warnings = [];
 
+    // Validate positions
+    if (!preferences.positions || !Array.isArray(preferences.positions) || preferences.positions.length === 0) {
+      errors.push("At least one job position is required");
+    } else if (preferences.positions.some(pos => !pos || typeof pos !== 'string')) {
+      errors.push("All positions must be non-empty strings");
+    }
+
+    // Validate location
+    if (preferences.location && Array.isArray(preferences.location)) {
+      const supportedCountries = [
+        "Nigeria", "Netherlands", "United States", "United Kingdom", 
+        "Canada", "Australia", "Germany", "France", "India", 
+        "Singapore", "South Africa", "Ireland", "New Zealand"
+      ];
+      
+      const unsupportedLocations = preferences.location.filter(
+        loc => loc !== "Remote" && !supportedCountries.includes(loc)
+      );
+      
+      if (unsupportedLocations.length > 0) {
+        warnings.push(`Some locations may not have optimal filtering: ${unsupportedLocations.join(', ')}`);
+      }
+    }
+
+    // Validate job types
+    if (preferences.jobType && Array.isArray(preferences.jobType)) {
+      const validJobTypes = ["Full-time", "Part-time", "Contract", "Temporary", "Internship", "Volunteer"];
+      const invalidJobTypes = preferences.jobType.filter(type => !validJobTypes.includes(type));
+      
+      if (invalidJobTypes.length > 0) {
+        errors.push(`Invalid job types: ${invalidJobTypes.join(', ')}. Valid types: ${validJobTypes.join(', ')}`);
+      }
+    }
+
+    // Validate experience levels
+    if (preferences.experience && Array.isArray(preferences.experience)) {
+      const validExperience = ["Internship", "Entry level", "Associate", "Mid-Senior level", "Director", "Executive"];
+      const invalidExperience = preferences.experience.filter(exp => !validExperience.includes(exp));
+      
+      if (invalidExperience.length > 0) {
+        errors.push(`Invalid experience levels: ${invalidExperience.join(', ')}. Valid levels: ${validExperience.join(', ')}`);
+      }
+    }
+
+    // Validate work modes
+    if (preferences.workMode && Array.isArray(preferences.workMode)) {
+      const validWorkModes = ["Remote", "Hybrid", "On-site"];
+      const invalidWorkModes = preferences.workMode.filter(mode => !validWorkModes.includes(mode));
+      
+      if (invalidWorkModes.length > 0) {
+        errors.push(`Invalid work modes: ${invalidWorkModes.join(', ')}. Valid modes: ${validWorkModes.join(', ')}`);
+      }
+    }
+
+    // Validate date posted
+    if (preferences.datePosted) {
+      const validDateOptions = ["Any time", "Past month", "Past week", "Past 24 hours", "Few Minutes Ago"];
+      if (!validDateOptions.includes(preferences.datePosted)) {
+        errors.push(`Invalid date posted option: ${preferences.datePosted}. Valid options: ${validDateOptions.join(', ')}`);
+      }
+    }
+
+    // Validate salary range
+    if (preferences.salary) {
+      if (!Array.isArray(preferences.salary) || preferences.salary.length !== 2) {
+        errors.push("Salary must be an array with exactly 2 values [min, max]");
+      } else {
+        const [min, max] = preferences.salary;
+        if (typeof min !== 'number' || typeof max !== 'number') {
+          errors.push("Salary values must be numbers");
+        } else if (min < 0 || max < 0) {
+          errors.push("Salary values must be positive");
+        } else if (min >= max) {
+          errors.push("Minimum salary must be less than maximum salary");
+        } else if (min > 500000 || max > 500000) {
+          warnings.push("Very high salary ranges may not return many results");
+        }
+      }
+    }
+
+    // Validate company rating
+    if (preferences.companyRating && preferences.companyRating !== "") {
+      const validRatings = ["3.0", "3.5", "4.0", "4.5"];
+      if (!validRatings.includes(preferences.companyRating)) {
+        warnings.push(`Company rating ${preferences.companyRating} may not be supported. Supported ratings: ${validRatings.join(', ')}`);
+      }
+    }
+
+    // Validate boolean fields
+    if (preferences.remoteOnly !== undefined && typeof preferences.remoteOnly !== 'boolean') {
+      errors.push("remoteOnly must be a boolean value");
+    }
+
+    if (preferences.useCustomResume !== undefined && typeof preferences.useCustomResume !== 'boolean') {
+      errors.push("useCustomResume must be a boolean value");
+    }
+
+    // Check for conflicting preferences
+    if (preferences.remoteOnly && preferences.workMode && !preferences.workMode.includes("Remote")) {
+      warnings.push("remoteOnly is true but Remote is not in workMode array");
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  }
+
+  // ===== USER AUTHORIZATION & SERVICES =====
   async checkUserAuthorization() {
     try {
       this.statusManager.show("Checking user authorization...", "info");
@@ -72,11 +185,22 @@ export default class LinkedInPlatform extends BasePlatform {
 
     this.hasStarted = true;
     this.isRunning = true;
-    this.log('🚀 Starting LinkedIn automation');
+    this.log('🚀 Starting LinkedIn automation with user preferences');
 
     try {
       // Merge config properly - params contains the full config from orchestrator
       this.config = { ...this.config, ...params };
+      
+      // Validate LinkedIn-specific preferences
+      const validation = this.validateLinkedInPreferences(this.config.preferences || {});
+      
+      if (!validation.isValid) {
+        throw new Error(`Invalid LinkedIn preferences: ${validation.errors.join(', ')}`);
+      }
+      
+      if (validation.warnings.length > 0) {
+        this.log('⚠️ LinkedIn preference warnings:', validation.warnings);
+      }
       
       // Update services with proper userId and config
       if (this.config.userId) {
@@ -90,7 +214,12 @@ export default class LinkedInPlatform extends BasePlatform {
         });
       }
       
-      this.log('📋 Configuration loaded', this.config);
+      this.log('📋 Configuration loaded with validated preferences:', {
+        jobsToApply: this.config.jobsToApply,
+        preferences: this.config.preferences,
+        userId: this.config.userId,
+        validation: validation
+      });
 
       if (!this.config.jobsToApply || this.config.jobsToApply <= 0) {
         throw new Error('Invalid jobsToApply configuration');
@@ -105,13 +234,15 @@ export default class LinkedInPlatform extends BasePlatform {
       await this.waitForPageLoad();
       this.log('📄 Basic page loaded, current URL:', window.location.href);
 
-      // Navigate to LinkedIn Jobs if needed
+      // Navigate to LinkedIn Jobs with user preferences
       const currentUrl = window.location.href.toLowerCase();
       if (!currentUrl.includes('linkedin.com/jobs')) {
-        this.log('📍 Navigating to LinkedIn Jobs');
+        this.log('📍 Navigating to LinkedIn Jobs with user preferences');
         await this.navigateToLinkedInJobs();
       } else {
         this.log('✅ Already on LinkedIn Jobs page');
+        // If already on jobs page, apply additional filters if needed
+        await this.applyAdditionalFilters();
       }
 
       // Wait for job search results to load
@@ -127,8 +258,288 @@ export default class LinkedInPlatform extends BasePlatform {
     }
   }
 
-  // ===== CORE LINKEDIN AUTOMATION METHODS =====
+  async navigateToLinkedInJobs() {
+    const searchUrl = await this.generateComprehensiveSearchUrl(this.config.preferences || {});
+    this.log(`🔗 Navigating to: ${searchUrl}`);
+    
+    window.location.href = searchUrl;
+    await this.delay(5000);
+    await this.waitForPageLoad();
+    this.log('✅ Navigation completed with user preferences applied');
+  }
 
+  async generateComprehensiveSearchUrl(preferences) {
+    const baseUrl = "https://www.linkedin.com/jobs/search/?";
+
+    const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
+
+    const params = new URLSearchParams();
+    params.append("f_AL", "true"); // Keep the Easy Apply filter
+
+    // Handle positions
+    if (preferences.positions?.length) {
+      params.append("keywords", joinWithOR(preferences.positions));
+    }
+
+    // Handle location with GeoId mapping
+    if (preferences.location?.length) {
+      const location = preferences.location[0]; // Take first location
+      
+      // GeoId mapping for countries
+      const geoIdMap = {
+        Nigeria: "105365761",
+        Netherlands: "102890719",
+        "United States": "103644278",
+        "United Kingdom": "101165590",
+        Canada: "101174742",
+        Australia: "101452733",
+        Germany: "101282230",
+        France: "105015875",
+        India: "102713980",
+        Singapore: "102454443",
+        "South Africa": "104035573",
+        Ireland: "104738515",
+        "New Zealand": "105490917",
+      };
+
+      if (location === "Remote" || preferences.remoteOnly) {
+        params.append("f_WT", "2");
+      } else if (geoIdMap[location]) {
+        params.append("geoId", geoIdMap[location]);
+      } else {
+        params.append("location", location);
+      }
+    }
+
+    // Handle work mode
+    const workModeMap = {
+      Remote: "2",
+      Hybrid: "3",
+      "On-site": "1",
+    };
+
+    if (preferences.workMode?.length) {
+      const workModeCodes = preferences.workMode
+        .map((mode) => workModeMap[mode])
+        .filter(Boolean);
+      if (workModeCodes.length) {
+        params.append("f_WT", workModeCodes.join(","));
+      }
+    } else if (preferences.remoteOnly) {
+      params.append("f_WT", "2"); // Remote only
+    }
+
+    // Handle date posted
+    const datePostedMap = {
+      "Any time": "",
+      "Past month": "r2592000",
+      "Past week": "r604800",
+      "Past 24 hours": "r86400",
+      "Few Minutes Ago": "r3600",
+    };
+
+    if (preferences.datePosted) {
+      const dateCode = datePostedMap[preferences.datePosted];
+      if (dateCode) {
+        params.append("f_TPR", dateCode);
+      }
+    }
+
+    // Handle experience level
+    const experienceLevelMap = {
+      Internship: "1",
+      "Entry level": "2",
+      Associate: "3",
+      "Mid-Senior level": "4",
+      Director: "5",
+      Executive: "6",
+    };
+
+    if (preferences.experience?.length) {
+      const experienceCodes = preferences.experience
+        .map((level) => experienceLevelMap[level])
+        .filter(Boolean);
+      if (experienceCodes.length) {
+        params.append("f_E", experienceCodes.join(","));
+      }
+    }
+
+    // Handle job type
+    const jobTypeMap = {
+      "Full-time": "F",
+      "Part-time": "P",
+      Contract: "C",
+      Temporary: "T",
+      Internship: "I",
+      Volunteer: "V",
+    };
+    
+    if (preferences.jobType?.length) {
+      const jobTypeCodes = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean);
+      if (jobTypeCodes.length) {
+        params.append("f_JT", jobTypeCodes.join(","));
+      }
+    }
+
+    // Handle salary range
+    if (preferences.salary?.length === 2) {
+      const [min] = preferences.salary;
+      const salaryBuckets = {
+        40000: "1",
+        60000: "2",
+        80000: "3",
+        100000: "4",
+        120000: "5",
+        140000: "6",
+        160000: "7",
+        180000: "8",
+        200000: "9",
+      };
+
+      const bucketValue = Object.entries(salaryBuckets)
+        .reverse()
+        .find(([threshold]) => min >= parseInt(threshold))?.[1];
+
+      if (bucketValue) {
+        params.append("f_SB", bucketValue);
+      }
+    }
+
+    // Sorting - use "R" for relevance or "DD" for date
+    params.append("sortBy", "R");
+
+    const finalUrl = baseUrl + params.toString();
+    this.log('🔍 Generated search URL with preferences:', {
+      url: finalUrl,
+      preferences: preferences
+    });
+
+    return finalUrl;
+  }
+
+  async applyAdditionalFilters() {
+    try {
+      const preferences = this.config.preferences || {};
+      
+      // Apply company rating filter if specified (requires UI interaction)
+      if (preferences.companyRating && preferences.companyRating !== "") {
+        await this.applyCompanyRatingFilter(preferences.companyRating);
+      }
+
+      this.log('✅ Additional filters applied successfully');
+    } catch (error) {
+      this.log('⚠️ Failed to apply some additional filters:', error.message);
+    }
+  }
+
+  async applyCompanyRatingFilter(minRating) {
+    try {
+      // This would require DOM manipulation to set company rating filter
+      // Implementation depends on LinkedIn's current UI structure
+      this.log(`🏢 Attempting to apply company rating filter: ${minRating}+`);
+      
+      // Company rating filter is typically in the "More" filters section
+      const moreFiltersButton = await this.waitForElement(
+        'button[aria-label*="Show more filters"], button[data-control-name="filter_show_more"]',
+        5000
+      );
+      
+      if (moreFiltersButton) {
+        moreFiltersButton.click();
+        await this.delay(1000);
+
+        // Look for company rating options
+        // This is a simplified implementation - actual selectors may vary
+        const ratingSelector = `button[aria-label*="${minRating}"], input[value="${minRating}"]`;
+        const ratingElement = await this.waitForElement(ratingSelector, 3000);
+        
+        if (ratingElement) {
+          ratingElement.click();
+          await this.delay(500);
+
+          // Apply the filter
+          const applyButton = await this.waitForElement(
+            'button[data-control-name="filter_show_results"]',
+            3000
+          );
+          
+          if (applyButton) {
+            applyButton.click();
+            await this.delay(2000);
+            this.log('✅ Company rating filter applied');
+          }
+        }
+      }
+    } catch (error) {
+      this.log('Failed to apply company rating filter:', error.message);
+    }
+  }
+
+  // Method to validate if a job matches user preferences (client-side filtering)
+  doesJobMatchPreferences(jobDetails) {
+    const preferences = this.config.preferences || {};
+    
+    // Check salary range if specified
+    if (preferences.salary?.length === 2) {
+      const [minSalary, maxSalary] = preferences.salary;
+      const jobSalary = this.extractSalaryFromJobDetails(jobDetails);
+      
+      if (jobSalary && (jobSalary < minSalary || jobSalary > maxSalary)) {
+        this.log(`❌ Job salary ${jobSalary} outside range ${minSalary}-${maxSalary}`);
+        return false;
+      }
+    }
+
+    // Check if positions match (basic keyword matching)
+    if (preferences.positions?.length) {
+      const jobTitle = jobDetails.title?.toLowerCase() || '';
+      const hasMatchingPosition = preferences.positions.some(position => 
+        jobTitle.includes(position.toLowerCase())
+      );
+      
+      if (!hasMatchingPosition) {
+        this.log(`❌ Job title "${jobDetails.title}" doesn't match required positions`);
+        return false;
+      }
+    }
+
+    // Check remote work preference
+    if (preferences.remoteOnly) {
+      const isRemote = this.isRemoteJob(jobDetails);
+      if (!isRemote) {
+        this.log(`❌ Job is not remote but remoteOnly is true`);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  extractSalaryFromJobDetails(jobDetails) {
+    // Extract salary information from job details
+    // This would need to parse salary from job description or salary field
+    const salaryText = jobDetails.salary || jobDetails.description || '';
+    const salaryMatch = salaryText.match(/\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
+    return salaryMatch ? parseInt(salaryMatch[1].replace(/,/g, '')) : null;
+  }
+
+  isRemoteJob(jobDetails) {
+    const workplace = jobDetails.workplace?.toLowerCase() || '';
+    const location = jobDetails.location?.toLowerCase() || '';
+    const description = jobDetails.description?.toLowerCase() || '';
+    
+    const remoteKeywords = ['remote', 'work from home', 'wfh', 'telecommute'];
+    
+    return remoteKeywords.some(keyword => 
+      workplace.includes(keyword) || 
+      location.includes(keyword) || 
+      description.includes(keyword)
+    );
+  }
+
+  // ===== CORE LINKEDIN AUTOMATION METHODS =====
   async processJobs({ jobsToApply }) {
     let processedCount = 0;
     let appliedCount = 0;
@@ -139,7 +550,8 @@ export default class LinkedInPlatform extends BasePlatform {
     const MAX_NO_NEW_JOBS = 3;
 
     try {
-      this.log(`Starting to process jobs. Target: ${jobsToApply} jobs`);
+      this.log(`Starting to process jobs with user preferences. Target: ${jobsToApply} jobs`);
+      this.log(`User preferences:`, this.config.preferences);
 
       // Initial scroll to trigger job loading
       await this.initialScroll();
@@ -150,13 +562,11 @@ export default class LinkedInPlatform extends BasePlatform {
 
         if (jobCards.length === 0) {
           console.log("No job cards found, trying to scroll first before pagination");
-          // Try scrolling to load more jobs on current page first
           if (await this.scrollAndWaitForNewJobs()) {
             console.log("Scrolling loaded new jobs, continuing on same page");
-            continue; // If scrolling loaded new jobs, continue on same page
+            continue;
           }
           
-          // Only if scrolling didn't help, then check pagination
           console.log("No new jobs after scrolling, checking pagination");
           const hasNextPage = await this.goToNextPage(currentPage);
           if (hasNextPage) {
@@ -202,6 +612,16 @@ export default class LinkedInPlatform extends BasePlatform {
             await this.clickJobCard(jobCard);
             await this.waitForJobDetailsLoad();
 
+            // Get job details for preference matching
+            const jobDetails = this.getJobProperties();
+            
+            // Check if job matches user preferences
+            if (!this.doesJobMatchPreferences(jobDetails)) {
+              this.log(`Skipping job "${jobDetails.title}" - doesn't match preferences`);
+              skippedCount++;
+              continue;
+            }
+
             // Find the Easy Apply button - if not found, this job is already applied
             const applyButton = await this.findEasyApplyButton();
             if (!applyButton) {
@@ -222,7 +642,6 @@ export default class LinkedInPlatform extends BasePlatform {
               continue;
             }
 
-            const jobDetails = this.getJobProperties();
             this.updateProgress({
               current: `Processing: ${jobDetails.title} (Page ${currentPage})`
             });
@@ -244,7 +663,8 @@ export default class LinkedInPlatform extends BasePlatform {
 
               this.reportApplicationSubmitted(jobDetails, { 
                 method: 'Easy Apply',
-                userId: this.config.userId || this.userId 
+                userId: this.config.userId || this.userId,
+                matchedPreferences: true
               });
             } else {
               this.progress.failed++;
@@ -259,18 +679,15 @@ export default class LinkedInPlatform extends BasePlatform {
           }
         }
 
-        // EXACT logic from working automation - handle pagination properly
-        // If we haven't found any new jobs that we can apply to
+        // Handle pagination logic
         if (!newApplicableJobsFound) {
-          // Try scrolling first to load more jobs on the SAME page
           this.log(`No new applicable jobs found on page ${currentPage}, trying to scroll for more jobs...`);
           if (await this.scrollAndWaitForNewJobs()) {
             noNewJobsCount = 0;
             this.log(`Scrolling loaded new jobs on page ${currentPage}, continuing processing...`);
-            continue; // Continue processing on same page
+            continue;
           }
 
-          // If scrolling doesn't help, THEN try next page
           this.log(`No more jobs loaded by scrolling on page ${currentPage}, moving to next page...`);
           const hasNextPage = await this.goToNextPage(currentPage);
           if (hasNextPage) {
@@ -286,7 +703,6 @@ export default class LinkedInPlatform extends BasePlatform {
             }
           }
         } else {
-          // Reset the counter if we found applicable jobs
           noNewJobsCount = 0;
           this.log(`Found and processed applicable jobs on page ${currentPage}, continuing...`);
         }
@@ -295,7 +711,7 @@ export default class LinkedInPlatform extends BasePlatform {
       const completionStatus = appliedCount >= jobsToApply ? "target_reached" : "no_more_jobs";
       const message = appliedCount >= jobsToApply
         ? `Successfully applied to target of ${appliedCount}/${jobsToApply} jobs (Processed ${processedCount} total across ${currentPage} pages)`
-        : `Applied to ${appliedCount}/${jobsToApply} jobs - no more jobs available (Skipped ${skippedCount} already applied jobs)`;
+        : `Applied to ${appliedCount}/${jobsToApply} jobs - no more jobs available (Skipped ${skippedCount} jobs that didn't match preferences)`;
 
       this.log(message);
       this.reportComplete();
@@ -307,6 +723,7 @@ export default class LinkedInPlatform extends BasePlatform {
         processedCount,
         skippedCount,
         totalPages: currentPage,
+        preferencesUsed: this.config.preferences
       };
     } catch (error) {
       console.error("Error in processJobs:", error);
@@ -350,7 +767,6 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   // ===== LINKEDIN-SPECIFIC FORM HANDLING =====
-
   async fillCurrentStep() {
     // Handle file upload containers using file handler service
     const fileUploadContainers = document.querySelectorAll(".js-jobs-document-upload__container");
@@ -637,17 +1053,6 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   // ===== LINKEDIN-SPECIFIC NAVIGATION =====
-
-  async navigateToLinkedInJobs() {
-    const jobsUrl = `${this.baseUrl}/jobs/search/?f_AL=true&keywords=software%20engineer&sortBy=DD`;
-    this.log(`🔗 Navigating to: ${jobsUrl}`);
-    
-    window.location.href = jobsUrl;
-    await this.delay(5000);
-    await this.waitForPageLoad();
-    this.log('✅ Navigation completed');
-  }
-
   async goToNextPage(currentPage) {
     try {
       console.log(`Attempting to go to next page after page ${currentPage}`);
@@ -708,7 +1113,7 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   async initialScroll() {
-    const jobsList = document.querySelector(".jobs-search-results-list");
+    const jobsList = document.querySelector(".job-card-list ");
     if (!jobsList) return;
 
     const totalHeight = jobsList.scrollHeight;
@@ -725,11 +1130,11 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   async scrollAndWaitForNewJobs() {
-    const jobsList = document.querySelector(".jobs-search-results-list");
+    const jobsList = document.querySelector(".job-card-list ");
     if (!jobsList) return false;
 
     const previousHeight = jobsList.scrollHeight;
-    const previousJobCount = document.querySelectorAll(".jobs-search-results-list [data-occludable-job-id]").length;
+    const previousJobCount = document.querySelectorAll(".job-card-list  [data-occludable-job-id]").length;
 
     // Scroll in smaller increments to trigger job loading
     const currentScroll = jobsList.scrollTop;
@@ -742,7 +1147,7 @@ export default class LinkedInPlatform extends BasePlatform {
 
     // Check for new content
     const newHeight = jobsList.scrollHeight;
-    const newJobCount = document.querySelectorAll(".jobs-search-results-list [data-occludable-job-id]").length;
+    const newJobCount = document.querySelectorAll(".job-card-list  [data-occludable-job-id]").length;
 
     console.log(`Scroll check - Previous jobs: ${previousJobCount}, New jobs: ${newJobCount}`);
 
@@ -750,11 +1155,10 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   // ===== LINKEDIN-SPECIFIC ELEMENT FINDERS =====
-
   async waitForPageLoad() {
     try {
       // Wait for job list to be present
-      await this.waitForElement(".jobs-search-results-list");
+      await this.waitForElement(".job-card-list ");
       await this.sleep(2000);
 
       // Wait for any loading spinners to disappear
@@ -778,7 +1182,7 @@ export default class LinkedInPlatform extends BasePlatform {
   async waitForSearchResultsLoad() {
     return new Promise((resolve) => {
       const checkSearchResults = () => {
-        if (document.querySelector(".jobs-search-results-list")) {
+        if (document.querySelector(".job-card-list ")) {
           console.log("Search results loaded");
           resolve();
         } else {
@@ -885,7 +1289,6 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   // ===== UTILITY METHODS =====
-
   async sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -954,7 +1357,6 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   // ===== APPLICATION CLEANUP METHODS =====
-
   async handlePostSubmissionModal() {
     try {
       await this.sleep(2000);
@@ -1072,7 +1474,6 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   // ===== NAVIGATION EVENT HANDLERS =====
-
   onDOMChange() {
     if (this.automationStarted && this.isRunning && !this.isPaused) {
       // Don't automatically reload, let the main loop handle it

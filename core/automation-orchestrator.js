@@ -23,7 +23,8 @@ export default class AutomationOrchestrator {
       dailyRemaining,
       resumeUrl,
       coverLetterTemplate,
-      preferences,
+      preferences = {},
+      apiHost,
     } = params;
 
     try {
@@ -31,24 +32,31 @@ export default class AutomationOrchestrator {
         sessionId,
         userId,
         jobsToApply,
+        preferences,
       });
 
-      // Create automation window
+      // Pass preferences as-is without modification
+      this.logger.info(`📋 Using user preferences:`, preferences);
+
+      // Create automation window with user preferences
       const automationWindow = await this.createAutomationWindow(
         platform,
         sessionId,
-        userId
+        userId,
+        preferences
       );
+
       if (!automationWindow) {
         throw new Error("Failed to create automation window");
       }
 
       const fullParams = {
         ...params,
-        apiHost: params.apiHost || this.config.apiHost,
+        preferences: preferences, // Pass through user preferences unchanged
+        apiHost: apiHost || "http://localhost:3000",
       };
 
-      // Create automation session (background tracking only)
+      // Create automation session
       const automationSession = new AutomationSession({
         sessionId,
         platform,
@@ -66,6 +74,7 @@ export default class AutomationOrchestrator {
         platform,
         windowId: automationWindow.id,
         userId,
+        preferences,
       });
 
       return {
@@ -88,10 +97,10 @@ export default class AutomationOrchestrator {
     }
   }
 
-  async createAutomationWindow(platform, sessionId, userId) {
+  async createAutomationWindow(platform, sessionId, userId, preferences) {
     try {
-      // Get platform-specific starting URL
-      const startUrl = this.getStartingUrl(platform);
+      // Get platform-specific starting URL with user preferences
+      const startUrl = this.buildStartingUrl(platform, preferences);
 
       const window = await chrome.windows.create({
         url: startUrl,
@@ -106,41 +115,48 @@ export default class AutomationOrchestrator {
         sessionId,
         platform,
         userId,
+        preferences,
         createdAt: Date.now(),
       });
 
-      // Inject automation context with all required data
+      // Inject automation context with preferences
       setTimeout(async () => {
         try {
           if (window.tabs && window.tabs[0]) {
             await chrome.scripting.executeScript({
               target: { tabId: window.tabs[0].id },
-              func: (sessionId, platform, userId) => {
+              func: (sessionId, platform, userId, preferences) => {
                 // Set window properties
                 window.automationSessionId = sessionId;
                 window.automationPlatform = platform;
                 window.automationUserId = userId;
+                window.automationPreferences = preferences;
                 window.isAutomationWindow = true;
 
                 // Set session storage
                 sessionStorage.setItem("automationSessionId", sessionId);
                 sessionStorage.setItem("automationPlatform", platform);
                 sessionStorage.setItem("automationUserId", userId);
+                sessionStorage.setItem(
+                  "automationPreferences",
+                  JSON.stringify(preferences)
+                );
                 sessionStorage.setItem("automationWindow", "true");
 
-                console.log("🚀 Automation context injected", {
+                console.log("🚀 Automation context injected with preferences", {
                   sessionId,
                   platform,
                   userId,
+                  preferences,
                 });
               },
-              args: [sessionId, platform, userId],
+              args: [sessionId, platform, userId, preferences],
             });
           }
         } catch (error) {
           console.error("Error injecting automation context:", error);
         }
-      }, 500); // Shorter delay
+      }, 500);
 
       return window;
     } catch (error) {
@@ -148,22 +164,311 @@ export default class AutomationOrchestrator {
     }
   }
 
-  getStartingUrl(platform) {
-    const urls = {
-      linkedin:
-        "https://www.linkedin.com/jobs/search/?f_AL=true&keywords=software%20engineer&sortBy=DD",
-      indeed: "https://www.indeed.com/jobs?q=software+engineer&sort=date",
-      recruitee:
-        "https://www.google.com/search?q=site:recruitee.com+software+engineer+jobs",
-      glassdoor:
-        "https://www.glassdoor.com/Job/jobs.htm?suggestCount=0&suggestChosen=false&clickSource=searchBtn&typedKeyword=software+engineer&sc.keyword=software+engineer&locT=&locId=&jobType=",
-      workday:
-        "https://www.google.com/search?q=site:myworkdayjobs.com+software+engineer",
+  buildStartingUrl(platform, preferences) {
+    switch (platform) {
+      case "linkedin":
+        return this.buildLinkedInUrl(preferences);
+      case "indeed":
+        return this.buildIndeedUrl(preferences);
+      case "glassdoor":
+        return this.buildGlassdoorUrl(preferences);
+      case "workday":
+        return this.buildWorkdayUrl(preferences);
+      case "recruitee":
+        return this.buildRecruiteeUrl(preferences);
+      default:
+        return this.buildGenericSearchUrl(preferences);
+    }
+  }
+
+  buildLinkedInUrl(preferences) {
+    const baseUrl = "https://www.linkedin.com/jobs/search/?";
+    const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
+    const params = new URLSearchParams();
+
+    params.append("f_AL", "true"); // Easy Apply filter
+
+    // Handle positions
+    if (preferences.positions?.length) {
+      params.append("keywords", joinWithOR(preferences.positions));
+    }
+
+    // Handle location with GeoId mapping
+    if (preferences.location?.length) {
+      const location = preferences.location[0]; // Take first location
+
+      const geoIdMap = {
+        Nigeria: "105365761",
+        Netherlands: "102890719",
+        "United States": "103644278",
+        "United Kingdom": "101165590",
+        Canada: "101174742",
+        Australia: "101452733",
+        Germany: "101282230",
+        France: "105015875",
+        India: "102713980",
+        Singapore: "102454443",
+        "South Africa": "104035573",
+        Ireland: "104738515",
+        "New Zealand": "105490917",
+      };
+
+      if (location === "Remote" || preferences.remoteOnly) {
+        params.append("f_WT", "2");
+      } else if (geoIdMap[location]) {
+        params.append("geoId", geoIdMap[location]);
+      } else {
+        params.append("location", location);
+      }
+    }
+
+    // Handle work mode
+    const workModeMap = {
+      Remote: "2",
+      Hybrid: "3",
+      "On-site": "1",
     };
 
-    return (
-      urls[platform] || "https://www.google.com/search?q=software+engineer+jobs"
-    );
+    if (preferences.workMode?.length) {
+      const workModeCodes = preferences.workMode
+        .map((mode) => workModeMap[mode])
+        .filter(Boolean);
+      if (workModeCodes.length) {
+        params.append("f_WT", workModeCodes.join(","));
+      }
+    } else if (preferences.remoteOnly) {
+      params.append("f_WT", "2");
+    }
+
+    // Handle date posted
+    const datePostedMap = {
+      "Any time": "",
+      "Past month": "r2592000",
+      "Past week": "r604800",
+      "Past 24 hours": "r86400",
+      "Few Minutes Ago": "r3600",
+    };
+
+    if (preferences.datePosted) {
+      const dateCode = datePostedMap[preferences.datePosted];
+      if (dateCode) {
+        params.append("f_TPR", dateCode);
+      }
+    }
+
+    // Handle experience level
+    const experienceLevelMap = {
+      Internship: "1",
+      "Entry level": "2",
+      Associate: "3",
+      "Mid-Senior level": "4",
+      Director: "5",
+      Executive: "6",
+    };
+
+    if (preferences.experience?.length) {
+      const experienceCodes = preferences.experience
+        .map((level) => experienceLevelMap[level])
+        .filter(Boolean);
+      if (experienceCodes.length) {
+        params.append("f_E", experienceCodes.join(","));
+      }
+    }
+
+    // Handle job type
+    const jobTypeMap = {
+      "Full-time": "F",
+      "Part-time": "P",
+      Contract: "C",
+      Temporary: "T",
+      Internship: "I",
+      Volunteer: "V",
+    };
+
+    if (preferences.jobType?.length) {
+      const jobTypeCodes = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean);
+      if (jobTypeCodes.length) {
+        params.append("f_JT", jobTypeCodes.join(","));
+      }
+    }
+
+    // Handle salary range
+    if (preferences.salary?.length === 2) {
+      const [min] = preferences.salary;
+      const salaryBuckets = {
+        40000: "1",
+        60000: "2",
+        80000: "3",
+        100000: "4",
+        120000: "5",
+        140000: "6",
+        160000: "7",
+        180000: "8",
+        200000: "9",
+      };
+
+      const bucketValue = Object.entries(salaryBuckets)
+        .reverse()
+        .find(([threshold]) => min >= parseInt(threshold))?.[1];
+
+      if (bucketValue) {
+        params.append("f_SB", bucketValue);
+      }
+    }
+
+    // Sorting
+    params.append("sortBy", "R");
+
+    return baseUrl + params.toString();
+  }
+
+  buildIndeedUrl(preferences) {
+    const params = new URLSearchParams();
+
+    // Keywords from positions
+    if (preferences.positions?.length) {
+      params.set("q", preferences.positions.join(" OR "));
+    }
+
+    // Location
+    if (preferences.location?.length && !preferences.remoteOnly) {
+      params.set("l", preferences.location[0]);
+    }
+
+    // Remote work
+    if (preferences.remoteOnly || preferences.workMode?.includes("Remote")) {
+      params.set("remotejob", "1");
+    }
+
+    // Date posted
+    const datePostedMap = {
+      "Any time": "",
+      "Past month": "14",
+      "Past week": "7",
+      "Past 24 hours": "1",
+      "Few Minutes Ago": "1",
+    };
+
+    if (preferences.datePosted && datePostedMap[preferences.datePosted]) {
+      params.set("fromage", datePostedMap[preferences.datePosted]);
+    }
+
+    // Job type
+    const jobTypeMap = {
+      "Full-time": "fulltime",
+      "Part-time": "parttime",
+      Contract: "contract",
+      Temporary: "temporary",
+      Internship: "internship",
+    };
+
+    if (preferences.jobType?.length) {
+      const indeedJobType = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean)[0]; // Indeed typically takes one job type
+
+      if (indeedJobType) {
+        params.set("jt", indeedJobType);
+      }
+    }
+
+    // Salary
+    if (preferences.salary?.length === 2) {
+      const [minSalary] = preferences.salary;
+      if (minSalary > 0) {
+        params.set("salary", minSalary.toString());
+      }
+    }
+
+    params.set("sort", "date");
+
+    return `https://www.indeed.com/jobs?${params.toString()}`;
+  }
+
+  buildGlassdoorUrl(preferences) {
+    const params = new URLSearchParams();
+
+    // Keywords
+    if (preferences.positions?.length) {
+      const keywords = preferences.positions.join(" ");
+      params.set("sc.keyword", keywords);
+      params.set("typedKeyword", keywords);
+    }
+
+    // Location
+    if (preferences.location?.length && !preferences.remoteOnly) {
+      params.set("locT", "C");
+      params.set("locId", preferences.location[0]);
+    }
+
+    // Job type
+    const jobTypeMap = {
+      "Full-time": "full-time",
+      "Part-time": "part-time",
+      Contract: "contract",
+      Internship: "internship",
+    };
+
+    if (preferences.jobType?.length) {
+      const glassdoorJobType = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean)[0];
+
+      if (glassdoorJobType) {
+        params.set("jobType", glassdoorJobType);
+      }
+    }
+
+    // Default params
+    params.set("suggestCount", "0");
+    params.set("suggestChosen", "false");
+    params.set("clickSource", "searchBtn");
+
+    return `https://www.glassdoor.com/Job/jobs.htm?${params.toString()}`;
+  }
+
+  buildWorkdayUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ")
+      : "software engineer";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` "${preferences.location[0]}"`
+        : "";
+
+    return `https://www.google.com/search?q=site:myworkdayjobs.com+"${encodeURIComponent(
+      keywords
+    )}"${location}`;
+  }
+
+  buildRecruiteeUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ")
+      : "software engineer";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` "${preferences.location[0]}"`
+        : "";
+
+    return `https://www.google.com/search?q=site:recruitee.com+"${encodeURIComponent(
+      keywords
+    )}"${location}`;
+  }
+
+  buildGenericSearchUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ") + " jobs"
+      : "software engineer jobs";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` ${preferences.location[0]}`
+        : "";
+
+    return `https://www.google.com/search?q=${encodeURIComponent(
+      keywords + location
+    )}`;
   }
 
   async stopAutomation(sessionId) {
@@ -172,7 +477,6 @@ export default class AutomationOrchestrator {
       await automation.stop();
       this.activeAutomations.delete(sessionId);
 
-      // Close the window
       try {
         await chrome.windows.remove(automation.windowId);
       } catch (error) {
@@ -210,7 +514,6 @@ export default class AutomationOrchestrator {
     return automation ? automation.getStatus() : null;
   }
 
-  // Clean up automation when window is closed
   async handleWindowClosed(windowId) {
     for (const [sessionId, automation] of this.activeAutomations.entries()) {
       if (automation.windowId === windowId) {
@@ -230,7 +533,7 @@ class AutomationSession {
   constructor({ sessionId, platform, userId, windowId, params, orchestrator }) {
     this.sessionId = sessionId;
     this.platform = platform;
-    this.userId = userId; // Store userId
+    this.userId = userId;
     this.windowId = windowId;
     this.params = params;
     this.orchestrator = orchestrator;
@@ -253,7 +556,7 @@ class AutomationSession {
     return {
       sessionId: this.sessionId,
       platform: this.platform,
-      userId: this.userId, // Include userId in config
+      userId: this.userId,
       jobsToApply: this.params.jobsToApply,
       submittedLinks: this.params.submittedLinks || [],
       preferences: this.params.preferences || {},
@@ -269,7 +572,6 @@ class AutomationSession {
   }
 
   getApiHost() {
-    // Check multiple sources for API host
     return (
       this.params.apiHost ||
       this.orchestrator.config?.apiHost ||
@@ -277,34 +579,23 @@ class AutomationSession {
       "http://localhost:3000"
     );
   }
+
   async pause() {
     this.isPaused = true;
     this.status = "paused";
-
-    // Send pause message to content script
-    await this.sendMessageToContentScript({
-      action: "pauseAutomation",
-    });
+    await this.sendMessageToContentScript({ action: "pauseAutomation" });
   }
 
   async resume() {
     this.isPaused = false;
     this.status = "running";
-
-    // Send resume message to content script
-    await this.sendMessageToContentScript({
-      action: "resumeAutomation",
-    });
+    await this.sendMessageToContentScript({ action: "resumeAutomation" });
   }
 
   async stop() {
     this.status = "stopped";
     this.endTime = Date.now();
-
-    // Send stop message to content script
-    await this.sendMessageToContentScript({
-      action: "stopAutomation",
-    });
+    await this.sendMessageToContentScript({ action: "stopAutomation" });
   }
 
   async sendMessageToContentScript(message) {
@@ -317,7 +608,7 @@ class AutomationSession {
         await chrome.tabs.sendMessage(tabs[0].id, {
           ...message,
           sessionId: this.sessionId,
-          userId: this.userId, // Include userId in messages
+          userId: this.userId,
         });
       }
     } catch (error) {
@@ -344,7 +635,8 @@ class AutomationSession {
       isPaused: this.isPaused,
       duration: this.startTime ? Date.now() - this.startTime : 0,
       errors: this.errors,
-      userId: this.userId, // Include userId in progress
+      userId: this.userId,
+      preferences: this.params.preferences,
     };
   }
 
@@ -352,7 +644,7 @@ class AutomationSession {
     return {
       sessionId: this.sessionId,
       platform: this.platform,
-      userId: this.userId, // Include userId in status
+      userId: this.userId,
       status: this.status,
       progress: this.progress,
       startTime: this.startTime,
@@ -363,6 +655,7 @@ class AutomationSession {
       errors: this.errors,
       isPaused: this.isPaused,
       windowId: this.windowId,
+      preferences: this.params.preferences,
     };
   }
 }

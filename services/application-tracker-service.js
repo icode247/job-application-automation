@@ -1,8 +1,10 @@
 // services/application-tracker-service.js
+import { API_HOST_URL } from "./constants.js";
+
 export default class ApplicationTrackerService {
   constructor(config) {
-    this.apiHost = config.apiHost || "http://localhost:3000";
-    this.userId = config.userId || "adDnGPfd4fCzQ9xb8Ymm";
+    this.apiHost = API_HOST_URL;
+    this.userId = config.userId
   }
 
   async checkIfAlreadyApplied(jobId) {

@@ -1,19 +1,19 @@
 // services/user-service.js
-import { PLAN_LIMITS } from './constants.js';
+
+import { PLAN_LIMITS, API_HOST_URL } from "./constants.js";
 
 export default class UserService {
   constructor(config) {
-    this.apiHost = config.apiHost 
-    this.userId = config.userId
+    this.apiHost = API_HOST_URL;
+    this.userId = config.userId;
     this.userDetailsCache = null;
     this.PLAN_LIMITS = PLAN_LIMITS;
   }
 
   async fetchUserDetails() {
     try {
-      console.log(`${this.apiHost}/api/user/${this.userId}`);
       const response = await fetch(`${this.apiHost}/api/user/${this.userId}`);
-      
+
       if (!response.ok) throw new Error("Failed to fetch user details");
 
       const data = await response.json();
@@ -80,11 +80,13 @@ export default class UserService {
 
   async checkUserRole() {
     try {
-      const response = await fetch(`${this.apiHost}/api/user/${this.userId}/role`);
+      const response = await fetch(
+        `${this.apiHost}/api/user/${this.userId}/role`
+      );
       if (!response.ok) throw new Error("Failed to fetch user role");
 
       const data = await response.json();
-      
+
       // Calculate application limit based on plan (matching your logic)
       let applicationLimit;
       switch (data.userRole) {
@@ -148,7 +150,7 @@ export default class UserService {
 
         case "credit":
           return state.credits >= 1;
-          
+
         case "free":
           return state.applicationsUsed < this.PLAN_LIMITS.FREE;
 
@@ -196,12 +198,12 @@ export default class UserService {
   async getUserState() {
     try {
       // Try to get cached state first
-      const result = await chrome.storage.local.get(['userState']);
-      
+      const result = await chrome.storage.local.get(["userState"]);
+
       if (result.userState) {
         return result.userState;
       }
-      
+
       // If no cached state, fetch fresh from API
       return await this.checkUserRole();
     } catch (error) {
@@ -224,19 +226,21 @@ export default class UserService {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to update application count: ${response.statusText}`);
+        throw new Error(
+          `Failed to update application count: ${response.statusText}`
+        );
       }
 
       // Update local state
       const state = await this.getUserState();
       if (state) {
         state.applicationsUsed = (state.applicationsUsed || 0) + 1;
-        
+
         // Decrease credits for credit-based users
         if (state.userRole === "credit") {
           state.credits = Math.max(0, (state.credits || 0) - 1);
         }
-        
+
         await chrome.storage.local.set({ userState: state });
       }
 

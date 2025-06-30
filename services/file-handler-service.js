@@ -1,5 +1,6 @@
 // services/file-handler-service.js
-import { AI_BASE_URL, API_HOST_URL } from "./constants";
+import { AI_BASE_URL, API_HOST_URL } from "./constants.js";
+
 export default class FileHandlerService {
   constructor(config) {
     this.AI_BASE_URL = AI_BASE_URL;
@@ -16,7 +17,11 @@ export default class FileHandlerService {
 
       // Determine file type needed
       const fileType = this.determineFileType(container);
-      const fileUrls = this.getFileUrls(userDetails, fileType);
+      let fileUrls = this.getFileUrls(userDetails, fileType);
+
+      if (Array.isArray(fileUrls) && Array.isArray(fileUrls[0])) {
+        fileUrls = fileUrls[0]; 
+      }
 
       if (!fileUrls || fileUrls.length === 0) {
         console.log(`No ${fileType} file available for user`);
@@ -77,13 +82,14 @@ export default class FileHandlerService {
         const parseResponse = await fetch(parseURL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file_url: fileUrls[0] }),
+          body: JSON.stringify({ file_url: fileUrls[fileUrls.length - 1] }),
         });
 
         if (!parseResponse.ok) {
           throw new Error(`Parse Resume Failed: ${parseResponse.status}`);
         }
 
+      
         const { text: parsedResumeText } = await parseResponse.json();
 
         // Step 2: Optimize Resume
@@ -169,7 +175,7 @@ export default class FileHandlerService {
           );
         }
 
-        const matchedUrl = `${AI_BASE_URL}/match`;
+        const matchedUrl = `${this.AI_BASE_URL}/match`;
         const res = await fetch(matchedUrl, {
           method: "POST",
           headers: {
@@ -193,7 +199,9 @@ export default class FileHandlerService {
         }
 
         const data = await res.json();
-        const proxyURL = `${this.API_HOST_URL}/api/proxy-file?url=${encodeURIComponent(
+        const proxyURL = `${
+          this.API_HOST_URL
+        }/api/proxy-file?url=${encodeURIComponent(
           data.highest_ranking_resume
         )}`;
 
