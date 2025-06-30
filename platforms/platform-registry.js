@@ -4,7 +4,8 @@ import IndeedPlatform from "./indeed/indeed.js";
 import RecruiteePlatform from "./recruitee/recruitee.js";
 import GlassdoorPlatform from "./glassdoor/glassdoor.js";
 import WorkdayPlatform from "./workday/workday.js";
-
+import LeverPlatform from "./lever/lever.js";
+supportedPlatforms
 export default class PlatformRegistry {
   constructor() {
     this.platforms = new Map();
@@ -32,6 +33,7 @@ export default class PlatformRegistry {
       recruitee: RecruiteePlatform,
       glassdoor: GlassdoorPlatform,
       workday: WorkdayPlatform,
+      lever: LeverPlatform,
     };
 
     for (const [name, PlatformClass] of Object.entries(platformModules)) {

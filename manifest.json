@@ -32,15 +32,32 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.linkedin.com/*",
-        "https://*.indeed.com/*",
-        "https://*.glassdoor.com/*",
-        "https://*.recruitee.com/*",
-        "https://*.myworkdayjobs.com/*",
         "https://*.lever.co/*",
-        "https://*.greenhouse.io/*",
-        "https://www.google.com/*",
-        "https://google.com/*"
+        "*://www.google.com/search?*lever*",
+        "https://*.indeed.com/*",
+        "https://smartapply.indeed.com/*",
+        "https://*.glassdoor.com/*",
+        "https://*.glassdoor.fr/*",
+        "https://*.glassdoor.co.uk/*",
+        "https://*.glassdoor.de/*",
+        "https://*.glassdoor.ca/*",
+        "https://*.glassdoor.in/*",
+        "https://*.linkedin.com/*",
+        "https://*.lever.co/*",
+        "*://www.google.com/search?*lever*",
+        "*://www.google.com/search?*workable*",
+        "*://*.workable.com/*",
+        "*://www.google.com/search?*breezy*",
+        "*://*.breezy.hr/*",
+        "*://app.breezy.hr/*",
+        "*://www.google.com/search?*recruitee*",
+        "https://*.recruitee.com/*",
+        "*://*.recruitee.hr/*",
+        "https://*.ziprecruiter.com/jobs-search*",
+        "https://*.ziprecruiter.com/jobs/*",
+        "https://*.ziprecruiter.com/job/*",
+        "https://*.ziprecruiter.com/apply/*",
+        "https://*.ziprecruiter.com/jz/*"
       ],
       "js": [
         "content/content-main.js"
@@ -57,6 +74,9 @@
         "platforms/recruitee/recruitee.js",
         "platforms/glassdoor/glassdoor.js",
         "platforms/workday/workday.js",
+        "platforms/lever/lever.js",
+        "platforms/lever/lever-form-handler.js",
+        "platforms/lever/lever-file-handler.js",
         "platforms/base-platform.js",
         "platforms/platform-registry.js",
         "services/ai-service.js",
@@ -79,6 +99,8 @@
         "https://*.recruitee.com/*",
         "https://*.workday.com/*",
         "https://*.myworkdayjobs.com/*",
+        "https://*.lever.co/*",
+        "https://jobs.lever.co/*",
         "https://www.google.com/*",
         "https://google.com/*"
       ]

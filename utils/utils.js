@@ -285,17 +285,29 @@ export default class Utils {
   }
 
   // Platform detection utilities
-  static detectPlatformFromUrl(url) {
-    const hostname = this.extractDomainFromUrl(url)?.toLowerCase();
-    if (!hostname) return "unknown";
+  detectPlatformFromUrl() {
+    const url = window.location.href.toLowerCase();
 
-    if (hostname.includes("linkedin.com")) return "linkedin";
-    if (hostname.includes("indeed.com")) return "indeed";
-    if (hostname.includes("recruitee.com")) return "recruitee";
-    if (hostname.includes("glassdoor.com")) return "glassdoor";
-    if (hostname.includes("myworkdayjobs.com")) return "workday";
-    if (hostname.includes("lever.co")) return "lever";
-    if (hostname.includes("greenhouse.io")) return "greenhouse";
+    if (url.includes("linkedin.com")) return "linkedin";
+    if (url.includes("indeed.com")) return "indeed";
+    if (url.includes("recruitee.com")) return "recruitee";
+    if (url.includes("glassdoor.com")) return "glassdoor";
+    if (url.includes("myworkdayjobs.com")) return "workday";
+    if (url.includes("lever.co")) return "lever";
+    if (url.includes("greenhouse.io")) return "greenhouse";
+
+    // Handle Google search for specific platforms
+    if (url.includes("google.com/search")) {
+      if (url.includes("site:recruitee.com") || url.includes("recruitee.com"))
+        return "recruitee";
+      if (
+        url.includes("site:myworkdayjobs.com") ||
+        url.includes("myworkdayjobs.com")
+      )
+        return "workday";
+      if (url.includes("site:lever.co") || url.includes("lever.co"))
+        return "lever";
+    }
 
     return "unknown";
   }

@@ -5,6 +5,7 @@ export const PLATFORMS = {
   RECRUITEE: "recruitee",
   GLASSDOOR: "glassdoor",
   WORKDAY: "workday",
+  LEVER: "lever",
 };
 
 export const AUTOMATION_STATUS = {

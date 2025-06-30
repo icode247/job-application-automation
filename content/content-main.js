@@ -58,7 +58,7 @@ class ContentScriptManager {
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
-    
+
     if (sessionId && platform) {
       window.automationSessionId = sessionId;
       window.automationPlatform = platform;
@@ -204,6 +204,12 @@ class ContentScriptManager {
           );
           return WorkdayPlatform;
 
+        case "lever":
+          const { default: LeverPlatform } = await import(
+            "../platforms/lever/lever.js"
+          );
+          return LeverPlatform;
+
         default:
           console.warn(`Platform ${platform} not supported`);
           return null;
@@ -273,7 +279,10 @@ class ContentScriptManager {
 
         // Update config and start automation
         this.config = { ...this.config, ...request.config };
-        this.log(`🤖 Starting automation for ${this.platform} with config:`, this.config);
+        this.log(
+          `🤖 Starting automation for ${this.platform} with config:`,
+          this.config
+        );
         this.log("🚀 Starting platform automation in content script");
         await this.platformAutomation.start(this.config);
 

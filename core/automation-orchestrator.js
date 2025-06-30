@@ -176,6 +176,8 @@ export default class AutomationOrchestrator {
         return this.buildWorkdayUrl(preferences);
       case "recruitee":
         return this.buildRecruiteeUrl(preferences);
+      case "lever":
+        return this.buildLeverUrl(preferences);
       default:
         return this.buildGenericSearchUrl(preferences);
     }
@@ -453,6 +455,21 @@ export default class AutomationOrchestrator {
         : "";
 
     return `https://www.google.com/search?q=site:recruitee.com+"${encodeURIComponent(
+      keywords
+    )}"${location}`;
+  }
+
+
+  buildLeverUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ")
+      : "software engineer";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` "${preferences.location[0]}"`
+        : "";
+
+    return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(
       keywords
     )}"${location}`;
   }
