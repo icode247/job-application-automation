@@ -1,4 +1,5 @@
-// background/message-handler.js - COMPLETE FILE WITH ALL LEVER UPDATES
+
+// background/message-handler.js - UPDATED WITH LEVER AUTOMATION FLOW
 import AutomationOrchestrator from "../core/automation-orchestrator.js";
 import SessionManager from "./session-manager.js";
 import WindowManager from "./window-manager.js";
@@ -9,7 +10,611 @@ export default class MessageHandler {
     this.sessionManager = new SessionManager();
     this.windowManager = new WindowManager();
     this.activeAutomations = new Map();
-    this.pendingRequests = new Set(); // Track pending requests to prevent duplicates
+    this.pendingRequests = new Set();
+    
+    // NEW: Lever-specific state management
+    this.leverAutomations = new Map(); // sessionId -> automation state
+    this.portConnections = new Map(); // tabId -> port
+    
+    // Set up port-based communication for Lever
+    this.setupPortHandlers();
+  }
+
+  // NEW: Set up long-lived port connections for Lever automation
+  setupPortHandlers() {
+    chrome.runtime.onConnect.addListener((port) => {
+      console.log("📨 New port connection established:", port.name);
+      
+      // Check if this is a Lever automation port
+      if (port.name.startsWith('lever-')) {
+        this.handleLeverPortConnection(port);
+      }
+    });
+  }
+
+  // NEW: Handle Lever-specific port connections
+  handleLeverPortConnection(port) {
+    const portNameParts = port.name.split('-');
+    const portType = portNameParts[1]; // 'search' or 'apply'
+    const tabId = parseInt(portNameParts[2]) || port.sender?.tab?.id;
+    
+    if (tabId) {
+      this.portConnections.set(tabId, port);
+      console.log(`📝 Registered ${portType} port for tab ${tabId}`);
+    }
+    
+    // Set up message handler for this port
+    port.onMessage.addListener((message) => {
+      this.handleLeverPortMessage(message, port);
+    });
+    
+    // Handle port disconnection
+    port.onDisconnect.addListener(() => {
+      console.log("📪 Port disconnected:", port.name);
+      if (tabId) {
+        this.portConnections.delete(tabId);
+      }
+    });
+  }
+
+  // NEW: Handle messages from Lever content scripts via ports
+  async handleLeverPortMessage(message, port) {
+    try {
+      console.log("📨 Lever port message received:", message);
+      
+      const { type, data } = message;
+      const tabId = port.sender?.tab?.id;
+      
+      switch (type) {
+        case 'GET_SEARCH_TASK':
+          await this.handleGetSearchTask(port, data);
+          break;
+          
+        case 'GET_SEND_CV_TASK':
+          await this.handleGetSendCvTask(port, data);
+          break;
+          
+        case 'SEND_CV_TASK':
+          await this.handleSendCvTask(port, data);
+          break;
+          
+        case 'SEND_CV_TASK_DONE':
+          await this.handleSendCvTaskDone(port, data);
+          break;
+          
+        case 'SEND_CV_TASK_ERROR':
+          await this.handleSendCvTaskError(port, data);
+          break;
+          
+        case 'SEND_CV_TASK_SKIP':
+          await this.handleSendCvTaskSkip(port, data);
+          break;
+          
+        case 'SEARCH_TASK_DONE':
+          await this.handleSearchTaskDone(port, data);
+          break;
+          
+        case 'VERIFY_APPLICATION_STATUS':
+          await this.handleVerifyApplicationStatus(port, data);
+          break;
+          
+        case 'CHECK_JOB_TAB_STATUS':
+          await this.handleCheckJobTabStatus(port, data);
+          break;
+          
+        case 'SEARCH_NEXT_READY':
+          await this.handleSearchNextReady(port, data);
+          break;
+          
+        default:
+          console.log(`❓ Unhandled Lever port message type: ${type}`);
+          this.sendPortResponse(port, {
+            type: 'ERROR',
+            message: `Unknown message type: ${type}`
+          });
+      }
+    } catch (error) {
+      console.error("❌ Error handling Lever port message:", error);
+      this.sendPortResponse(port, {
+        type: 'ERROR',
+        message: error.message
+      });
+    }
+  }
+
+  // NEW: Handle GET_SEARCH_TASK for Lever
+  async handleGetSearchTask(port, data) {
+    const tabId = port.sender?.tab?.id;
+    const windowId = port.sender?.tab?.windowId;
+    
+    // Find the automation session for this window
+    let sessionData = null;
+    for (const [sessionId, automation] of this.activeAutomations.entries()) {
+      if (automation.windowId === windowId) {
+        sessionData = {
+          tabId: tabId,
+          limit: automation.params?.jobsToApply || 10,
+          current: 0,
+          domain: ['https://jobs.lever.co'],
+          submittedLinks: automation.submittedLinks || [],
+          searchLinkPattern: /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/.toString()
+        };
+        break;
+      }
+    }
+    
+    this.sendPortResponse(port, {
+      type: 'SUCCESS',
+      data: sessionData || {}
+    });
+  }
+
+  // NEW: Handle GET_SEND_CV_TASK for Lever
+  async handleGetSendCvTask(port, data) {
+    const tabId = port.sender?.tab?.id;
+    const windowId = port.sender?.tab?.windowId;
+    
+    // Find the automation session for this window
+    let sessionData = null;
+    for (const [sessionId, automation] of this.activeAutomations.entries()) {
+      if (automation.windowId === windowId) {
+        sessionData = {
+          devMode: automation.params?.devMode || false,
+          profile: automation.userProfile,
+          session: automation.sessionConfig,
+          avatarUrl: automation.userProfile?.avatarUrl
+        };
+        break;
+      }
+    }
+    
+    this.sendPortResponse(port, {
+      type: 'SUCCESS',
+      data: sessionData || {}
+    });
+  }
+
+  // NEW: Handle SEND_CV_TASK - open job in new tab
+  async handleSendCvTask(port, data) {
+    try {
+      const { url, title } = data;
+      const windowId = port.sender?.tab?.windowId;
+      
+      console.log(`🎯 Opening job in new tab: ${url}`);
+      
+      // Find the automation session
+      let automation = null;
+      for (const [sessionId, auto] of this.activeAutomations.entries()) {
+        if (auto.windowId === windowId) {
+          automation = auto;
+          break;
+        }
+      }
+      
+      if (!automation) {
+        throw new Error('No automation session found');
+      }
+      
+      // Check if already processing a job
+      if (automation.isProcessingJob) {
+        this.sendPortResponse(port, {
+          type: 'ERROR',
+          message: 'Already processing another job'
+        });
+        return;
+      }
+      
+      // Check for duplicates
+      const normalizedUrl = this.normalizeUrl(url);
+      if (automation.submittedLinks?.some(link => 
+        this.normalizeUrl(link.url) === normalizedUrl)) {
+        this.sendPortResponse(port, {
+          type: 'DUPLICATE',
+          message: 'This job has already been processed',
+          data: { url }
+        });
+        return;
+      }
+      
+      // Create new tab for job application
+      const tab = await chrome.tabs.create({
+        url: url.endsWith('/apply') ? url : url + '/apply',
+        windowId: windowId,
+        active: true
+      });
+      
+      // Update automation state
+      automation.isProcessingJob = true;
+      automation.currentJobUrl = url;
+      automation.currentJobTabId = tab.id;
+      automation.applicationStartTime = Date.now();
+      
+      // Add to submitted links as processing
+      if (!automation.submittedLinks) {
+        automation.submittedLinks = [];
+      }
+      automation.submittedLinks.push({
+        url: url,
+        status: 'PROCESSING',
+        timestamp: Date.now()
+      });
+      
+      this.sendPortResponse(port, {
+        type: 'SUCCESS',
+        message: 'Apply tab will be created'
+      });
+      
+      console.log(`✅ Job tab created: ${tab.id} for URL: ${url}`);
+      
+    } catch (error) {
+      console.error("❌ Error handling SEND_CV_TASK:", error);
+      this.sendPortResponse(port, {
+        type: 'ERROR',
+        message: error.message
+      });
+    }
+  }
+
+  // NEW: Handle SEND_CV_TASK_DONE - job application completed successfully
+  async handleSendCvTaskDone(port, data) {
+    try {
+      const windowId = port.sender?.tab?.windowId;
+      const tabId = port.sender?.tab?.id;
+      
+      console.log(`✅ Job application completed successfully in tab ${tabId}`);
+      
+      // Find automation session
+      let automation = null;
+      for (const [sessionId, auto] of this.activeAutomations.entries()) {
+        if (auto.windowId === windowId) {
+          automation = auto;
+          break;
+        }
+      }
+      
+      if (automation) {
+        // Update submitted links
+        const url = automation.currentJobUrl;
+        if (url && automation.submittedLinks) {
+          const linkIndex = automation.submittedLinks.findIndex(link => 
+            this.normalizeUrl(link.url) === this.normalizeUrl(url));
+          if (linkIndex >= 0) {
+            automation.submittedLinks[linkIndex].status = 'SUCCESS';
+            automation.submittedLinks[linkIndex].details = data;
+          }
+        }
+        
+        // Close the job tab
+        if (automation.currentJobTabId) {
+          try {
+            await chrome.tabs.remove(automation.currentJobTabId);
+          } catch (error) {
+            console.warn("⚠️ Error closing job tab:", error);
+          }
+        }
+        
+        // Reset processing state
+        automation.isProcessingJob = false;
+        const oldUrl = automation.currentJobUrl;
+        automation.currentJobUrl = null;
+        automation.currentJobTabId = null;
+        automation.applicationStartTime = null;
+        
+        // Notify search tab to continue
+        await this.sendSearchNextMessage(windowId, {
+          url: oldUrl,
+          status: 'SUCCESS',
+          data: data
+        });
+      }
+      
+      this.sendPortResponse(port, {
+        type: 'SUCCESS',
+        message: 'Application completed'
+      });
+      
+    } catch (error) {
+      console.error("❌ Error handling SEND_CV_TASK_DONE:", error);
+      this.sendPortResponse(port, {
+        type: 'ERROR',
+        message: error.message
+      });
+    }
+  }
+
+  // NEW: Handle SEND_CV_TASK_ERROR - job application failed
+  async handleSendCvTaskError(port, data) {
+    try {
+      const windowId = port.sender?.tab?.windowId;
+      const tabId = port.sender?.tab?.id;
+      
+      console.log(`❌ Job application failed in tab ${tabId}:`, data);
+      
+      // Find automation session
+      let automation = null;
+      for (const [sessionId, auto] of this.activeAutomations.entries()) {
+        if (auto.windowId === windowId) {
+          automation = auto;
+          break;
+        }
+      }
+      
+      if (automation) {
+        // Update submitted links
+        const url = automation.currentJobUrl;
+        if (url && automation.submittedLinks) {
+          const linkIndex = automation.submittedLinks.findIndex(link => 
+            this.normalizeUrl(link.url) === this.normalizeUrl(url));
+          if (linkIndex >= 0) {
+            automation.submittedLinks[linkIndex].status = 'ERROR';
+            automation.submittedLinks[linkIndex].error = data;
+          }
+        }
+        
+        // Close the job tab
+        if (automation.currentJobTabId) {
+          try {
+            await chrome.tabs.remove(automation.currentJobTabId);
+          } catch (error) {
+            console.warn("⚠️ Error closing job tab:", error);
+          }
+        }
+        
+        // Reset processing state
+        automation.isProcessingJob = false;
+        const oldUrl = automation.currentJobUrl;
+        automation.currentJobUrl = null;
+        automation.currentJobTabId = null;
+        automation.applicationStartTime = null;
+        
+        // Notify search tab to continue
+        await this.sendSearchNextMessage(windowId, {
+          url: oldUrl,
+          status: 'ERROR',
+          message: typeof data === 'string' ? data : 'Application error'
+        });
+      }
+      
+      this.sendPortResponse(port, {
+        type: 'SUCCESS',
+        message: 'Error acknowledged'
+      });
+      
+    } catch (error) {
+      console.error("❌ Error handling SEND_CV_TASK_ERROR:", error);
+    }
+  }
+
+  // NEW: Handle SEND_CV_TASK_SKIP - job application skipped
+  async handleSendCvTaskSkip(port, data) {
+    try {
+      const windowId = port.sender?.tab?.windowId;
+      const tabId = port.sender?.tab?.id;
+      
+      console.log(`⏭️ Job application skipped in tab ${tabId}:`, data);
+      
+      // Find automation session
+      let automation = null;
+      for (const [sessionId, auto] of this.activeAutomations.entries()) {
+        if (auto.windowId === windowId) {
+          automation = auto;
+          break;
+        }
+      }
+      
+      if (automation) {
+        // Update submitted links
+        const url = automation.currentJobUrl;
+        if (url && automation.submittedLinks) {
+          const linkIndex = automation.submittedLinks.findIndex(link => 
+            this.normalizeUrl(link.url) === this.normalizeUrl(url));
+          if (linkIndex >= 0) {
+            automation.submittedLinks[linkIndex].status = 'SKIPPED';
+            automation.submittedLinks[linkIndex].reason = data;
+          }
+        }
+        
+        // Close the job tab
+        if (automation.currentJobTabId) {
+          try {
+            await chrome.tabs.remove(automation.currentJobTabId);
+          } catch (error) {
+            console.warn("⚠️ Error closing job tab:", error);
+          }
+        }
+        
+        // Reset processing state
+        automation.isProcessingJob = false;
+        const oldUrl = automation.currentJobUrl;
+        automation.currentJobUrl = null;
+        automation.currentJobTabId = null;
+        automation.applicationStartTime = null;
+        
+        // Notify search tab to continue
+        await this.sendSearchNextMessage(windowId, {
+          url: oldUrl,
+          status: 'SKIPPED',
+          message: data
+        });
+      }
+      
+      this.sendPortResponse(port, {
+        type: 'SUCCESS',
+        message: 'Skip acknowledged'
+      });
+      
+    } catch (error) {
+      console.error("❌ Error handling SEND_CV_TASK_SKIP:", error);
+    }
+  }
+
+  // NEW: Handle VERIFY_APPLICATION_STATUS
+  async handleVerifyApplicationStatus(port, data) {
+    const windowId = port.sender?.tab?.windowId;
+    
+    // Find automation session
+    let automation = null;
+    for (const [sessionId, auto] of this.activeAutomations.entries()) {
+      if (auto.windowId === windowId) {
+        automation = auto;
+        break;
+      }
+    }
+    
+    const isActive = automation ? automation.isProcessingJob : false;
+    
+    this.sendPortResponse(port, {
+      type: 'APPLICATION_STATUS_RESPONSE',
+      data: {
+        active: isActive,
+        url: automation?.currentJobUrl || null,
+        tabId: automation?.currentJobTabId || null
+      }
+    });
+  }
+
+  // NEW: Handle CHECK_JOB_TAB_STATUS
+  async handleCheckJobTabStatus(port, data) {
+    const windowId = port.sender?.tab?.windowId;
+    
+    // Find automation session
+    let automation = null;
+    for (const [sessionId, auto] of this.activeAutomations.entries()) {
+      if (auto.windowId === windowId) {
+        automation = auto;
+        break;
+      }
+    }
+    
+    const isOpen = automation ? automation.isProcessingJob : false;
+    
+    this.sendPortResponse(port, {
+      type: 'JOB_TAB_STATUS',
+      data: {
+        isOpen: isOpen,
+        tabId: automation?.currentJobTabId || null,
+        isProcessing: isOpen
+      }
+    });
+  }
+
+  // NEW: Handle SEARCH_NEXT_READY
+  async handleSearchNextReady(port, data) {
+    console.log("🔄 Search ready for next job");
+    
+    this.sendPortResponse(port, {
+      type: 'NEXT_READY_ACKNOWLEDGED',
+      data: { status: 'success' }
+    });
+  }
+
+  // NEW: Handle SEARCH_TASK_DONE
+  async handleSearchTaskDone(port, data) {
+    const windowId = port.sender?.tab?.windowId;
+    
+    console.log(`🏁 Search task completed for window ${windowId}`);
+    
+    // Show completion notification
+    try {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Lever Job Search Completed',
+        message: 'All job applications have been processed.'
+      });
+    } catch (error) {
+      console.warn("⚠️ Error showing notification:", error);
+    }
+    
+    this.sendPortResponse(port, {
+      type: 'SUCCESS',
+      message: 'Search completion acknowledged'
+    });
+  }
+
+  // NEW: Send SEARCH_NEXT message to search tab
+  async sendSearchNextMessage(windowId, data) {
+    try {
+      console.log(`📤 Sending SEARCH_NEXT message to window ${windowId}:`, data);
+      
+      // Get all tabs in the window
+      const tabs = await chrome.tabs.query({ windowId: windowId });
+      
+      // Find the search tab (Google search page)
+      for (const tab of tabs) {
+        if (tab.url && tab.url.includes('google.com/search')) {
+          // Try port-based communication first
+          const port = this.portConnections.get(tab.id);
+          if (port) {
+            try {
+              port.postMessage({
+                type: 'SEARCH_NEXT',
+                data: data
+              });
+              console.log(`✅ Sent SEARCH_NEXT via port to tab ${tab.id}`);
+              return true;
+            } catch (error) {
+              console.warn("⚠️ Port message failed, trying tabs API:", error);
+            }
+          }
+          
+          // Fallback to tabs API
+          try {
+            await chrome.tabs.sendMessage(tab.id, {
+              type: 'SEARCH_NEXT',
+              data: data
+            });
+            console.log(`✅ Sent SEARCH_NEXT via tabs API to tab ${tab.id}`);
+            return true;
+          } catch (error) {
+            console.warn("⚠️ Tabs API message failed:", error);
+          }
+        }
+      }
+      
+      console.warn("⚠️ Could not find search tab to send SEARCH_NEXT message");
+      return false;
+      
+    } catch (error) {
+      console.error("❌ Error sending SEARCH_NEXT message:", error);
+      return false;
+    }
+  }
+
+  // NEW: Utility method to send response via port
+  sendPortResponse(port, message) {
+    try {
+      if (port && port.sender) {
+        port.postMessage(message);
+      }
+    } catch (error) {
+      console.warn("⚠️ Failed to send port response:", error);
+    }
+  }
+
+  // NEW: Utility method to normalize URLs for comparison
+  normalizeUrl(url) {
+    try {
+      if (!url) return '';
+      
+      // Handle URLs with or without protocol
+      if (!url.startsWith('http')) {
+        url = 'https://' + url;
+      }
+      
+      // Remove /apply suffix commonly found in Lever job URLs
+      url = url.replace(/\/apply$/, '');
+      
+      const urlObj = new URL(url);
+      // Remove trailing slashes and query parameters
+      return (urlObj.origin + urlObj.pathname)
+        .toLowerCase()
+        .trim()
+        .replace(/\/+$/, '');
+    } catch (e) {
+      console.warn("⚠️ Error normalizing URL:", e);
+      return url.toLowerCase().trim();
+    }
   }
 
   // Handle messages from your frontend web application
@@ -79,208 +684,11 @@ export default class MessageHandler {
         this.handleApplicationSubmitted(request, sender, sendResponse);
         break;
 
-      // NEW: Added for Lever tab management
-      case "openJobInNewTab":
-        this.handleOpenJobInNewTab(request, sender, sendResponse);
-        break;
-
-      case "applicationCompleted":
-        this.handleApplicationCompleted(request, sender, sendResponse);
-        break;
-
-      case "applicationError":
-        this.handleApplicationError(request, sender, sendResponse);
-        break;
-
-      case "applicationSkipped":
-        this.handleApplicationSkipped(request, sender, sendResponse);
-        break;
-
       default:
         sendResponse({ error: "Unknown internal action" });
     }
 
     return true;
-  }
-
-  // NEW: Handle request to open job in new tab
-  async handleOpenJobInNewTab(request, sender, sendResponse) {
-    try {
-      const { url, title, sessionId, platform } = request;
-      
-      // Find the active automation for this session
-      const automation = this.activeAutomations.get(sessionId);
-      if (!automation) {
-        sendResponse({
-          success: false,
-          error: "No active automation found for session"
-        });
-        return;
-      }
-
-      // Check if already processing a job
-      if (automation.isProcessingJob) {
-        sendResponse({
-          success: false,
-          error: "Already processing another job"
-        });
-        return;
-      }
-
-      // Create new tab for job application
-      const tab = await chrome.tabs.create({
-        url: url,
-        windowId: automation.windowId,
-        active: true
-      });
-
-      // Mark automation as processing job
-      automation.isProcessingJob = true;
-      automation.currentJobUrl = url;
-      automation.currentJobTabId = tab.id;
-
-      sendResponse({
-        success: true,
-        tabId: tab.id,
-        message: "Job tab opened successfully"
-      });
-
-    } catch (error) {
-      console.error("Error opening job in new tab:", error);
-      sendResponse({
-        success: false,
-        error: error.message
-      });
-    }
-  }
-
-  // NEW: Handle successful application completion
-  async handleApplicationCompleted(request, sender, sendResponse) {
-    try {
-      const { sessionId, data, url } = request;
-      
-      const automation = this.activeAutomations.get(sessionId);
-      if (automation) {
-        // Reset job processing state
-        automation.isProcessingJob = false;
-        automation.currentJobUrl = null;
-        
-        // Close the job tab
-        if (automation.currentJobTabId) {
-          try {
-            await chrome.tabs.remove(automation.currentJobTabId);
-          } catch (error) {
-            console.error("Error closing job tab:", error);
-          }
-          automation.currentJobTabId = null;
-        }
-        
-        // Notify search tab to continue
-        await this.notifySearchTabNext(automation.windowId, {
-          url: url || automation.currentJobUrl,
-          status: "SUCCESS",
-          data: data
-        });
-      }
-
-      sendResponse({ success: true });
-    } catch (error) {
-      console.error("Error handling application completion:", error);
-      sendResponse({ success: false, error: error.message });
-    }
-  }
-
-  // NEW: Handle application error
-  async handleApplicationError(request, sender, sendResponse) {
-    try {
-      const { sessionId, message, url } = request;
-      
-      const automation = this.activeAutomations.get(sessionId);
-      if (automation) {
-        // Reset job processing state
-        automation.isProcessingJob = false;
-        automation.currentJobUrl = null;
-        
-        // Close the job tab
-        if (automation.currentJobTabId) {
-          try {
-            await chrome.tabs.remove(automation.currentJobTabId);
-          } catch (error) {
-            console.error("Error closing job tab:", error);
-          }
-          automation.currentJobTabId = null;
-        }
-        
-        // Notify search tab to continue
-        await this.notifySearchTabNext(automation.windowId, {
-          url: url || automation.currentJobUrl,
-          status: "ERROR",
-          message: message
-        });
-      }
-
-      sendResponse({ success: true });
-    } catch (error) {
-      console.error("Error handling application error:", error);
-      sendResponse({ success: false, error: error.message });
-    }
-  }
-
-  // NEW: Handle application skipped
-  async handleApplicationSkipped(request, sender, sendResponse) {
-    try {
-      const { sessionId, message, url } = request;
-      
-      const automation = this.activeAutomations.get(sessionId);
-      if (automation) {
-        // Reset job processing state
-        automation.isProcessingJob = false;
-        automation.currentJobUrl = null;
-        
-        // Close the job tab
-        if (automation.currentJobTabId) {
-          try {
-            await chrome.tabs.remove(automation.currentJobTabId);
-          } catch (error) {
-            console.error("Error closing job tab:", error);
-          }
-          automation.currentJobTabId = null;
-        }
-        
-        // Notify search tab to continue
-        await this.notifySearchTabNext(automation.windowId, {
-          url: url || automation.currentJobUrl,
-          status: "SKIPPED",
-          message: message
-        });
-      }
-
-      sendResponse({ success: true });
-    } catch (error) {
-      console.error("Error handling application skip:", error);
-      sendResponse({ success: false, error: error.message });
-    }
-  }
-
-  // NEW: Notify search tab to continue processing next job
-  async notifySearchTabNext(windowId, data) {
-    try {
-      // Get all tabs in the automation window
-      const tabs = await chrome.tabs.query({ windowId: windowId });
-      
-      // Find the search tab (Google search page)
-      for (const tab of tabs) {
-        if (tab.url && tab.url.includes('google.com/search')) {
-          await chrome.tabs.sendMessage(tab.id, {
-            type: 'SEARCH_NEXT',
-            data: data
-          });
-          break;
-        }
-      }
-    } catch (error) {
-      console.error("Error notifying search tab:", error);
-    }
   }
 
   async handleStartApplying(request, sendResponse) {
@@ -310,7 +718,7 @@ export default class MessageHandler {
         resumeUrl,
         coverLetterTemplate,
         preferences = {},
-        apiHost = "http://localhost:3000", // Default API host
+        apiHost = "http://localhost:3000",
       } = request;
 
       // Create automation session
@@ -330,7 +738,7 @@ export default class MessageHandler {
       const result = await this.orchestrator.startAutomation({
         sessionId,
         platform,
-        userId, // Ensure userId is passed
+        userId,
         jobsToApply,
         submittedLinks,
         devMode,
@@ -345,7 +753,25 @@ export default class MessageHandler {
       });
 
       if (result.success) {
-        this.activeAutomations.set(sessionId, result.automationInstance);
+        // UPDATED: Enhanced automation instance for Lever
+        const automationInstance = result.automationInstance;
+        
+        // Initialize Lever-specific properties
+        automationInstance.isProcessingJob = false;
+        automationInstance.currentJobUrl = null;
+        automationInstance.currentJobTabId = null;
+        automationInstance.applicationStartTime = null;
+        automationInstance.submittedLinks = submittedLinks || [];
+        automationInstance.params = {
+          userId,
+          jobsToApply,
+          submittedLinks,
+          devMode,
+          preferences,
+          apiHost
+        };
+
+        this.activeAutomations.set(sessionId, automationInstance);
 
         sendResponse({
           status: "started",
