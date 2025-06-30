@@ -1,8 +1,10 @@
 // platforms/base-platform.js
+///Page loaded, current URL
 export default class BasePlatform {
   constructor(config) {
     this.sessionId = config.sessionId;
     this.platform = config.platform;
+    this.userId = config.userId;
     this.contentScript = config.contentScript;
     this.config = config.config || {};
 
@@ -49,13 +51,11 @@ export default class BasePlatform {
   // Common utility methods
   async pause() {
     this.isPaused = true;
-    this.isRunning = false;
     this.log("⏸️ Automation paused");
   }
 
   async resume() {
     this.isPaused = false;
-    this.isRunning = true;
     this.log("▶️ Automation resumed");
   }
 
@@ -134,128 +134,9 @@ export default class BasePlatform {
     });
   }
 
-  // DOM utility methods (work directly in content script context)
-  async waitForElement(selector, timeout = 10000) {
-    return new Promise((resolve) => {
-      const element = document.querySelector(selector);
-      if (element) {
-        resolve(element);
-        return;
-      }
-
-      const observer = new MutationObserver((mutations, obs) => {
-        const element = document.querySelector(selector);
-        if (element) {
-          obs.disconnect();
-          resolve(element);
-        }
-      });
-
-      observer.observe(document, {
-        childList: true,
-        subtree: true,
-      });
-
-      // Timeout
-      setTimeout(() => {
-        observer.disconnect();
-        resolve(null);
-      }, timeout);
-    });
-  }
-
-  async clickElement(selector) {
-    const element = document.querySelector(selector);
-    if (element) {
-      element.scrollIntoView({ behavior: "smooth", block: "center" });
-      await this.delay(500); // Wait for scroll
-      element.click();
-      return true;
-    }
-    return false;
-  }
-
-  async fillInput(selector, value) {
-    const element = document.querySelector(selector);
-    if (element) {
-      element.focus();
-      element.value = value;
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
-    }
-    return false;
-  }
-
+  // Basic DOM utility methods (generic only)
   async delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  // Navigation methods (work directly in content script)
-  async navigateToUrl(url) {
-    try {
-      window.location.href = url;
-      return true;
-    } catch (error) {
-      this.reportError(error, { action: "navigateToUrl", url });
-      return false;
-    }
-  }
-
-  async waitForPageLoad(timeout = 30000) {
-    return new Promise((resolve) => {
-      if (document.readyState === "complete") {
-        resolve(true);
-        return;
-      }
-
-      const checkComplete = () => {
-        if (document.readyState === "complete") {
-          resolve(true);
-        } else {
-          setTimeout(checkComplete, 100);
-        }
-      };
-
-      checkComplete();
-      setTimeout(() => resolve(false), timeout);
-    });
-  }
-
-  // Element finding and interaction
-  findElements(selector) {
-    return Array.from(document.querySelectorAll(selector));
-  }
-
-  findElement(selector) {
-    return document.querySelector(selector);
-  }
-
-  isElementVisible(element) {
-    if (!element) return false;
-
-    const rect = element.getBoundingClientRect();
-    return (
-      rect.width > 0 &&
-      rect.height > 0 &&
-      rect.top >= 0 &&
-      rect.left >= 0 &&
-      rect.bottom <= window.innerHeight &&
-      rect.right <= window.innerWidth
-    );
-  }
-
-  scrollToElement(element, options = {}) {
-    if (!element) return false;
-
-    const defaultOptions = {
-      behavior: "smooth",
-      block: "center",
-      inline: "nearest",
-    };
-
-    element.scrollIntoView({ ...defaultOptions, ...options });
-    return true;
   }
 
   // Communication with content script and background
@@ -281,50 +162,6 @@ export default class BasePlatform {
       -6
     )}] ${message}`;
     console.log(logEntry, data);
-  }
-
-  shouldSkipJob(jobUrl) {
-    const submittedLinks = this.config.submittedLinks || [];
-    return submittedLinks.some(
-      (link) => jobUrl.includes(link) || link.includes(jobUrl)
-    );
-  }
-
-  extractJobData() {
-    // Extract job information from current page
-    const jobData = {
-      title: this.extractText([
-        "h1",
-        ".job-title",
-        '[data-testid="job-title"]',
-      ]),
-      company: this.extractText([
-        ".company",
-        ".company-name",
-        '[data-testid="company-name"]',
-      ]),
-      location: this.extractText([
-        ".location",
-        ".job-location",
-        '[data-testid="job-location"]',
-      ]),
-      description: this.extractText([".job-description", ".description"]),
-      url: window.location.href,
-      platform: this.platform,
-      extractedAt: Date.now(),
-    };
-
-    return jobData;
-  }
-
-  extractText(selectors) {
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      if (element) {
-        return element.textContent?.trim() || "";
-      }
-    }
-    return "";
   }
 
   getRandomDelay(min, max) {

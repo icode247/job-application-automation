@@ -1,6 +1,6 @@
 // core/automation-orchestrator.js
-import WindowManager from '../background/window-manager.js';
-import Logger from './logger.js';
+import WindowManager from "../background/window-manager.js";
+import Logger from "./logger.js";
 
 export default class AutomationOrchestrator {
   constructor() {
@@ -23,161 +23,142 @@ export default class AutomationOrchestrator {
       dailyRemaining,
       resumeUrl,
       coverLetterTemplate,
-      preferences
+      preferences,
     } = params;
 
     try {
-      this.logger.info(`🚀 Starting automation for platform: ${platform}`, { sessionId });
+      this.logger.info(`🚀 Starting automation for platform: ${platform}`, {
+        sessionId,
+        userId,
+        jobsToApply,
+      });
 
       // Create automation window
-      const automationWindow = await this.createAutomationWindow(platform, sessionId);
+      const automationWindow = await this.createAutomationWindow(
+        platform,
+        sessionId,
+        userId
+      );
       if (!automationWindow) {
-        throw new Error('Failed to create automation window');
+        throw new Error("Failed to create automation window");
       }
 
       // Create automation session (background tracking only)
       const automationSession = new AutomationSession({
         sessionId,
         platform,
+        userId,
         windowId: automationWindow.id,
         params,
-        orchestrator: this
+        orchestrator: this,
       });
 
       // Store active automation
       this.activeAutomations.set(sessionId, automationSession);
 
-      // Wait for content script to load, then send start message
-      setTimeout(async () => {
-        await this.sendStartMessageToContentScript(automationWindow.id, {
-          sessionId,
-          platform,
-          config: {
-            jobsToApply,
-            submittedLinks,
-            preferences,
-            resumeUrl,
-            coverLetterTemplate,
-            userPlan,
-            userCredits,
-            dailyRemaining,
-            userId
-          }
-        });
-      }, 3000); // Increased delay to ensure content script is ready
-
-      this.logger.info(`✅ Automation started successfully`, { sessionId, platform });
+      this.logger.info(`✅ Automation started successfully`, {
+        sessionId,
+        platform,
+        windowId: automationWindow.id,
+        userId,
+      });
 
       return {
         success: true,
         automationInstance: automationSession,
-        windowId: automationWindow.id
+        windowId: automationWindow.id,
       };
-
     } catch (error) {
-      this.logger.error(`❌ Failed to start automation: ${error.message}`, { 
-        sessionId, 
-        platform, 
-        error: error.stack 
+      this.logger.error(`❌ Failed to start automation: ${error.message}`, {
+        sessionId,
+        platform,
+        userId,
+        error: error.stack,
       });
 
       return {
         success: false,
-        error: error.message
+        error: error.message,
       };
     }
   }
 
-  async createAutomationWindow(platform, sessionId) {
+  async createAutomationWindow(platform, sessionId, userId) {
     try {
       // Get platform-specific starting URL
       const startUrl = this.getStartingUrl(platform);
-      
+
       const window = await chrome.windows.create({
         url: startUrl,
-        type: 'normal',
+        type: "normal",
         focused: true,
         width: 1200,
-        height: 800
+        height: 800,
       });
 
       // Register as automation window
       await this.windowManager.registerAutomationWindow(window.id, {
         sessionId,
         platform,
-        createdAt: Date.now()
+        userId,
+        createdAt: Date.now(),
       });
 
-      // Inject automation context after a delay to ensure page is loaded
+      // Inject automation context with all required data
       setTimeout(async () => {
         try {
           if (window.tabs && window.tabs[0]) {
             await chrome.scripting.executeScript({
               target: { tabId: window.tabs[0].id },
-              func: (sessionId, platform) => {
+              func: (sessionId, platform, userId) => {
+                // Set window properties
                 window.automationSessionId = sessionId;
                 window.automationPlatform = platform;
+                window.automationUserId = userId;
                 window.isAutomationWindow = true;
-                sessionStorage.setItem('automationSessionId', sessionId);
-                sessionStorage.setItem('automationPlatform', platform);
-                sessionStorage.setItem('automationWindow', 'true');
+
+                // Set session storage
+                sessionStorage.setItem("automationSessionId", sessionId);
+                sessionStorage.setItem("automationPlatform", platform);
+                sessionStorage.setItem("automationUserId", userId);
+                sessionStorage.setItem("automationWindow", "true");
+
+                console.log("🚀 Automation context injected", {
+                  sessionId,
+                  platform,
+                  userId,
+                });
               },
-              args: [sessionId, platform]
+              args: [sessionId, platform, userId],
             });
           }
         } catch (error) {
-          console.error('Error injecting automation context:', error);
+          console.error("Error injecting automation context:", error);
         }
-      }, 1000);
+      }, 500); // Shorter delay
 
       return window;
-
     } catch (error) {
       throw new Error(`Failed to create automation window: ${error.message}`);
     }
   }
 
-  async sendStartMessageToContentScript(windowId, automationConfig) {
-    try {
-      // Get the active tab in the automation window
-      const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
-      if (tabs.length === 0) {
-        throw new Error('No active tab found in automation window');
-      }
-
-      const tabId = tabs[0].id;
-
-      // Send message to content script to start automation
-      const response = await chrome.tabs.sendMessage(tabId, {
-        action: 'startAutomation',
-        config: automationConfig
-      });
-
-      this.logger.info('📤 Sent start message to content script', { windowId, tabId, response });
-
-    } catch (error) {
-      this.logger.error('❌ Failed to send start message to content script:', error);
-      // Retry after a delay
-      setTimeout(async () => {
-        try {
-          await this.sendStartMessageToContentScript(windowId, automationConfig);
-        } catch (retryError) {
-          this.logger.error('❌ Retry failed:', retryError);
-        }
-      }, 2000);
-    }
-  }
-
   getStartingUrl(platform) {
     const urls = {
-      linkedin: 'https://www.linkedin.com/jobs/search/',
-      indeed: 'https://www.indeed.com/jobs',
-      recruitee: 'https://www.google.com/search?q=site:recruitee.com+software+engineer',
-      glassdoor: 'https://www.glassdoor.com/Job/index.htm',
-      workday: 'https://www.google.com/search?q=site:myworkdayjobs.com+software+engineer'
+      linkedin:
+        "https://www.linkedin.com/jobs/search/?f_AL=true&keywords=software%20engineer&sortBy=DD",
+      indeed: "https://www.indeed.com/jobs?q=software+engineer&sort=date",
+      recruitee:
+        "https://www.google.com/search?q=site:recruitee.com+software+engineer+jobs",
+      glassdoor:
+        "https://www.glassdoor.com/Job/jobs.htm?suggestCount=0&suggestChosen=false&clickSource=searchBtn&typedKeyword=software+engineer&sc.keyword=software+engineer&locT=&locId=&jobType=",
+      workday:
+        "https://www.google.com/search?q=site:myworkdayjobs.com+software+engineer",
     };
 
-    return urls[platform] || 'https://www.google.com/search?q=software+engineer+jobs';
+    return (
+      urls[platform] || "https://www.google.com/search?q=software+engineer+jobs"
+    );
   }
 
   async stopAutomation(sessionId) {
@@ -185,6 +166,15 @@ export default class AutomationOrchestrator {
     if (automation) {
       await automation.stop();
       this.activeAutomations.delete(sessionId);
+
+      // Close the window
+      try {
+        await chrome.windows.remove(automation.windowId);
+      } catch (error) {
+        console.error("Error closing automation window:", error);
+      }
+
+      this.logger.info(`🛑 Automation stopped`, { sessionId });
       return true;
     }
     return false;
@@ -194,6 +184,7 @@ export default class AutomationOrchestrator {
     const automation = this.activeAutomations.get(sessionId);
     if (automation) {
       await automation.pause();
+      this.logger.info(`⏸️ Automation paused`, { sessionId });
       return true;
     }
     return false;
@@ -203,6 +194,7 @@ export default class AutomationOrchestrator {
     const automation = this.activeAutomations.get(sessionId);
     if (automation) {
       await automation.resume();
+      this.logger.info(`▶️ Automation resumed`, { sessionId });
       return true;
     }
     return false;
@@ -219,21 +211,26 @@ export default class AutomationOrchestrator {
       if (automation.windowId === windowId) {
         await automation.stop();
         this.activeAutomations.delete(sessionId);
-        this.logger.info(`🧹 Cleaned up automation for closed window`, { sessionId, windowId });
+        this.logger.info(`🧹 Cleaned up automation for closed window`, {
+          sessionId,
+          windowId,
+          userId: automation.userId,
+        });
       }
     }
   }
 }
 
 class AutomationSession {
-  constructor({ sessionId, platform, windowId, params, orchestrator }) {
+  constructor({ sessionId, platform, userId, windowId, params, orchestrator }) {
     this.sessionId = sessionId;
     this.platform = platform;
+    this.userId = userId; // Store userId
     this.windowId = windowId;
     this.params = params;
     this.orchestrator = orchestrator;
-    
-    this.status = 'created';
+
+    this.status = "created";
     this.startTime = Date.now();
     this.endTime = null;
     this.progress = {
@@ -241,63 +238,75 @@ class AutomationSession {
       completed: 0,
       failed: 0,
       skipped: 0,
-      current: null
+      current: null,
     };
     this.errors = [];
     this.isPaused = false;
   }
 
+  getConfig() {
+    return {
+      sessionId: this.sessionId,
+      platform: this.platform,
+      userId: this.userId, // Include userId in config
+      jobsToApply: this.params.jobsToApply,
+      submittedLinks: this.params.submittedLinks || [],
+      preferences: this.params.preferences || {},
+      resumeUrl: this.params.resumeUrl,
+      coverLetterTemplate: this.params.coverLetterTemplate,
+      userPlan: this.params.userPlan,
+      userCredits: this.params.userCredits,
+      dailyRemaining: this.params.dailyRemaining,
+      devMode: this.params.devMode || false,
+      country: this.params.country || "US",
+    };
+  }
+
   async pause() {
     this.isPaused = true;
-    this.status = 'paused';
-    
+    this.status = "paused";
+
     // Send pause message to content script
     await this.sendMessageToContentScript({
-      action: 'pauseAutomation'
+      action: "pauseAutomation",
     });
   }
 
   async resume() {
     this.isPaused = false;
-    this.status = 'running';
-    
+    this.status = "running";
+
     // Send resume message to content script
     await this.sendMessageToContentScript({
-      action: 'resumeAutomation'  
+      action: "resumeAutomation",
     });
   }
 
   async stop() {
-    this.status = 'stopped';
+    this.status = "stopped";
     this.endTime = Date.now();
-    
+
     // Send stop message to content script
     await this.sendMessageToContentScript({
-      action: 'stopAutomation'
+      action: "stopAutomation",
     });
-
-    // Close the window after a short delay
-    setTimeout(async () => {
-      try {
-        await chrome.windows.remove(this.windowId);
-      } catch (error) {
-        // Window might already be closed
-        console.log('Window already closed or could not be closed');
-      }
-    }, 1000);
   }
 
   async sendMessageToContentScript(message) {
     try {
-      const tabs = await chrome.tabs.query({ windowId: this.windowId, active: true });
+      const tabs = await chrome.tabs.query({
+        windowId: this.windowId,
+        active: true,
+      });
       if (tabs.length > 0) {
         await chrome.tabs.sendMessage(tabs[0].id, {
           ...message,
-          sessionId: this.sessionId
+          sessionId: this.sessionId,
+          userId: this.userId, // Include userId in messages
         });
       }
     } catch (error) {
-      console.error('Error sending message to content script:', error);
+      console.error("Error sending message to content script:", error);
     }
   }
 
@@ -309,22 +318,36 @@ class AutomationSession {
     this.errors.push({
       message: error.message,
       timestamp: Date.now(),
-      context: error.context || 'unknown'
+      context: error.context || "unknown",
     });
+  }
+
+  getProgress() {
+    return {
+      ...this.progress,
+      status: this.status,
+      isPaused: this.isPaused,
+      duration: this.startTime ? Date.now() - this.startTime : 0,
+      errors: this.errors,
+      userId: this.userId, // Include userId in progress
+    };
   }
 
   getStatus() {
     return {
       sessionId: this.sessionId,
       platform: this.platform,
+      userId: this.userId, // Include userId in status
       status: this.status,
       progress: this.progress,
       startTime: this.startTime,
       endTime: this.endTime,
-      duration: this.startTime ? (this.endTime || Date.now()) - this.startTime : 0,
+      duration: this.startTime
+        ? (this.endTime || Date.now()) - this.startTime
+        : 0,
       errors: this.errors,
       isPaused: this.isPaused,
-      windowId: this.windowId
+      windowId: this.windowId,
     };
   }
 }

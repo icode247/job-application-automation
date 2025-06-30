@@ -5,24 +5,18 @@ class ContentScriptManager {
     this.automationActive = false;
     this.sessionId = null;
     this.platform = null;
+    this.userId = null; // Add userId tracking
     this.platformAutomation = null;
     this.domObserver = null;
     this.indicator = null;
     this.config = {};
-    this.initAttempts = 0;
-    this.maxInitAttempts = 3;
+    this.initializationTimeout = null;
   }
 
   async initialize() {
-    // Prevent multiple initialization attempts
-    if (this.isInitialized || this.initAttempts >= this.maxInitAttempts) return;
-    
-    this.initAttempts++;
-    
+    if (this.isInitialized) return;
+
     try {
-      // Add a small delay to ensure page is ready
-      await this.delay(1000);
-      
       // Check if this is an automation window
       const isAutomationWindow = await this.checkIfAutomationWindow();
 
@@ -30,6 +24,7 @@ class ContentScriptManager {
         this.automationActive = true;
         this.sessionId = this.getSessionId();
         this.platform = this.getPlatform();
+        this.userId = this.getUserId(); // Get userId
 
         if (this.platform && this.platform !== "unknown") {
           await this.setupAutomation();
@@ -37,11 +32,15 @@ class ContentScriptManager {
 
           console.log(`🤖 Content script initialized for ${this.platform}`, {
             sessionId: this.sessionId,
+            userId: this.userId,
             url: window.location.href,
           });
 
-          // Start auto-start timer (fallback if no message from background)
-          this.startAutoStartTimer();
+          // Notify background that content script is ready
+          this.notifyBackgroundReady();
+
+          // Set a timeout to auto-start if no message received
+          this.setAutoStartTimeout();
         }
       }
     } catch (error) {
@@ -58,9 +57,12 @@ class ContentScriptManager {
     // Method 2: Check sessionStorage
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
+    const userId = sessionStorage.getItem("automationUserId");
+    
     if (sessionId && platform) {
       window.automationSessionId = sessionId;
       window.automationPlatform = platform;
+      window.automationUserId = userId;
       window.isAutomationWindow = true;
       return true;
     }
@@ -95,6 +97,14 @@ class ContentScriptManager {
       window.automationPlatform ||
       sessionStorage.getItem("automationPlatform") ||
       this.detectPlatformFromUrl()
+    );
+  }
+
+  getUserId() {
+    return (
+      window.automationUserId ||
+      sessionStorage.getItem("automationUserId") ||
+      null
     );
   }
 
@@ -134,10 +144,11 @@ class ContentScriptManager {
         throw new Error(`Platform ${this.platform} not supported`);
       }
 
-      // Create platform automation instance
+      // Create platform automation instance with userId
       this.platformAutomation = new PlatformClass({
         sessionId: this.sessionId,
         platform: this.platform,
+        userId: this.userId, // Pass userId to platform
         contentScript: this,
         config: this.config,
       });
@@ -148,11 +159,16 @@ class ContentScriptManager {
       this.setupDOMObserver();
       this.setupNavigationListeners();
 
-      // Notify background script that content script is ready
-      this.notifyBackgroundReady();
-
-      // Initialize platform automation (but don't start yet)
+      // Initialize platform automation
       await this.platformAutomation.initialize();
+      await this.platformAutomation.start({
+        jobsToApply: 10, // Default value
+        submittedLinks: [],
+        preferences: {
+
+        },
+        userId: this.userId, // Include userId
+      });
     } catch (error) {
       console.error(
         `❌ Failed to setup automation for ${this.platform}:`,
@@ -203,53 +219,6 @@ class ContentScriptManager {
       console.error(`Failed to load platform module for ${platform}:`, error);
       return null;
     }
-  }
-
-  addAutomationIndicator() {
-    // Remove existing indicator
-    const existing = document.getElementById("automation-indicator");
-    if (existing) existing.remove();
-
-    const indicator = document.createElement("div");
-    indicator.id = "automation-indicator";
-    indicator.innerHTML = `
-      <div style="
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        background: linear-gradient(135deg, #4CAF50, #45a049);
-        color: white;
-        padding: 12px 16px;
-        border-radius: 8px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-        font-size: 13px;
-        font-weight: 600;
-        z-index: 999999;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        border: 1px solid rgba(255,255,255,0.2);
-        backdrop-filter: blur(10px);
-        cursor: pointer;
-        transition: all 0.3s ease;
-      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 16px;">🤖</span>
-          <div>
-            <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
-            <div style="font-size: 11px; opacity: 0.9;">${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
-      -6
-    )}</div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Add click handler to show status
-    indicator.addEventListener("click", () => {
-      this.showAutomationStatus();
-    });
-
-    document.documentElement.appendChild(indicator);
-    this.indicator = indicator;
   }
 
   setupMessageListeners() {
@@ -303,14 +272,17 @@ class ContentScriptManager {
   async handleStartAutomation(request, sendResponse) {
     try {
       if (this.platformAutomation) {
-        // Clear any auto-start timer
-        this.clearAutoStartTimer();
-        
+        // Clear any existing timeout
+        if (this.initializationTimeout) {
+          clearTimeout(this.initializationTimeout);
+          this.initializationTimeout = null;
+        }
+
         // Update config and start automation
         this.config = { ...this.config, ...request.config };
-
+        console.log(`🤖 Starting automation for ${this.platform} with config:`, this.config);
         this.log("🚀 Starting platform automation in content script");
-        await this.platformAutomation.start(request.config);
+        await this.platformAutomation.start(this.config);
 
         sendResponse({
           success: true,
@@ -328,6 +300,83 @@ class ContentScriptManager {
     }
   }
 
+  setAutoStartTimeout() {
+    // Auto-start after 10 seconds if no start message received
+    this.initializationTimeout = setTimeout(async () => {
+      if (this.platformAutomation && !this.platformAutomation.isRunning) {
+        this.log("🔄 Auto-starting automation with basic config");
+        try {
+          await this.platformAutomation.start({
+            jobsToApply: 10, // Default value
+            submittedLinks: [],
+            preferences: {},
+            userId: this.userId, // Include userId
+          });
+        } catch (error) {
+          this.log(`❌ Auto-start failed: ${error.message}`);
+        }
+      }
+    }, 10000);
+  }
+
+  addAutomationIndicator() {
+    // Remove existing indicator
+    const existing = document.getElementById("automation-indicator");
+    if (existing) existing.remove();
+
+    const indicator = document.createElement("div");
+    indicator.id = "automation-indicator";
+    indicator.innerHTML = `
+      <div style="
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background: linear-gradient(135deg, #4CAF50, #45a049);
+        color: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        z-index: 999999;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        border: 1px solid rgba(255,255,255,0.2);
+        backdrop-filter: blur(10px);
+        cursor: pointer;
+        transition: all 0.3s ease;
+      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">🤖</span>
+          <div>
+            <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
+            <div style="font-size: 11px; opacity: 0.9;">${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
+      -6
+    )}</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Add click handler to show status
+    indicator.addEventListener("click", () => {
+      this.showAutomationStatus();
+    });
+
+    document.documentElement.appendChild(indicator);
+    this.indicator = indicator;
+  }
+
+  notifyBackgroundReady() {
+    this.sendMessageToBackground({
+      action: "contentScriptReady",
+      sessionId: this.sessionId,
+      platform: this.platform,
+      userId: this.userId, // Include userId
+      url: window.location.href,
+    }).catch(console.error);
+  }
+
+  // Rest of the methods remain the same...
   async handlePauseAutomation(request, sendResponse) {
     if (this.platformAutomation && this.platformAutomation.pause) {
       await this.platformAutomation.pause();
@@ -361,6 +410,7 @@ class ContentScriptManager {
       title: document.title,
       platform: this.platform,
       sessionId: this.sessionId,
+      userId: this.userId,
       readyState: document.readyState,
       timestamp: Date.now(),
     };
@@ -630,6 +680,7 @@ class ContentScriptManager {
       ]),
       url: window.location.href,
       platform: this.platform,
+      userId: this.userId,
       extractedAt: Date.now(),
     };
 
@@ -659,20 +710,12 @@ class ContentScriptManager {
     });
   }
 
-  notifyBackgroundReady() {
-    this.sendMessageToBackground({
-      action: "contentScriptReady",
-      sessionId: this.sessionId,
-      platform: this.platform,
-      url: window.location.href,
-    }).catch(console.error);
-  }
-
   notifyBackgroundError(error) {
     this.sendMessageToBackground({
       action: "contentScriptError",
       sessionId: this.sessionId,
       platform: this.platform,
+      userId: this.userId,
       error: error.message,
       url: window.location.href,
     }).catch(console.error);
@@ -711,6 +754,7 @@ class ContentScriptManager {
         <h3 style="margin: 0 0 16px 0; color: #333;">Automation Status</h3>
         <p><strong>Platform:</strong> ${this.platform}</p>
         <p><strong>Session ID:</strong> ${this.sessionId}</p>
+        <p><strong>User ID:</strong> ${this.userId}</p>
         <p><strong>Current URL:</strong> ${window.location.href}</p>
         <p><strong>Status:</strong> ${
           this.automationActive ? "Active" : "Inactive"
@@ -729,31 +773,6 @@ class ContentScriptManager {
     document.body.appendChild(modal);
   }
 
-  startAutoStartTimer() {
-    // Wait for background script message, but if none comes, auto-start with basic config
-    this.autoStartTimer = setTimeout(async () => {
-      if (this.platformAutomation && !this.platformAutomation.isRunning) {
-        this.log("🔄 Auto-starting automation with basic config");
-        try {
-          await this.platformAutomation.start({
-            jobsToApply: 10, // Default value
-            submittedLinks: [],
-            preferences: {},
-          });
-        } catch (error) {
-          this.log(`❌ Auto-start failed: ${error.message}`);
-        }
-      }
-    }, 8000); // Wait 8 seconds for background message
-  }
-
-  clearAutoStartTimer() {
-    if (this.autoStartTimer) {
-      clearTimeout(this.autoStartTimer);
-      this.autoStartTimer = null;
-    }
-  }
-
   delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -763,9 +782,12 @@ class ContentScriptManager {
   }
 
   cleanup() {
-    // Clear timers
-    this.clearAutoStartTimer();
-    
+    // Clear timeout
+    if (this.initializationTimeout) {
+      clearTimeout(this.initializationTimeout);
+      this.initializationTimeout = null;
+    }
+
     // Remove automation indicator
     if (this.indicator) {
       this.indicator.remove();
@@ -791,25 +813,27 @@ class ContentScriptManager {
 // Initialize content script manager
 const contentManager = new ContentScriptManager();
 
-// Single initialization point to prevent double initialization
-let initialized = false;
-
-const initializeOnce = () => {
-  if (initialized) return;
-  initialized = true;
-  
-  // Wait for DOM to be ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(() => contentManager.initialize(), 2000);
-    });
+// Initialize when DOM is ready
+const initializeWhenReady = () => {
+  if (document.readyState === "complete") {
+    contentManager.initialize();
   } else {
-    setTimeout(() => contentManager.initialize(), 2000);
+    setTimeout(initializeWhenReady, 100);
   }
 };
 
-// Only initialize once
-initializeOnce();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    setTimeout(() => contentManager.initialize(), 1000);
+  });
+} else {
+  setTimeout(() => contentManager.initialize(), 1000);
+}
+
+// Also initialize on page show (for back/forward navigation)
+window.addEventListener("pageshow", () => {
+  setTimeout(() => contentManager.initialize(), 1000);
+});
 
 // Cleanup on page unload
 window.addEventListener("beforeunload", () => contentManager.cleanup());
