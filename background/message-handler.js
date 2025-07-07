@@ -1,4 +1,3 @@
-// background/message-handler.js - UPDATED WITH COMPREHENSIVE PLATFORM AUTOMATION FLOW
 import AutomationOrchestrator from "../core/automation-orchestrator.js";
 import SessionManager from "./session-manager.js";
 import WindowManager from "./window-manager.js";
@@ -14,6 +13,10 @@ export default class MessageHandler {
     this.portConnections = new Map(); // tabId -> port
     this.platformHandlers = new Map(); // platform -> handler instance
     
+    // NEW: Tab session tracking
+    this.tabSessions = new Map(); // tabId -> sessionData
+    this.windowSessions = new Map(); // windowId -> sessionId
+    
     // Pending requests tracking
     this.pendingRequests = new Set();
     
@@ -22,15 +25,286 @@ export default class MessageHandler {
     
     // Initialize platform handlers
     this.initializePlatformHandlers();
+    
+    // Listen for tab creation to inject session context
+    this.setupTabListeners();
   }
 
-  // Initialize platform-specific handlers
+  setupTabListeners() {
+    // Track new tabs created during automation
+    chrome.tabs.onCreated.addListener((tab) => {
+      this.handleTabCreated(tab);
+    });
+
+    // Track tab updates for session context injection
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (changeInfo.status === 'complete') {
+        this.handleTabUpdated(tab);
+      }
+    });
+
+    // Clean up when tabs are closed
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      this.tabSessions.delete(tabId);
+      this.portConnections.delete(tabId);
+    });
+  }
+
+  handleTabCreated(tab) {
+    // Check if this tab was created in an automation window
+    const sessionId = this.windowSessions.get(tab.windowId);
+    if (sessionId) {
+      console.log(`🆕 New tab ${tab.id} created in automation window ${tab.windowId}`);
+      
+      const automation = this.activeAutomations.get(sessionId);
+      if (automation) {
+        // Store session context for this tab
+        this.tabSessions.set(tab.id, {
+          sessionId: sessionId,
+          platform: automation.platform,
+          userId: automation.userId,
+          windowId: tab.windowId,
+          isAutomationTab: true,
+          createdAt: Date.now(),
+          parentSessionId: sessionId
+        });
+        
+        console.log(`✅ Session context stored for tab ${tab.id}:`, this.tabSessions.get(tab.id));
+      }
+    }
+  }
+
+  async handleTabUpdated(tab) {
+    // Inject session context into automation tabs
+    const sessionData = this.tabSessions.get(tab.id);
+    if (sessionData && tab.url) {
+      try {
+        // Inject session context via executeScript
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (sessionData) => {
+            // Store session data in multiple places for reliability
+            window.automationSessionId = sessionData.sessionId;
+            window.automationPlatform = sessionData.platform;
+            window.automationUserId = sessionData.userId;
+            window.isAutomationWindow = true;
+            window.isAutomationTab = true;
+            window.parentSessionId = sessionData.parentSessionId;
+            
+            // Also store in sessionStorage
+            sessionStorage.setItem('automationSessionId', sessionData.sessionId);
+            sessionStorage.setItem('automationPlatform', sessionData.platform);
+            sessionStorage.setItem('automationUserId', sessionData.userId);
+            sessionStorage.setItem('isAutomationWindow', 'true');
+            sessionStorage.setItem('isAutomationTab', 'true');
+            sessionStorage.setItem('parentSessionId', sessionData.parentSessionId);
+            
+            console.log('🔧 Session context injected into tab:', sessionData);
+          },
+          args: [sessionData]
+        });
+        
+        console.log(`✅ Session context injected into tab ${tab.id}`);
+      } catch (error) {
+        console.warn(`⚠️ Failed to inject session context into tab ${tab.id}:`, error);
+      }
+    }
+  }
+
+  // Enhanced handleStartApplying to track window sessions
+  async handleStartApplying(request, sendResponse) {
+    try {
+      console.log("📨 Start applying request received:", request);
+
+      const validation = this.validateStartApplyingRequest(request);
+      if (!validation.valid) {
+        sendResponse({
+          status: "error",
+          message: validation.error,
+        });
+        return;
+      }
+
+      const {
+        platform,
+        userId,
+        jobsToApply,
+        submittedLinks = [],
+        devMode = false,
+        country = "US",
+        userPlan,
+        userCredits,
+        dailyRemaining,
+        resumeUrl,
+        coverLetterTemplate,
+        preferences = {},
+        apiHost = "http://localhost:3000",
+      } = request;
+
+      // Create automation session
+      const sessionId = await this.sessionManager.createSession({
+        userId,
+        platform,
+        jobsToApply,
+        submittedLinks,
+        userPlan,
+        userCredits,
+        dailyRemaining,
+        startTime: Date.now(),
+        status: "starting",
+      });
+
+      // Start automation using orchestrator
+      const result = await this.orchestrator.startAutomation({
+        sessionId,
+        platform,
+        userId,
+        jobsToApply,
+        submittedLinks,
+        devMode,
+        country,
+        userPlan,
+        userCredits,
+        dailyRemaining,
+        resumeUrl,
+        coverLetterTemplate,
+        preferences,
+        apiHost
+      });
+
+      if (result.success) {
+        const automationInstance = result.automationInstance;
+        
+        // Store automation instance
+        automationInstance.platform = platform;
+        automationInstance.userId = userId;
+        
+        // Set up platform-specific state
+        automationInstance.platformState = {
+          isProcessingJob: false,
+          currentJobUrl: null,
+          currentJobTabId: null,
+          applicationStartTime: null,
+          submittedLinks: submittedLinks || [],
+          searchTabId: null,
+          searchData: {
+            limit: jobsToApply,
+            current: 0,
+            domain: this.getPlatformDomains(platform),
+            searchLinkPattern: this.getPlatformLinkPattern(platform)
+          }
+        };
+
+        this.activeAutomations.set(sessionId, automationInstance);
+        
+        // NEW: Track window session
+        this.windowSessions.set(result.windowId, sessionId);
+        
+        console.log(`🪟 Window ${result.windowId} mapped to session ${sessionId}`);
+
+        sendResponse({
+          status: "started",
+          platform: platform,
+          sessionId: sessionId,
+          windowId: result.windowId,
+          message: `Job search started for ${platform}! Applying to ${jobsToApply} jobs.`,
+        });
+
+        this.notifyFrontend({
+          type: "automation_started",
+          sessionId,
+          platform,
+          jobsToApply,
+        });
+      } else {
+        await this.sessionManager.updateSession(sessionId, {
+          status: "failed",
+          error: result.error,
+        });
+
+        sendResponse({
+          status: "error",
+          message: result.error || "Failed to start automation",
+        });
+      }
+    } catch (error) {
+      console.error("Error in handleStartApplying:", error);
+      sendResponse({
+        status: "error",
+        message: "An unexpected error occurred while starting automation",
+      });
+    }
+  }
+
+  // Enhanced handleContentScriptReady to provide session context
+  handleContentScriptReady(request, sender, sendResponse) {
+    const { sessionId, platform, url, userId } = request;
+    console.log(`📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`);
+
+    // Store tab session if not already stored
+    if (sender.tab && !this.tabSessions.has(sender.tab.id)) {
+      this.tabSessions.set(sender.tab.id, {
+        sessionId: sessionId,
+        platform: platform,
+        userId: userId,
+        windowId: sender.tab.windowId,
+        isAutomationTab: true,
+        createdAt: Date.now()
+      });
+    }
+
+    const automation = this.activeAutomations.get(sessionId);
+    if (automation && sender.tab) {
+      setTimeout(async () => {
+        try {
+          await chrome.tabs.sendMessage(sender.tab.id, {
+            action: "startAutomation",
+            sessionId: sessionId,
+            config: automation.getConfig(),
+            // NEW: Include full session context
+            sessionContext: {
+              sessionId: sessionId,
+              platform: platform,
+              userId: userId,
+              userProfile: automation.userProfile,
+              preferences: automation.preferences || {},
+              apiHost: automation.apiHost
+            }
+          });
+          console.log(`📤 Sent start message with context to content script for session ${sessionId}`);
+        } catch (error) {
+          console.error(`❌ Failed to send start message to content script:`, error);
+        }
+      }, 1000);
+    }
+
+    sendResponse({ success: true });
+  }
+
+  // NEW: Method to get session context for any tab
+  getTabSessionContext(tabId) {
+    const sessionData = this.tabSessions.get(tabId);
+    if (!sessionData) return null;
+
+    const automation = this.activeAutomations.get(sessionData.sessionId);
+    if (!automation) return null;
+
+    return {
+      sessionId: sessionData.sessionId,
+      platform: sessionData.platform,
+      userId: sessionData.userId,
+      userProfile: automation.userProfile,
+      preferences: automation.preferences || {},
+      apiHost: automation.apiHost,
+      sessionConfig: automation.sessionConfig
+    };
+  }
+
+  // Enhanced platform handlers to use session context
   initializePlatformHandlers() {
-    // Each platform can have its own handler for specific logic
     this.platformHandlers.set('lever', new LeverAutomationHandler(this));
     this.platformHandlers.set('workable', new WorkableAutomationHandler(this));
     this.platformHandlers.set('recruitee', new RecruiteeAutomationHandler(this));
-    // Add more platforms as needed
   }
 
   // Set up long-lived port connections for platform automation

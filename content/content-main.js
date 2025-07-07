@@ -1,56 +1,85 @@
-// content/content-main.js
+// content/content-main.js - ENHANCED WITH SESSION CONTEXT HANDLING
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
     this.automationActive = false;
     this.sessionId = null;
     this.platform = null;
-    this.userId = null; // Add userId tracking
+    this.userId = null;
     this.platformAutomation = null;
     this.domObserver = null;
     this.indicator = null;
     this.config = {};
     this.initializationTimeout = null;
+    this.sessionContext = null; // NEW: Store full session context
+    this.maxInitializationAttempts = 3;
+    this.initializationAttempts = 0;
   }
 
   async initialize() {
     if (this.isInitialized) return;
 
     try {
-      // Check if this is an automation window
+      this.initializationAttempts++;
+      console.log(
+        `📝 Content script initialization attempt ${this.initializationAttempts}`
+      );
+
+      // Enhanced automation window detection
       const isAutomationWindow = await this.checkIfAutomationWindow();
+      // console.log(
+      //   `🔍 Is automation window: ${isAutomationWindow}, attempts: ${this.initialization}`)
 
       if (isAutomationWindow) {
         this.automationActive = true;
-        this.sessionId = this.getSessionId();
-        this.platform = this.getPlatform();
-        this.userId = this.getUserId(); // Get userId
 
-        if (this.platform && this.platform !== "unknown") {
-          await this.setupAutomation();
-          this.isInitialized = true;
+        // Get session context with retries
+        const sessionContext = await this.getSessionContext();
 
-          console.log(`🤖 Content script initialized for ${this.platform}`, {
+        if (sessionContext) {
+          this.sessionContext = sessionContext;
+          this.sessionId = sessionContext.sessionId;
+          this.platform = sessionContext.platform;
+          this.userId = sessionContext.userId;
+
+          console.log(`🤖 Session context retrieved:`, {
             sessionId: this.sessionId,
+            platform: this.platform,
             userId: this.userId,
             url: window.location.href,
           });
 
-          // Notify background that content script is ready
-          this.notifyBackgroundReady();
+          if (this.platform && this.platform !== "unknown") {
+            await this.setupAutomation();
+            this.isInitialized = true;
 
-          // Set a timeout to auto-start if no message received
-          this.setAutoStartTimeout();
+            console.log(`✅ Content script initialized for ${this.platform}`);
+
+            // Notify background that content script is ready
+            this.notifyBackgroundReady();
+
+            // Set a timeout to auto-start if no message received
+            this.setAutoStartTimeout();
+          }
+        } else {
+          throw new Error("Failed to retrieve session context");
         }
       }
     } catch (error) {
       console.error("❌ Error initializing content script:", error);
+
+      // Retry initialization if we haven't exceeded max attempts
+      if (this.initializationAttempts < this.maxInitializationAttempts) {
+        console.log(`🔄 Retrying initialization in 3 seconds...`);
+        setTimeout(() => this.initialize(), 3000);
+      }
     }
   }
 
   async checkIfAutomationWindow() {
     // Method 1: Check window flags set by background script
     if (window.isAutomationWindow && window.automationSessionId) {
+      console.log("🔍 Automation window detected via window flags");
       return true;
     }
 
@@ -58,8 +87,10 @@ class ContentScriptManager {
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
-
+    
+    console.log(sessionId, platform, userId);
     if (sessionId && platform) {
+      console.log("🔍 Automation window detected via sessionStorage");
       window.automationSessionId = sessionId;
       window.automationPlatform = platform;
       window.automationUserId = userId;
@@ -67,13 +98,15 @@ class ContentScriptManager {
       return true;
     }
 
-    // Method 3: Ask background script
+    // Method 3: Check if this is an automation tab via background script
     try {
       const response = await this.sendMessageToBackground({
         action: "checkIfAutomationWindow",
+        tabId: await this.getTabId(),
       });
-
+      console.log(response)
       if (response && response.isAutomationWindow) {
+        console.log("🔍 Automation window detected via background script");
         window.isAutomationWindow = true;
         return true;
       }
@@ -84,8 +117,147 @@ class ContentScriptManager {
     return false;
   }
 
+  async getTabId() {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          { action: "getCurrentTabId" },
+          (response) => {
+            resolve(response?.tabId || null);
+          }
+        );
+      } catch (error) {
+        resolve(null);
+      }
+    });
+  }
+
+  async getSessionContext() {
+    // Try multiple methods to get session context
+
+    // Method 1: From window/sessionStorage
+    let context = this.getSessionContextFromStorage();
+    if (context && context.sessionId) {
+      console.log("📊 Session context found in storage");
+      return await this.enrichSessionContext(context);
+    }
+
+    // Method 2: Request from background script
+    try {
+      console.log("📡 Requesting session context from background script");
+      const response = await this.sendMessageToBackground({
+        action: "getSessionContext",
+        tabId: await this.getTabId(),
+        url: window.location.href,
+      });
+
+      if (response && response.sessionContext) {
+        console.log("📊 Session context received from background");
+        this.storeSessionContextInStorage(response.sessionContext);
+        return response.sessionContext;
+      }
+    } catch (error) {
+      console.error("Error getting session context from background:", error);
+    }
+
+    // Method 3: Detect from URL and request session assignment
+    const detectedPlatform = this.detectPlatformFromUrl();
+    if (detectedPlatform !== "unknown") {
+      try {
+        console.log(
+          `🔍 Detected platform: ${detectedPlatform}, requesting session assignment`
+        );
+        const response = await this.sendMessageToBackground({
+          action: "assignSessionToTab",
+          platform: detectedPlatform,
+          url: window.location.href,
+          tabId: await this.getTabId(),
+        });
+
+        if (response && response.sessionContext) {
+          console.log("📊 Session assigned by background script");
+          this.storeSessionContextInStorage(response.sessionContext);
+          return response.sessionContext;
+        }
+      } catch (error) {
+        console.error("Error requesting session assignment:", error);
+      }
+    }
+
+    return null;
+  }
+
+  getSessionContextFromStorage() {
+    try {
+      return {
+        sessionId:
+          window.automationSessionId ||
+          sessionStorage.getItem("automationSessionId"),
+        platform:
+          window.automationPlatform ||
+          sessionStorage.getItem("automationPlatform"),
+        userId:
+          window.automationUserId || sessionStorage.getItem("automationUserId"),
+        isAutomationTab:
+          window.isAutomationTab ||
+          sessionStorage.getItem("isAutomationTab") === "true",
+        parentSessionId:
+          window.parentSessionId || sessionStorage.getItem("parentSessionId"),
+      };
+    } catch (error) {
+      console.error("Error getting session context from storage:", error);
+      return null;
+    }
+  }
+
+  storeSessionContextInStorage(context) {
+    try {
+      // Store in window
+      window.automationSessionId = context.sessionId;
+      window.automationPlatform = context.platform;
+      window.automationUserId = context.userId;
+      window.isAutomationWindow = true;
+      window.isAutomationTab = true;
+
+      // Store in sessionStorage
+      sessionStorage.setItem("automationSessionId", context.sessionId);
+      sessionStorage.setItem("automationPlatform", context.platform);
+      sessionStorage.setItem("automationUserId", context.userId);
+      sessionStorage.setItem("isAutomationWindow", "true");
+      sessionStorage.setItem("isAutomationTab", "true");
+
+      if (context.parentSessionId) {
+        window.parentSessionId = context.parentSessionId;
+        sessionStorage.setItem("parentSessionId", context.parentSessionId);
+      }
+
+      console.log("💾 Session context stored in storage");
+    } catch (error) {
+      console.error("Error storing session context:", error);
+    }
+  }
+
+  async enrichSessionContext(basicContext) {
+    // Get additional context data from background script
+    try {
+      const response = await this.sendMessageToBackground({
+        action: "getFullSessionContext",
+        sessionId: basicContext.sessionId,
+      });
+
+      if (response && response.sessionContext) {
+        return { ...basicContext, ...response.sessionContext };
+      }
+    } catch (error) {
+      console.error("Error enriching session context:", error);
+    }
+
+    return basicContext;
+  }
+
   getSessionId() {
     return (
+      this.sessionContext?.sessionId ||
       window.automationSessionId ||
       sessionStorage.getItem("automationSessionId") ||
       null
@@ -94,6 +266,7 @@ class ContentScriptManager {
 
   getPlatform() {
     return (
+      this.sessionContext?.platform ||
       window.automationPlatform ||
       sessionStorage.getItem("automationPlatform") ||
       this.detectPlatformFromUrl()
@@ -102,6 +275,7 @@ class ContentScriptManager {
 
   getUserId() {
     return (
+      this.sessionContext?.userId ||
       window.automationUserId ||
       sessionStorage.getItem("automationUserId") ||
       null
@@ -118,6 +292,7 @@ class ContentScriptManager {
     if (url.includes("myworkdayjobs.com")) return "workday";
     if (url.includes("lever.co")) return "lever";
     if (url.includes("greenhouse.io")) return "greenhouse";
+    if (url.includes("workable.com")) return "workable";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
@@ -130,6 +305,8 @@ class ContentScriptManager {
         return "workday";
       if (url.includes("site:lever.co") || url.includes("lever.co"))
         return "lever";
+      if (url.includes("site:workable.com") || url.includes("workable.com"))
+        return "workable";
     }
 
     return "unknown";
@@ -139,20 +316,29 @@ class ContentScriptManager {
     try {
       // Load platform-specific automation module
       const PlatformClass = await this.loadPlatformModule(this.platform);
-      console.log("PlatformClass", PlatformClass);
+      console.log("PlatformClass loaded:", PlatformClass?.name);
 
       if (!PlatformClass) {
         throw new Error(`Platform ${this.platform} not supported`);
       }
 
-      // Create platform automation instance with userId
-      this.platformAutomation = new PlatformClass({
+      // Create platform automation instance with FULL session context
+      const automationConfig = {
         sessionId: this.sessionId,
         platform: this.platform,
-        userId: this.userId, // Pass userId to platform
+        userId: this.userId,
         contentScript: this,
         config: this.config,
-      });
+        // NEW: Pass full session context
+        sessionContext: this.sessionContext,
+      };
+
+      console.log(
+        "Creating platform automation with config:",
+        automationConfig
+      );
+
+      this.platformAutomation = new PlatformClass(automationConfig);
 
       // Set up automation UI
       this.addAutomationIndicator();
@@ -160,8 +346,14 @@ class ContentScriptManager {
       this.setupDOMObserver();
       this.setupNavigationListeners();
 
-      // Initialize platform automation
+      // Initialize platform automation with session context
       await this.platformAutomation.initialize();
+
+      // If we have session context, pass it to the platform
+      if (this.sessionContext) {
+        await this.platformAutomation.setSessionContext(this.sessionContext);
+      }
+
       await this.platformAutomation.start(this.config);
     } catch (error) {
       console.error(
@@ -169,6 +361,74 @@ class ContentScriptManager {
         error
       );
       this.notifyBackgroundError(error);
+    }
+  }
+
+  async handleStartAutomation(request, sendResponse) {
+    try {
+      if (this.platformAutomation) {
+        // Clear any existing timeout
+        if (this.initializationTimeout) {
+          clearTimeout(this.initializationTimeout);
+          this.initializationTimeout = null;
+        }
+
+        // Update config and session context
+        this.config = { ...this.config, ...request.config };
+
+        // NEW: Update session context if provided
+        if (request.sessionContext) {
+          this.sessionContext = {
+            ...this.sessionContext,
+            ...request.sessionContext,
+          };
+          this.storeSessionContextInStorage(this.sessionContext);
+
+          // Pass updated context to platform automation
+          await this.platformAutomation.setSessionContext(this.sessionContext);
+        }
+
+        this.log(
+          `🤖 Starting automation for ${this.platform} with config:`,
+          this.config
+        );
+        this.log("🚀 Starting platform automation in content script");
+        await this.platformAutomation.start(this.config);
+
+        sendResponse({
+          success: true,
+          message: "Automation started in content script",
+        });
+      } else {
+        sendResponse({
+          success: false,
+          error: "Platform automation not initialized",
+        });
+      }
+    } catch (error) {
+      this.log(`❌ Error starting automation: ${error.message}`);
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  notifyBackgroundReady() {
+    this.sendMessageToBackground({
+      action: "contentScriptReady",
+      sessionId: this.sessionId,
+      platform: this.platform,
+      userId: this.userId,
+      url: window.location.href,
+      sessionContext: this.sessionContext, // Include full context
+    }).catch(console.error);
+  }
+
+  // Add method to handle session context updates
+  async updateSessionContext(newContext) {
+    this.sessionContext = { ...this.sessionContext, ...newContext };
+    this.storeSessionContextInStorage(this.sessionContext);
+
+    if (this.platformAutomation && this.platformAutomation.setSessionContext) {
+      await this.platformAutomation.setSessionContext(this.sessionContext);
     }
   }
 
