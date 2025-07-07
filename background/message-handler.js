@@ -1,7 +1,6 @@
 import AutomationOrchestrator from "../core/automation-orchestrator.js";
 import SessionManager from "./session-manager.js";
 import WindowManager from "./window-manager.js";
-
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -14,8 +13,8 @@ export default class MessageHandler {
     this.platformHandlers = new Map(); // platform -> handler instance
     
     // NEW: Tab session tracking
-    this.tabSessions = new Map(); // tabId -> sessionData
-    this.windowSessions = new Map(); // windowId -> sessionId
+    this.tabSessions = new Map();
+    this.windowSessions = new Map();
     
     // Pending requests tracking
     this.pendingRequests = new Set();
@@ -75,6 +74,7 @@ export default class MessageHandler {
   }
 
   async handleTabUpdated(tab) {
+    console.log(this.tabSessions, this.windowSessions)
     // Inject session context into automation tabs
     const sessionData = this.tabSessions.get(tab.id);
     if (sessionData && tab.url) {
@@ -455,122 +455,6 @@ export default class MessageHandler {
     }
 
     return true;
-  }
-
-  async handleStartApplying(request, sendResponse) {
-    try {
-      console.log("📨 Start applying request received:", request);
-
-      const validation = this.validateStartApplyingRequest(request);
-      if (!validation.valid) {
-        sendResponse({
-          status: "error",
-          message: validation.error,
-        });
-        return;
-      }
-
-      const {
-        platform,
-        userId,
-        jobsToApply,
-        submittedLinks = [],
-        devMode = false,
-        country = "US",
-        userPlan,
-        userCredits,
-        dailyRemaining,
-        resumeUrl,
-        coverLetterTemplate,
-        preferences = {},
-        apiHost = "http://localhost:3000",
-      } = request;
-
-      // Create automation session
-      const sessionId = await this.sessionManager.createSession({
-        userId,
-        platform,
-        jobsToApply,
-        submittedLinks,
-        userPlan,
-        userCredits,
-        dailyRemaining,
-        startTime: Date.now(),
-        status: "starting",
-      });
-
-      // Start automation using orchestrator
-      const result = await this.orchestrator.startAutomation({
-        sessionId,
-        platform,
-        userId,
-        jobsToApply,
-        submittedLinks,
-        devMode,
-        country,
-        userPlan,
-        userCredits,
-        dailyRemaining,
-        resumeUrl,
-        coverLetterTemplate,
-        preferences,
-        apiHost
-      });
-
-      if (result.success) {
-        // Initialize platform-specific automation state
-        const automationInstance = result.automationInstance;
-        
-        // Set up platform-specific state
-        automationInstance.platformState = {
-          isProcessingJob: false,
-          currentJobUrl: null,
-          currentJobTabId: null,
-          applicationStartTime: null,
-          submittedLinks: submittedLinks || [],
-          searchTabId: null,
-          searchData: {
-            limit: jobsToApply,
-            current: 0,
-            domain: this.getPlatformDomains(platform),
-            searchLinkPattern: this.getPlatformLinkPattern(platform)
-          }
-        };
-
-        this.activeAutomations.set(sessionId, automationInstance);
-
-        sendResponse({
-          status: "started",
-          platform: platform,
-          sessionId: sessionId,
-          windowId: result.windowId,
-          message: `Job search started for ${platform}! Applying to ${jobsToApply} jobs.`,
-        });
-
-        this.notifyFrontend({
-          type: "automation_started",
-          sessionId,
-          platform,
-          jobsToApply,
-        });
-      } else {
-        await this.sessionManager.updateSession(sessionId, {
-          status: "failed",
-          error: result.error,
-        });
-
-        sendResponse({
-          status: "error",
-          message: result.error || "Failed to start automation",
-        });
-      }
-    } catch (error) {
-      console.error("Error in handleStartApplying:", error);
-      sendResponse({
-        status: "error",
-        message: "An unexpected error occurred while starting automation",
-      });
-    }
   }
 
   // Get platform-specific domains
