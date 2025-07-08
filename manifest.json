@@ -89,7 +89,8 @@
         "services/index.js",
         "ui/styles/automation.css",
         "ui/components/*.js",
-        "platforms/*/config.json"
+        "platforms/*/config.json",
+        "utils/mark-links.js"
       ],
       "matches": [
         "https://www.linkedin.com/*",

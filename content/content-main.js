@@ -88,7 +88,6 @@ class ContentScriptManager {
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
     
-    console.log(sessionId, platform, userId);
     if (sessionId && platform) {
       console.log("🔍 Automation window detected via sessionStorage");
       window.automationSessionId = sessionId;
@@ -104,7 +103,7 @@ class ContentScriptManager {
         action: "checkIfAutomationWindow",
         tabId: await this.getTabId(),
       });
-      console.log(response)
+
       if (response && response.isAutomationWindow) {
         console.log("🔍 Automation window detected via background script");
         window.isAutomationWindow = true;
