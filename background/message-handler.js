@@ -8,43 +8,30 @@ export default class MessageHandler {
     this.orchestrator = new AutomationOrchestrator();
     this.sessionManager = new SessionManager();
     this.windowManager = new WindowManager();
-    
-    // Platform automation state management
-    this.activeAutomations = new Map(); // sessionId -> automation state
-    this.portConnections = new Map(); // tabId -> port
-    this.platformHandlers = new Map(); // platform -> handler instance
-    
-    // NEW: Tab session tracking
+
+    this.activeAutomations = new Map();
+    this.portConnections = new Map();
+    this.platformHandlers = new Map();
     this.tabSessions = new Map();
     this.windowSessions = new Map();
-    
-    // Pending requests tracking
     this.pendingRequests = new Set();
-    
-    // Set up port-based communication
+
     this.setupPortHandlers();
-    
-    // Initialize platform handlers
     this.initializePlatformHandlers();
-    
-    // Listen for tab creation to inject session context
     this.setupTabListeners();
   }
 
   setupTabListeners() {
-    // Track new tabs created during automation
     chrome.tabs.onCreated.addListener((tab) => {
       this.handleTabCreated(tab);
     });
 
-    // Track tab updates for session context injection
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-      if (changeInfo.status === 'complete') {
+      if (changeInfo.status === "complete") {
         this.handleTabUpdated(tab);
       }
     });
 
-    // Clean up when tabs are closed
     chrome.tabs.onRemoved.addListener((tabId) => {
       this.tabSessions.delete(tabId);
       this.portConnections.delete(tabId);
@@ -52,35 +39,46 @@ export default class MessageHandler {
   }
 
   handleTabCreated(tab) {
-    // Check if this tab was created in an automation window
     const sessionId = this.windowSessions.get(tab.windowId);
     if (sessionId) {
-      console.log(`🆕 New tab ${tab.id} created in automation window ${tab.windowId}`);
-      
+      console.log(
+        `🆕 New tab ${tab.id} created in automation window ${tab.windowId}`
+      );
+
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        // Store session context for this tab
-        this.tabSessions.set(tab.id, {
+        const sessionContext = {
           sessionId: sessionId,
           platform: automation.platform,
           userId: automation.userId,
           windowId: tab.windowId,
           isAutomationTab: true,
           createdAt: Date.now(),
-          parentSessionId: sessionId
+          parentSessionId: sessionId,
+          // FIXED: Include user profile and session config
+          userProfile: automation.userProfile,
+          sessionConfig: automation.sessionConfig,
+          apiHost: automation.sessionConfig?.apiHost,
+          preferences: automation.sessionConfig?.preferences || {},
+        };
+
+        this.tabSessions.set(tab.id, sessionContext);
+
+        console.log(`✅ Session context stored for tab ${tab.id}:`, {
+          sessionId,
+          platform: automation.platform,
+          hasUserProfile: !!sessionContext.userProfile,
+          hasSessionConfig: !!sessionContext.sessionConfig,
         });
-        
-        console.log(`✅ Session context stored for tab ${tab.id}:`, this.tabSessions.get(tab.id));
       }
     }
   }
 
   async handleTabUpdated(tab) {
-    // Inject session context into automation tabs
     const sessionData = this.tabSessions.get(tab.id);
     if (sessionData && tab.url) {
       try {
-        // Inject session context via executeScript
+        // Inject comprehensive session context
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: (sessionData) => {
@@ -91,38 +89,76 @@ export default class MessageHandler {
             window.isAutomationWindow = true;
             window.isAutomationTab = true;
             window.parentSessionId = sessionData.parentSessionId;
-            
+
+            // FIXED: Store user profile and session config
+            if (sessionData.userProfile) {
+              window.automationUserProfile = sessionData.userProfile;
+            }
+            if (sessionData.sessionConfig) {
+              window.automationSessionConfig = sessionData.sessionConfig;
+            }
+            if (sessionData.apiHost) {
+              window.automationApiHost = sessionData.apiHost;
+            }
+
             // Also store in sessionStorage
-            sessionStorage.setItem('automationSessionId', sessionData.sessionId);
-            sessionStorage.setItem('automationPlatform', sessionData.platform);
-            sessionStorage.setItem('automationUserId', sessionData.userId);
-            sessionStorage.setItem('isAutomationWindow', 'true');
-            sessionStorage.setItem('isAutomationTab', 'true');
-            sessionStorage.setItem('parentSessionId', sessionData.parentSessionId);
-            
-            console.log('🔧 Session context injected into tab:', sessionData);
+            sessionStorage.setItem(
+              "automationSessionId",
+              sessionData.sessionId
+            );
+            sessionStorage.setItem("automationPlatform", sessionData.platform);
+            sessionStorage.setItem("automationUserId", sessionData.userId);
+            sessionStorage.setItem("isAutomationWindow", "true");
+            sessionStorage.setItem("isAutomationTab", "true");
+            sessionStorage.setItem(
+              "parentSessionId",
+              sessionData.parentSessionId
+            );
+
+            // FIXED: Store additional context in sessionStorage
+            if (sessionData.userProfile) {
+              sessionStorage.setItem(
+                "automationUserProfile",
+                JSON.stringify(sessionData.userProfile)
+              );
+            }
+            if (sessionData.sessionConfig) {
+              sessionStorage.setItem(
+                "automationSessionConfig",
+                JSON.stringify(sessionData.sessionConfig)
+              );
+            }
+            if (sessionData.apiHost) {
+              sessionStorage.setItem("automationApiHost", sessionData.apiHost);
+            }
+
+            console.log("🔧 Enhanced session context injected into tab:", {
+              sessionId: sessionData.sessionId,
+              platform: sessionData.platform,
+              hasUserProfile: !!sessionData.userProfile,
+              hasSessionConfig: !!sessionData.sessionConfig,
+            });
           },
-          args: [sessionData]
+          args: [sessionData],
         });
-        
-        console.log(`✅ Session context injected into tab ${tab.id}`);
+
+        console.log(`✅ Enhanced session context injected into tab ${tab.id}`);
       } catch (error) {
-        console.warn(`⚠️ Failed to inject session context into tab ${tab.id}:`, error);
+        console.warn(
+          `⚠️ Failed to inject session context into tab ${tab.id}:`,
+          error
+        );
       }
     }
   }
 
-  // Enhanced handleStartApplying to track window sessions
   async handleStartApplying(request, sendResponse) {
     try {
       console.log("📨 Start applying request received:", request);
 
       const validation = this.validateStartApplyingRequest(request);
       if (!validation.valid) {
-        sendResponse({
-          status: "error",
-          message: validation.error,
-        });
+        sendResponse({ status: "error", message: validation.error });
         return;
       }
 
@@ -142,6 +178,26 @@ export default class MessageHandler {
         apiHost = "http://localhost:3000",
       } = request;
 
+      // FIXED: Fetch user profile data before starting automation
+      let userProfile = null;
+      try {
+        console.log(`📡 Fetching user profile for user ${userId}`);
+
+        const response = await fetch(`${apiHost}/api/user/${userId}`);
+        if (response.ok) {
+          userProfile = await response.json();
+          console.log(`✅ User profile fetched successfully:`, {
+            hasProfile: !!userProfile,
+            name: userProfile?.name || userProfile?.firstName,
+            email: userProfile?.email,
+          });
+        } else {
+          console.warn(`⚠️ Failed to fetch user profile: ${response.status}`);
+        }
+      } catch (error) {
+        console.error(`❌ Error fetching user profile:`, error);
+      }
+
       // Create automation session
       const sessionId = await this.sessionManager.createSession({
         userId,
@@ -151,6 +207,7 @@ export default class MessageHandler {
         userPlan,
         userCredits,
         dailyRemaining,
+        userProfile,
         startTime: Date.now(),
         status: "starting",
       });
@@ -160,6 +217,7 @@ export default class MessageHandler {
         sessionId,
         platform,
         userId,
+        userProfile, // FIXED: Pass user profile to orchestrator
         jobsToApply,
         submittedLinks,
         devMode,
@@ -170,16 +228,24 @@ export default class MessageHandler {
         resumeUrl,
         coverLetterTemplate,
         preferences,
-        apiHost
+        apiHost,
       });
 
       if (result.success) {
         const automationInstance = result.automationInstance;
-        
-        // Store automation instance
+
         automationInstance.platform = platform;
         automationInstance.userId = userId;
-        
+        automationInstance.userProfile = userProfile; // FIXED: Ensure user profile is stored
+        automationInstance.sessionConfig = {
+          sessionId,
+          platform,
+          userId,
+          userProfile,
+          apiHost,
+          preferences,
+        };
+
         // Set up platform-specific state
         automationInstance.platformState = {
           isProcessingJob: false,
@@ -192,15 +258,20 @@ export default class MessageHandler {
             limit: jobsToApply,
             current: 0,
             domain: this.getPlatformDomains(platform),
-            searchLinkPattern: this.getPlatformLinkPattern(platform)
-          }
+            searchLinkPattern: this.getPlatformLinkPattern(platform),
+          },
         };
 
         this.activeAutomations.set(sessionId, automationInstance);
-        
         this.windowSessions.set(result.windowId, sessionId);
-        
-        console.log(`🪟 Window ${result.windowId} mapped to session ${sessionId}`);
+
+        console.log(
+          `🪟 Window ${result.windowId} mapped to session ${sessionId}`
+        );
+        console.log(
+          `👤 User profile stored in automation:`,
+          !!automationInstance.userProfile
+        );
 
         sendResponse({
           status: "started",
@@ -236,43 +307,64 @@ export default class MessageHandler {
     }
   }
 
-  // Enhanced handleContentScriptReady to provide session context
   handleContentScriptReady(request, sender, sendResponse) {
     const { sessionId, platform, url, userId } = request;
-    console.log(`📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`);
+    console.log(
+      `📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`
+    );
 
-    // Store tab session if not already stored
+    // Store or update tab session if not already stored
     if (sender.tab && !this.tabSessions.has(sender.tab.id)) {
-      this.tabSessions.set(sender.tab.id, {
-        sessionId: sessionId,
-        platform: platform,
-        userId: userId,
-        windowId: sender.tab.windowId,
-        isAutomationTab: true,
-        createdAt: Date.now()
-      });
+      // Try to find the automation session
+      const automation = this.activeAutomations.get(sessionId);
+      if (automation) {
+        const sessionContext = {
+          sessionId: sessionId,
+          platform: platform,
+          userId: userId,
+          windowId: sender.tab.windowId,
+          isAutomationTab: true,
+          createdAt: Date.now(),
+          userProfile: automation.userProfile,
+          sessionConfig: automation.sessionConfig,
+          apiHost: automation.sessionConfig?.apiHost,
+          preferences: automation.sessionConfig?.preferences || {},
+        };
+
+        this.tabSessions.set(sender.tab.id, sessionContext);
+        console.log(`📊 Session context stored for ready tab ${sender.tab.id}`);
+      }
     }
 
     const automation = this.activeAutomations.get(sessionId);
     if (automation && sender.tab) {
       setTimeout(async () => {
         try {
+          const sessionContext = {
+            sessionId: sessionId,
+            platform: platform,
+            userId: userId,
+            userProfile: automation.userProfile,
+            sessionConfig: automation.sessionConfig,
+            preferences: automation.sessionConfig?.preferences || {},
+            apiHost: automation.sessionConfig?.apiHost,
+          };
+
           await chrome.tabs.sendMessage(sender.tab.id, {
             action: "startAutomation",
             sessionId: sessionId,
             config: automation.getConfig(),
-            sessionContext: {
-              sessionId: sessionId,
-              platform: platform,
-              userId: userId,
-              userProfile: automation.userProfile,
-              preferences: automation.preferences || {},
-              apiHost: automation.apiHost
-            }
+            sessionContext: sessionContext,
           });
-          console.log(`📤 Sent start message with context to content script for session ${sessionId}`);
+
+          console.log(
+            `📤 Sent start message with full context to content script for session ${sessionId}`
+          );
         } catch (error) {
-          console.error(`❌ Failed to send start message to content script:`, error);
+          console.error(
+            `❌ Failed to send start message to content script:`,
+            error
+          );
         }
       }, 1000);
     }
@@ -291,15 +383,15 @@ export default class MessageHandler {
       sessionId: sessionData.sessionId,
       platform: sessionData.platform,
       userId: sessionData.userId,
-      userProfile: automation.userProfile,
-      preferences: automation.preferences || {},
-      apiHost: automation.apiHost,
-      sessionConfig: automation.sessionConfig
+      userProfile: automation.userProfile, // FIXED: Ensure user profile is included
+      sessionConfig: automation.sessionConfig,
+      preferences: automation.sessionConfig?.preferences || {},
+      apiHost: automation.sessionConfig?.apiHost,
     };
   }
 
   initializePlatformHandlers() {
-    this.platformHandlers.set('lever', new LeverAutomationHandler(this));
+    this.platformHandlers.set("lever", new LeverAutomationHandler(this));
     // this.platformHandlers.set('workable', new WorkableAutomationHandler(this));
     // this.platformHandlers.set('recruitee', new RecruiteeAutomationHandler(this));
   }
@@ -307,13 +399,12 @@ export default class MessageHandler {
   setupPortHandlers() {
     chrome.runtime.onConnect.addListener((port) => {
       console.log("📨 New port connection established:", port.name);
-      
-      // Determine platform from port name (e.g., "lever-search-123", "workable-apply-456")
-      const portParts = port.name.split('-');
+
+      const portParts = port.name.split("-");
       if (portParts.length >= 3) {
         const platform = portParts[0];
         const handler = this.platformHandlers.get(platform);
-        
+
         if (handler) {
           handler.handlePortConnection(port);
         } else {
@@ -326,22 +417,22 @@ export default class MessageHandler {
   async handlePlatformPortMessage(message, port, platform) {
     try {
       console.log(`📨 ${platform} port message received:`, message);
-      
+
       const handler = this.platformHandlers.get(platform);
       if (handler) {
         await handler.handlePortMessage(message, port);
       } else {
         console.error(`No handler for platform: ${platform}`);
         this.sendPortResponse(port, {
-          type: 'ERROR',
-          message: `Unsupported platform: ${platform}`
+          type: "ERROR",
+          message: `Unsupported platform: ${platform}`,
         });
       }
     } catch (error) {
       console.error(`❌ Error handling ${platform} port message:`, error);
       this.sendPortResponse(port, {
-        type: 'ERROR',
-        message: error.message
+        type: "ERROR",
+        message: error.message,
       });
     }
   }
@@ -358,26 +449,26 @@ export default class MessageHandler {
 
   normalizeUrl(url) {
     try {
-      if (!url) return '';
-      
-      if (!url.startsWith('http')) {
-        url = 'https://' + url;
+      if (!url) return "";
+
+      if (!url.startsWith("http")) {
+        url = "https://" + url;
       }
-      
-      url = url.replace(/\/apply$/, '');
-      
+
+      url = url.replace(/\/apply$/, "");
+
       const urlObj = new URL(url);
       return (urlObj.origin + urlObj.pathname)
         .toLowerCase()
         .trim()
-        .replace(/\/+$/, '');
+        .replace(/\/+$/, "");
     } catch (e) {
       console.warn("⚠️ Error normalizing URL:", e);
       return url.toLowerCase().trim();
     }
   }
 
-    // Handle messages from your frontend web application
+  // Handle messages from your frontend web application
   handleExternalMessage(request, sender, sendResponse) {
     console.log("📨 External message received:", request);
 
@@ -453,13 +544,13 @@ export default class MessageHandler {
   // Get platform-specific domains
   getPlatformDomains(platform) {
     const domainMap = {
-      lever: ['https://jobs.lever.co'],
-      workable: ['https://apply.workable.com', 'https://jobs.workable.com'],
-      recruitee: ['https://recruitee.com'],
-      greenhouse: ['https://boards.greenhouse.io'],
+      lever: ["https://jobs.lever.co"],
+      workable: ["https://apply.workable.com", "https://jobs.workable.com"],
+      recruitee: ["https://recruitee.com"],
+      greenhouse: ["https://boards.greenhouse.io"],
       // Add more platforms as needed
     };
-    
+
     return domainMap[platform] || [];
   }
 
@@ -469,10 +560,11 @@ export default class MessageHandler {
       lever: /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/,
       workable: /^https:\/\/apply\.workable\.com\/[^\/]+\/[^\/]+\/?.*$/,
       recruitee: /^https:\/\/.*\.recruitee\.com\/o\/[^\/]+\/?.*$/,
-      greenhouse: /^https:\/\/boards\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+\/?.*$/,
+      greenhouse:
+        /^https:\/\/boards\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+\/?.*$/,
       // Add more platforms as needed
     };
-    
+
     return patternMap[platform] || null;
   }
 
@@ -490,9 +582,14 @@ export default class MessageHandler {
             sessionId: sessionId,
             config: automation.getConfig(),
           });
-          console.log(`📤 Sent start message to content script for session ${sessionId}`);
+          console.log(
+            `📤 Sent start message to content script for session ${sessionId}`
+          );
         } catch (error) {
-          console.error(`❌ Failed to send start message to content script:`, error);
+          console.error(
+            `❌ Failed to send start message to content script:`,
+            error
+          );
         }
       }, 1000);
     }
@@ -654,13 +751,15 @@ export default class MessageHandler {
       "workday",
       "lever",
       "workable",
-      "greenhouse"
+      "greenhouse",
     ];
-    
+
     if (!supportedPlatforms.includes(request.platform)) {
       return {
         valid: false,
-        error: `Unsupported platform: ${request.platform}. Supported platforms: ${supportedPlatforms.join(", ")}`,
+        error: `Unsupported platform: ${
+          request.platform
+        }. Supported platforms: ${supportedPlatforms.join(", ")}`,
       };
     }
 
@@ -671,7 +770,9 @@ export default class MessageHandler {
   async handleWindowClosed(windowId) {
     for (const [sessionId, automation] of this.activeAutomations.entries()) {
       if (automation.windowId === windowId) {
-        console.log(`🪟 Window ${windowId} closed, stopping automation ${sessionId}`);
+        console.log(
+          `🪟 Window ${windowId} closed, stopping automation ${sessionId}`
+        );
         await automation.stop();
         this.activeAutomations.delete(sessionId);
 
@@ -708,16 +809,16 @@ export default class MessageHandler {
 //     const portNameParts = port.name.split('-');
 //     const portType = portNameParts[1]; // 'search' or 'apply'
 //     const tabId = parseInt(portNameParts[2]) || port.sender?.tab?.id;
-    
+
 //     if (tabId) {
 //       this.portConnections.set(tabId, port);
 //       console.log(`📝 Registered Lever ${portType} port for tab ${tabId}`);
 //     }
-    
+
 //     port.onMessage.addListener((message) => {
 //       this.handlePortMessage(message, port);
 //     });
-    
+
 //     port.onDisconnect.addListener(() => {
 //       console.log("📪 Lever port disconnected:", port.name);
 //       if (tabId) {
@@ -734,43 +835,43 @@ export default class MessageHandler {
 //       case 'GET_SEARCH_TASK':
 //         await this.handleGetSearchTask(port, data);
 //         break;
-        
+
 //       case 'GET_SEND_CV_TASK':
 //         await this.handleGetSendCvTask(port, data);
 //         break;
-        
+
 //       case 'SEND_CV_TASK':
 //         await this.handleSendCvTask(port, data);
 //         break;
-        
+
 //       case 'SEND_CV_TASK_DONE':
 //         await this.handleSendCvTaskDone(port, data);
 //         break;
-        
+
 //       case 'SEND_CV_TASK_ERROR':
 //         await this.handleSendCvTaskError(port, data);
 //         break;
-        
+
 //       case 'SEND_CV_TASK_SKIP':
 //         await this.handleSendCvTaskSkip(port, data);
 //         break;
-        
+
 //       case 'SEARCH_TASK_DONE':
 //         await this.handleSearchTaskDone(port, data);
 //         break;
-        
+
 //       case 'VERIFY_APPLICATION_STATUS':
 //         await this.handleVerifyApplicationStatus(port, data);
 //         break;
-        
+
 //       case 'CHECK_JOB_TAB_STATUS':
 //         await this.handleCheckJobTabStatus(port, data);
 //         break;
-        
+
 //       case 'SEARCH_NEXT_READY':
 //         await this.handleSearchNextReady(port, data);
 //         break;
-        
+
 //       default:
 //         console.log(`❓ Unhandled Lever port message type: ${type}`);
 //         this.messageHandler.sendPortResponse(port, {
@@ -783,7 +884,7 @@ export default class MessageHandler {
 //   async handleGetSearchTask(port, data) {
 //     const tabId = port.sender?.tab?.id;
 //     const windowId = port.sender?.tab?.windowId;
-    
+
 //     let sessionData = null;
 //     for (const [sessionId, automation] of this.messageHandler.activeAutomations.entries()) {
 //       if (automation.windowId === windowId) {
@@ -796,13 +897,13 @@ export default class MessageHandler {
 //           submittedLinks: platformState.submittedLinks || [],
 //           searchLinkPattern: platformState.searchData.searchLinkPattern.toString()
 //         };
-        
+
 //         // Update search tab ID
 //         platformState.searchTabId = tabId;
 //         break;
 //       }
 //     }
-    
+
 //     this.messageHandler.sendPortResponse(port, {
 //       type: 'SUCCESS',
 //       data: sessionData || {}
@@ -812,7 +913,7 @@ export default class MessageHandler {
 //   async handleGetSendCvTask(port, data) {
 //     const tabId = port.sender?.tab?.id;
 //     const windowId = port.sender?.tab?.windowId;
-    
+
 //     let sessionData = null;
 //     for (const [sessionId, automation] of this.messageHandler.activeAutomations.entries()) {
 //       if (automation.windowId === windowId) {
@@ -825,7 +926,7 @@ export default class MessageHandler {
 //         break;
 //       }
 //     }
-    
+
 //     this.messageHandler.sendPortResponse(port, {
 //       type: 'SUCCESS',
 //       data: sessionData || {}
@@ -836,9 +937,9 @@ export default class MessageHandler {
 //     try {
 //       const { url, title } = data;
 //       const windowId = port.sender?.tab?.windowId;
-      
+
 //       console.log(`🎯 Opening Lever job in new tab: ${url}`);
-      
+
 //       let automation = null;
 //       for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
 //         if (auto.windowId === windowId) {
@@ -846,11 +947,11 @@ export default class MessageHandler {
 //           break;
 //         }
 //       }
-      
+
 //       if (!automation) {
 //         throw new Error('No automation session found');
 //       }
-      
+
 //       if (automation.platformState.isProcessingJob) {
 //         this.messageHandler.sendPortResponse(port, {
 //           type: 'ERROR',
@@ -858,10 +959,10 @@ export default class MessageHandler {
 //         });
 //         return;
 //       }
-      
+
 //       // Check for duplicates
 //       const normalizedUrl = this.messageHandler.normalizeUrl(url);
-//       if (automation.platformState.submittedLinks?.some(link => 
+//       if (automation.platformState.submittedLinks?.some(link =>
 //         this.messageHandler.normalizeUrl(link.url) === normalizedUrl)) {
 //         this.messageHandler.sendPortResponse(port, {
 //           type: 'DUPLICATE',
@@ -870,20 +971,20 @@ export default class MessageHandler {
 //         });
 //         return;
 //       }
-      
+
 //       // Create new tab for job application
 //       const tab = await chrome.tabs.create({
 //         url: url.endsWith('/apply') ? url : url + '/apply',
 //         windowId: windowId,
 //         active: true
 //       });
-      
+
 //       // Update automation state
 //       automation.platformState.isProcessingJob = true;
 //       automation.platformState.currentJobUrl = url;
 //       automation.platformState.currentJobTabId = tab.id;
 //       automation.platformState.applicationStartTime = Date.now();
-      
+
 //       // Add to submitted links
 //       if (!automation.platformState.submittedLinks) {
 //         automation.platformState.submittedLinks = [];
@@ -893,14 +994,14 @@ export default class MessageHandler {
 //         status: 'PROCESSING',
 //         timestamp: Date.now()
 //       });
-      
+
 //       this.messageHandler.sendPortResponse(port, {
 //         type: 'SUCCESS',
 //         message: 'Apply tab will be created'
 //       });
-      
+
 //       console.log(`✅ Lever job tab created: ${tab.id} for URL: ${url}`);
-      
+
 //     } catch (error) {
 //       console.error("❌ Error handling Lever SEND_CV_TASK:", error);
 //       this.messageHandler.sendPortResponse(port, {
@@ -914,9 +1015,9 @@ export default class MessageHandler {
 //     try {
 //       const windowId = port.sender?.tab?.windowId;
 //       const tabId = port.sender?.tab?.id;
-      
+
 //       console.log(`✅ Lever job application completed successfully in tab ${tabId}`);
-      
+
 //       let automation = null;
 //       for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
 //         if (auto.windowId === windowId) {
@@ -924,18 +1025,18 @@ export default class MessageHandler {
 //           break;
 //         }
 //       }
-      
+
 //       if (automation) {
 //         const url = automation.platformState.currentJobUrl;
 //         if (url && automation.platformState.submittedLinks) {
-//           const linkIndex = automation.platformState.submittedLinks.findIndex(link => 
+//           const linkIndex = automation.platformState.submittedLinks.findIndex(link =>
 //             this.messageHandler.normalizeUrl(link.url) === this.messageHandler.normalizeUrl(url));
 //           if (linkIndex >= 0) {
 //             automation.platformState.submittedLinks[linkIndex].status = 'SUCCESS';
 //             automation.platformState.submittedLinks[linkIndex].details = data;
 //           }
 //         }
-        
+
 //         // Close the job tab
 //         if (automation.platformState.currentJobTabId) {
 //           try {
@@ -944,17 +1045,17 @@ export default class MessageHandler {
 //             console.warn("⚠️ Error closing job tab:", error);
 //           }
 //         }
-        
+
 //         // Reset processing state
 //         automation.platformState.isProcessingJob = false;
 //         const oldUrl = automation.platformState.currentJobUrl;
 //         automation.platformState.currentJobUrl = null;
 //         automation.platformState.currentJobTabId = null;
 //         automation.platformState.applicationStartTime = null;
-        
+
 //         // Increment current count
 //         automation.platformState.searchData.current++;
-        
+
 //         // Notify search tab to continue
 //         await this.sendSearchNextMessage(windowId, {
 //           url: oldUrl,
@@ -962,12 +1063,12 @@ export default class MessageHandler {
 //           data: data
 //         });
 //       }
-      
+
 //       this.messageHandler.sendPortResponse(port, {
 //         type: 'SUCCESS',
 //         message: 'Application completed'
 //       });
-      
+
 //     } catch (error) {
 //       console.error("❌ Error handling Lever SEND_CV_TASK_DONE:", error);
 //       this.messageHandler.sendPortResponse(port, {
@@ -981,9 +1082,9 @@ export default class MessageHandler {
 //     try {
 //       const windowId = port.sender?.tab?.windowId;
 //       const tabId = port.sender?.tab?.id;
-      
+
 //       console.log(`❌ Lever job application failed in tab ${tabId}:`, data);
-      
+
 //       let automation = null;
 //       for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
 //         if (auto.windowId === windowId) {
@@ -991,18 +1092,18 @@ export default class MessageHandler {
 //           break;
 //         }
 //       }
-      
+
 //       if (automation) {
 //         const url = automation.platformState.currentJobUrl;
 //         if (url && automation.platformState.submittedLinks) {
-//           const linkIndex = automation.platformState.submittedLinks.findIndex(link => 
+//           const linkIndex = automation.platformState.submittedLinks.findIndex(link =>
 //             this.messageHandler.normalizeUrl(link.url) === this.messageHandler.normalizeUrl(url));
 //           if (linkIndex >= 0) {
 //             automation.platformState.submittedLinks[linkIndex].status = 'ERROR';
 //             automation.platformState.submittedLinks[linkIndex].error = data;
 //           }
 //         }
-        
+
 //         if (automation.platformState.currentJobTabId) {
 //           try {
 //             await chrome.tabs.remove(automation.platformState.currentJobTabId);
@@ -1010,25 +1111,25 @@ export default class MessageHandler {
 //             console.warn("⚠️ Error closing job tab:", error);
 //           }
 //         }
-        
+
 //         automation.platformState.isProcessingJob = false;
 //         const oldUrl = automation.platformState.currentJobUrl;
 //         automation.platformState.currentJobUrl = null;
 //         automation.platformState.currentJobTabId = null;
 //         automation.platformState.applicationStartTime = null;
-        
+
 //         await this.sendSearchNextMessage(windowId, {
 //           url: oldUrl,
 //           status: 'ERROR',
 //           message: typeof data === 'string' ? data : 'Application error'
 //         });
 //       }
-      
+
 //       this.messageHandler.sendPortResponse(port, {
 //         type: 'SUCCESS',
 //         message: 'Error acknowledged'
 //       });
-      
+
 //     } catch (error) {
 //       console.error("❌ Error handling Lever SEND_CV_TASK_ERROR:", error);
 //     }
@@ -1038,9 +1139,9 @@ export default class MessageHandler {
 //     try {
 //       const windowId = port.sender?.tab?.windowId;
 //       const tabId = port.sender?.tab?.id;
-      
+
 //       console.log(`⏭️ Lever job application skipped in tab ${tabId}:`, data);
-      
+
 //       let automation = null;
 //       for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
 //         if (auto.windowId === windowId) {
@@ -1048,18 +1149,18 @@ export default class MessageHandler {
 //           break;
 //         }
 //       }
-      
+
 //       if (automation) {
 //         const url = automation.platformState.currentJobUrl;
 //         if (url && automation.platformState.submittedLinks) {
-//           const linkIndex = automation.platformState.submittedLinks.findIndex(link => 
+//           const linkIndex = automation.platformState.submittedLinks.findIndex(link =>
 //             this.messageHandler.normalizeUrl(link.url) === this.messageHandler.normalizeUrl(url));
 //           if (linkIndex >= 0) {
 //             automation.platformState.submittedLinks[linkIndex].status = 'SKIPPED';
 //             automation.platformState.submittedLinks[linkIndex].reason = data;
 //           }
 //         }
-        
+
 //         if (automation.platformState.currentJobTabId) {
 //           try {
 //             await chrome.tabs.remove(automation.platformState.currentJobTabId);
@@ -1067,25 +1168,25 @@ export default class MessageHandler {
 //             console.warn("⚠️ Error closing job tab:", error);
 //           }
 //         }
-        
+
 //         automation.platformState.isProcessingJob = false;
 //         const oldUrl = automation.platformState.currentJobUrl;
 //         automation.platformState.currentJobUrl = null;
 //         automation.platformState.currentJobTabId = null;
 //         automation.platformState.applicationStartTime = null;
-        
+
 //         await this.sendSearchNextMessage(windowId, {
 //           url: oldUrl,
 //           status: 'SKIPPED',
 //           message: data
 //         });
 //       }
-      
+
 //       this.messageHandler.sendPortResponse(port, {
 //         type: 'SUCCESS',
 //         message: 'Skip acknowledged'
 //       });
-      
+
 //     } catch (error) {
 //       console.error("❌ Error handling Lever SEND_CV_TASK_SKIP:", error);
 //     }
@@ -1093,7 +1194,7 @@ export default class MessageHandler {
 
 //   async handleVerifyApplicationStatus(port, data) {
 //     const windowId = port.sender?.tab?.windowId;
-    
+
 //     let automation = null;
 //     for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
 //       if (auto.windowId === windowId) {
@@ -1101,9 +1202,9 @@ export default class MessageHandler {
 //         break;
 //       }
 //     }
-    
+
 //     const isActive = automation ? automation.platformState.isProcessingJob : false;
-    
+
 //     this.messageHandler.sendPortResponse(port, {
 //       type: 'APPLICATION_STATUS_RESPONSE',
 //       data: {
@@ -1116,7 +1217,7 @@ export default class MessageHandler {
 
 //   async handleCheckJobTabStatus(port, data) {
 //     const windowId = port.sender?.tab?.windowId;
-    
+
 //     let automation = null;
 //     for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
 //       if (auto.windowId === windowId) {
@@ -1124,9 +1225,9 @@ export default class MessageHandler {
 //         break;
 //       }
 //     }
-    
+
 //     const isOpen = automation ? automation.platformState.isProcessingJob : false;
-    
+
 //     this.messageHandler.sendPortResponse(port, {
 //       type: 'JOB_TAB_STATUS',
 //       data: {
@@ -1139,7 +1240,7 @@ export default class MessageHandler {
 
 //   async handleSearchNextReady(port, data) {
 //     console.log("🔄 Lever search ready for next job");
-    
+
 //     this.messageHandler.sendPortResponse(port, {
 //       type: 'NEXT_READY_ACKNOWLEDGED',
 //       data: { status: 'success' }
@@ -1148,9 +1249,9 @@ export default class MessageHandler {
 
 //   async handleSearchTaskDone(port, data) {
 //     const windowId = port.sender?.tab?.windowId;
-    
+
 //     console.log(`🏁 Lever search task completed for window ${windowId}`);
-    
+
 //     try {
 //       chrome.notifications.create({
 //         type: 'basic',
@@ -1161,7 +1262,7 @@ export default class MessageHandler {
 //     } catch (error) {
 //       console.warn("⚠️ Error showing notification:", error);
 //     }
-    
+
 //     this.messageHandler.sendPortResponse(port, {
 //       type: 'SUCCESS',
 //       message: 'Search completion acknowledged'
@@ -1171,9 +1272,9 @@ export default class MessageHandler {
 //   async sendSearchNextMessage(windowId, data) {
 //     try {
 //       console.log(`📤 Sending SEARCH_NEXT message to Lever window ${windowId}:`, data);
-      
+
 //       const tabs = await chrome.tabs.query({ windowId: windowId });
-      
+
 //       for (const tab of tabs) {
 //         if (tab.url && tab.url.includes('google.com/search')) {
 //           const port = this.portConnections.get(tab.id);
@@ -1189,7 +1290,7 @@ export default class MessageHandler {
 //               console.warn("⚠️ Port message failed, trying tabs API:", error);
 //             }
 //           }
-          
+
 //           try {
 //             await chrome.tabs.sendMessage(tab.id, {
 //               type: 'SEARCH_NEXT',
@@ -1202,10 +1303,10 @@ export default class MessageHandler {
 //           }
 //         }
 //       }
-      
+
 //       console.warn("⚠️ Could not find Lever search tab to send SEARCH_NEXT message");
 //       return false;
-      
+
 //     } catch (error) {
 //       console.error("❌ Error sending Lever SEARCH_NEXT message:", error);
 //       return false;

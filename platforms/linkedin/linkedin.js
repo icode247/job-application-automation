@@ -1,34 +1,44 @@
-// platforms/linkedin/linkedin.js - Full code with LinkedIn-specific validation
-import BasePlatform from '../base-platform.js';
-import AIService from '../../services/ai-service.js';
-import ApplicationTrackerService from '../../services/application-tracker-service.js';
-import UserService from '../../services/user-service.js';
-import StatusNotificationService from '../../services/status-notification-service.js';
-import FileHandlerService from '../../services/file-handler-service.js';
+import BasePlatform from "../base-platform.js";
+import AIService from "../../services/ai-service.js";
+import ApplicationTrackerService from "../../services/application-tracker-service.js";
+import UserService from "../../services/user-service.js";
+import { StatusOverlay } from "../../services/index.js";
+import FileHandlerService from "../../services/file-handler-service.js";
 
 export default class LinkedInPlatform extends BasePlatform {
   constructor(config) {
     super(config);
-    this.platform = 'linkedin';
-    this.baseUrl = 'https://www.linkedin.com';
+    this.platform = "linkedin";
+    this.baseUrl = "https://www.linkedin.com";
     this.hasStarted = false;
     this.automationStarted = false;
     this.processedJobs = new Set();
     this.answerCache = new Map();
-    
+
     // Initialize services with API host
-    const apiHost = config.apiHost || config.config?.apiHost || 'https://api.yourdomain.com';
+    const apiHost =
+      config.apiHost || config.config?.apiHost || "https://api.yourdomain.com";
     this.HOST = apiHost;
-    
+
     this.aiService = new AIService({ apiHost });
-    this.appTracker = new ApplicationTrackerService({ apiHost, userId: config.userId });
+    this.appTracker = new ApplicationTrackerService({
+      apiHost,
+      userId: config.userId,
+    });
     this.userService = new UserService({ apiHost, userId: config.userId });
-    this.statusManager = new StatusNotificationService();
+
+    this.statusOverlay = new StatusOverlay({
+      id: "linkedin-status-overlay",
+      title: "LINKEDIN AUTOMATION",
+      icon: "💼",
+      position: { top: "10px", right: "10px" },
+    });
+
     this.fileHandler = new FileHandlerService({ apiHost });
-    
-    // Connect status manager to file handler for progress updates
-    this.fileHandler.setStatusManager(this.statusManager);
-    
+
+    // Connect status overlay to file handler for progress updates
+    this.fileHandler.setStatusManager(this.statusOverlay);
+
     this.log(`🔧 Services initialized with API host: ${apiHost}`);
   }
 
@@ -38,74 +48,139 @@ export default class LinkedInPlatform extends BasePlatform {
     const warnings = [];
 
     // Validate positions
-    if (!preferences.positions || !Array.isArray(preferences.positions) || preferences.positions.length === 0) {
+    if (
+      !preferences.positions ||
+      !Array.isArray(preferences.positions) ||
+      preferences.positions.length === 0
+    ) {
       errors.push("At least one job position is required");
-    } else if (preferences.positions.some(pos => !pos || typeof pos !== 'string')) {
+    } else if (
+      preferences.positions.some((pos) => !pos || typeof pos !== "string")
+    ) {
       errors.push("All positions must be non-empty strings");
     }
 
     // Validate location
     if (preferences.location && Array.isArray(preferences.location)) {
       const supportedCountries = [
-        "Nigeria", "Netherlands", "United States", "United Kingdom", 
-        "Canada", "Australia", "Germany", "France", "India", 
-        "Singapore", "South Africa", "Ireland", "New Zealand"
+        "Nigeria",
+        "Netherlands",
+        "United States",
+        "United Kingdom",
+        "Canada",
+        "Australia",
+        "Germany",
+        "France",
+        "India",
+        "Singapore",
+        "South Africa",
+        "Ireland",
+        "New Zealand",
       ];
-      
+
       const unsupportedLocations = preferences.location.filter(
-        loc => loc !== "Remote" && !supportedCountries.includes(loc)
+        (loc) => loc !== "Remote" && !supportedCountries.includes(loc)
       );
-      
+
       if (unsupportedLocations.length > 0) {
-        warnings.push(`Some locations may not have optimal filtering: ${unsupportedLocations.join(', ')}`);
+        warnings.push(
+          `Some locations may not have optimal filtering: ${unsupportedLocations.join(
+            ", "
+          )}`
+        );
       }
     }
 
     // Validate job types
     if (preferences.jobType && Array.isArray(preferences.jobType)) {
-      const validJobTypes = ["Full-time", "Part-time", "Contract", "Temporary", "Internship", "Volunteer"];
-      const invalidJobTypes = preferences.jobType.filter(type => !validJobTypes.includes(type));
-      
+      const validJobTypes = [
+        "Full-time",
+        "Part-time",
+        "Contract",
+        "Temporary",
+        "Internship",
+        "Volunteer",
+      ];
+      const invalidJobTypes = preferences.jobType.filter(
+        (type) => !validJobTypes.includes(type)
+      );
+
       if (invalidJobTypes.length > 0) {
-        errors.push(`Invalid job types: ${invalidJobTypes.join(', ')}. Valid types: ${validJobTypes.join(', ')}`);
+        errors.push(
+          `Invalid job types: ${invalidJobTypes.join(
+            ", "
+          )}. Valid types: ${validJobTypes.join(", ")}`
+        );
       }
     }
 
     // Validate experience levels
     if (preferences.experience && Array.isArray(preferences.experience)) {
-      const validExperience = ["Internship", "Entry level", "Associate", "Mid-Senior level", "Director", "Executive"];
-      const invalidExperience = preferences.experience.filter(exp => !validExperience.includes(exp));
-      
+      const validExperience = [
+        "Internship",
+        "Entry level",
+        "Associate",
+        "Mid-Senior level",
+        "Director",
+        "Executive",
+      ];
+      const invalidExperience = preferences.experience.filter(
+        (exp) => !validExperience.includes(exp)
+      );
+
       if (invalidExperience.length > 0) {
-        errors.push(`Invalid experience levels: ${invalidExperience.join(', ')}. Valid levels: ${validExperience.join(', ')}`);
+        errors.push(
+          `Invalid experience levels: ${invalidExperience.join(
+            ", "
+          )}. Valid levels: ${validExperience.join(", ")}`
+        );
       }
     }
 
     // Validate work modes
     if (preferences.workMode && Array.isArray(preferences.workMode)) {
       const validWorkModes = ["Remote", "Hybrid", "On-site"];
-      const invalidWorkModes = preferences.workMode.filter(mode => !validWorkModes.includes(mode));
-      
+      const invalidWorkModes = preferences.workMode.filter(
+        (mode) => !validWorkModes.includes(mode)
+      );
+
       if (invalidWorkModes.length > 0) {
-        errors.push(`Invalid work modes: ${invalidWorkModes.join(', ')}. Valid modes: ${validWorkModes.join(', ')}`);
+        errors.push(
+          `Invalid work modes: ${invalidWorkModes.join(
+            ", "
+          )}. Valid modes: ${validWorkModes.join(", ")}`
+        );
       }
     }
 
     // Validate date posted
     if (preferences.datePosted) {
-      const validDateOptions = ["Any time", "Past month", "Past week", "Past 24 hours", "Few Minutes Ago"];
+      const validDateOptions = [
+        "Any time",
+        "Past month",
+        "Past week",
+        "Past 24 hours",
+        "Few Minutes Ago",
+      ];
       if (!validDateOptions.includes(preferences.datePosted)) {
-        errors.push(`Invalid date posted option: ${preferences.datePosted}. Valid options: ${validDateOptions.join(', ')}`);
+        errors.push(
+          `Invalid date posted option: ${
+            preferences.datePosted
+          }. Valid options: ${validDateOptions.join(", ")}`
+        );
       }
     }
 
     // Validate salary range
     if (preferences.salary) {
-      if (!Array.isArray(preferences.salary) || preferences.salary.length !== 2) {
+      if (
+        !Array.isArray(preferences.salary) ||
+        preferences.salary.length !== 2
+      ) {
         errors.push("Salary must be an array with exactly 2 values [min, max]");
       } else {
         const [min, max] = preferences.salary;
-        if (typeof min !== 'number' || typeof max !== 'number') {
+        if (typeof min !== "number" || typeof max !== "number") {
           errors.push("Salary values must be numbers");
         } else if (min < 0 || max < 0) {
           errors.push("Salary values must be positive");
@@ -121,108 +196,148 @@ export default class LinkedInPlatform extends BasePlatform {
     if (preferences.companyRating && preferences.companyRating !== "") {
       const validRatings = ["3.0", "3.5", "4.0", "4.5"];
       if (!validRatings.includes(preferences.companyRating)) {
-        warnings.push(`Company rating ${preferences.companyRating} may not be supported. Supported ratings: ${validRatings.join(', ')}`);
+        warnings.push(
+          `Company rating ${
+            preferences.companyRating
+          } may not be supported. Supported ratings: ${validRatings.join(", ")}`
+        );
       }
     }
 
     // Validate boolean fields
-    if (preferences.remoteOnly !== undefined && typeof preferences.remoteOnly !== 'boolean') {
+    if (
+      preferences.remoteOnly !== undefined &&
+      typeof preferences.remoteOnly !== "boolean"
+    ) {
       errors.push("remoteOnly must be a boolean value");
     }
 
-    if (preferences.useCustomResume !== undefined && typeof preferences.useCustomResume !== 'boolean') {
+    if (
+      preferences.useCustomResume !== undefined &&
+      typeof preferences.useCustomResume !== "boolean"
+    ) {
       errors.push("useCustomResume must be a boolean value");
     }
 
     // Check for conflicting preferences
-    if (preferences.remoteOnly && preferences.workMode && !preferences.workMode.includes("Remote")) {
+    if (
+      preferences.remoteOnly &&
+      preferences.workMode &&
+      !preferences.workMode.includes("Remote")
+    ) {
       warnings.push("remoteOnly is true but Remote is not in workMode array");
     }
 
     return {
       isValid: errors.length === 0,
       errors,
-      warnings
+      warnings,
     };
   }
 
   // ===== USER AUTHORIZATION & SERVICES =====
   async checkUserAuthorization() {
     try {
-      this.statusManager.show("Checking user authorization...", "info");
-      
+      this.statusOverlay.addInfo("Checking user authorization...");
+
       // Check if user can apply to more jobs
       const canApply = await this.userService.canApplyMore();
       if (!canApply) {
         const remaining = await this.userService.getRemainingApplications();
         const userDetails = await this.userService.getUserDetails();
-        
-        const message = userDetails.userRole === "credit"
-          ? `Insufficient credits (${userDetails.credits} remaining)`
-          : `Daily limit reached (${remaining} applications remaining)`;
-          
-        this.statusManager.show(`Cannot apply: ${message}`, "warning");
+
+        const message =
+          userDetails.userRole === "credit"
+            ? `Insufficient credits (${userDetails.credits} remaining)`
+            : `Daily limit reached (${remaining} applications remaining)`;
+
+        this.statusOverlay.addWarning(`Cannot apply: ${message}`);
         throw new Error(`Cannot apply: ${message}`);
       }
-      
-      this.log('✅ User authorization check passed');
+
+      this.log("✅ User authorization check passed");
+      this.statusOverlay.addSuccess("User authorization check passed");
     } catch (error) {
-      this.log('❌ User authorization check failed:', error.message);
+      this.log("❌ User authorization check failed:", error.message);
+      this.statusOverlay.addError(
+        "User authorization check failed: " + error.message
+      );
       throw error;
     }
   }
 
   async initialize() {
     await super.initialize();
-    this.log('🔗 LinkedIn platform initialized');
+    this.log("🔗 LinkedIn platform initialized");
+
+    // Create status overlay
+    this.statusOverlay.create();
+    this.statusOverlay.addSuccess("LinkedIn automation initialized");
   }
 
   async start(params = {}) {
     if (this.hasStarted) {
-      this.log('⚠️ LinkedIn automation already started, ignoring duplicate start request');
+      this.log(
+        "⚠️ LinkedIn automation already started, ignoring duplicate start request"
+      );
+      this.statusOverlay.addWarning("LinkedIn automation already started");
       return;
     }
 
     this.hasStarted = true;
     this.isRunning = true;
-    this.log('🚀 Starting LinkedIn automation with user preferences');
+    this.log("🚀 Starting LinkedIn automation with user preferences");
+    this.statusOverlay.addInfo(
+      "Starting LinkedIn automation with user preferences"
+    );
 
     try {
       // Merge config properly - params contains the full config from orchestrator
       this.config = { ...this.config, ...params };
-      
+
       // Validate LinkedIn-specific preferences
-      const validation = this.validateLinkedInPreferences(this.config.preferences || {});
-      
+      const validation = this.validateLinkedInPreferences(
+        this.config.preferences || {}
+      );
+
       if (!validation.isValid) {
-        throw new Error(`Invalid LinkedIn preferences: ${validation.errors.join(', ')}`);
+        const errorMessage = `Invalid LinkedIn preferences: ${validation.errors.join(
+          ", "
+        )}`;
+        this.statusOverlay.addError(errorMessage);
+        throw new Error(errorMessage);
       }
-      
+
       if (validation.warnings.length > 0) {
-        this.log('⚠️ LinkedIn preference warnings:', validation.warnings);
+        this.log("⚠️ LinkedIn preference warnings:", validation.warnings);
+        validation.warnings.forEach((warning) =>
+          this.statusOverlay.addWarning(warning)
+        );
       }
-      
+
       // Update services with proper userId and config
       if (this.config.userId) {
-        this.appTracker = new ApplicationTrackerService({ 
-          apiHost: this.HOST, 
-          userId: this.config.userId 
+        this.appTracker = new ApplicationTrackerService({
+          apiHost: this.HOST,
+          userId: this.config.userId,
         });
-        this.userService = new UserService({ 
-          apiHost: this.HOST, 
-          userId: this.config.userId 
+        this.userService = new UserService({
+          apiHost: this.HOST,
+          userId: this.config.userId,
         });
       }
-      
-      this.log('📋 Configuration loaded with validated preferences:', {
+
+      this.log("📋 Configuration loaded with validated preferences:", {
         jobsToApply: this.config.jobsToApply,
         preferences: this.config.preferences,
         userId: this.config.userId,
-        validation: validation
+        validation: validation,
       });
 
       if (!this.config.jobsToApply || this.config.jobsToApply <= 0) {
-        throw new Error('Invalid jobsToApply configuration');
+        const errorMessage = "Invalid jobsToApply configuration";
+        this.statusOverlay.addError(errorMessage);
+        throw new Error(errorMessage);
       }
 
       // Check user authorization before starting
@@ -232,15 +347,19 @@ export default class LinkedInPlatform extends BasePlatform {
 
       // Wait for basic page readiness first
       await this.waitForPageLoad();
-      this.log('📄 Basic page loaded, current URL:', window.location.href);
+      this.log("📄 Basic page loaded, current URL:", window.location.href);
 
       // Navigate to LinkedIn Jobs with user preferences
       const currentUrl = window.location.href.toLowerCase();
-      if (!currentUrl.includes('linkedin.com/jobs')) {
-        this.log('📍 Navigating to LinkedIn Jobs with user preferences');
+      if (!currentUrl.includes("linkedin.com/jobs")) {
+        this.log("📍 Navigating to LinkedIn Jobs with user preferences");
+        this.statusOverlay.addInfo(
+          "Navigating to LinkedIn Jobs with user preferences"
+        );
         await this.navigateToLinkedInJobs();
       } else {
-        this.log('✅ Already on LinkedIn Jobs page');
+        this.log("✅ Already on LinkedIn Jobs page");
+        this.statusOverlay.addInfo("Already on LinkedIn Jobs page");
         // If already on jobs page, apply additional filters if needed
         await this.applyAdditionalFilters();
       }
@@ -250,22 +369,27 @@ export default class LinkedInPlatform extends BasePlatform {
 
       // Start processing jobs
       this.automationStarted = true;
+      this.statusOverlay.updateStatus("applying", "Processing jobs");
       await this.processJobs({ jobsToApply: this.config.jobsToApply });
-
     } catch (error) {
       this.hasStarted = false;
-      this.reportError(error, { phase: 'start' });
+      this.reportError(error, { phase: "start" });
     }
   }
 
   async navigateToLinkedInJobs() {
-    const searchUrl = await this.generateComprehensiveSearchUrl(this.config.preferences || {});
+    const searchUrl = await this.generateComprehensiveSearchUrl(
+      this.config.preferences || {}
+    );
     this.log(`🔗 Navigating to: ${searchUrl}`);
-    
+
     window.location.href = searchUrl;
     await this.delay(5000);
     await this.waitForPageLoad();
-    this.log('✅ Navigation completed with user preferences applied');
+    this.log("✅ Navigation completed with user preferences applied");
+    this.statusOverlay.addSuccess(
+      "Navigation completed with user preferences applied"
+    );
   }
 
   async generateComprehensiveSearchUrl(preferences) {
@@ -284,7 +408,7 @@ export default class LinkedInPlatform extends BasePlatform {
     // Handle location with GeoId mapping
     if (preferences.location?.length) {
       const location = preferences.location[0]; // Take first location
-      
+
       // GeoId mapping for countries
       const geoIdMap = {
         Nigeria: "105365761",
@@ -373,7 +497,7 @@ export default class LinkedInPlatform extends BasePlatform {
       Internship: "I",
       Volunteer: "V",
     };
-    
+
     if (preferences.jobType?.length) {
       const jobTypeCodes = preferences.jobType
         .map((type) => jobTypeMap[type])
@@ -411,9 +535,9 @@ export default class LinkedInPlatform extends BasePlatform {
     params.append("sortBy", "R");
 
     const finalUrl = baseUrl + params.toString();
-    this.log('🔍 Generated search URL with preferences:', {
+    this.log("🔍 Generated search URL with preferences:", {
       url: finalUrl,
-      preferences: preferences
+      preferences: preferences,
     });
 
     return finalUrl;
@@ -422,15 +546,22 @@ export default class LinkedInPlatform extends BasePlatform {
   async applyAdditionalFilters() {
     try {
       const preferences = this.config.preferences || {};
-      
+
       // Apply company rating filter if specified (requires UI interaction)
       if (preferences.companyRating && preferences.companyRating !== "") {
+        this.statusOverlay.addInfo(
+          `Applying company rating filter: ${preferences.companyRating}+`
+        );
         await this.applyCompanyRatingFilter(preferences.companyRating);
       }
 
-      this.log('✅ Additional filters applied successfully');
+      this.log("✅ Additional filters applied successfully");
+      this.statusOverlay.addSuccess("Additional filters applied successfully");
     } catch (error) {
-      this.log('⚠️ Failed to apply some additional filters:', error.message);
+      this.log("⚠️ Failed to apply some additional filters:", error.message);
+      this.statusOverlay.addWarning(
+        "Failed to apply some additional filters: " + error.message
+      );
     }
   }
 
@@ -439,13 +570,13 @@ export default class LinkedInPlatform extends BasePlatform {
       // This would require DOM manipulation to set company rating filter
       // Implementation depends on LinkedIn's current UI structure
       this.log(`🏢 Attempting to apply company rating filter: ${minRating}+`);
-      
+
       // Company rating filter is typically in the "More" filters section
       const moreFiltersButton = await this.waitForElement(
         'button[aria-label*="Show more filters"], button[data-control-name="filter_show_more"]',
         5000
       );
-      
+
       if (moreFiltersButton) {
         moreFiltersButton.click();
         await this.delay(1000);
@@ -454,7 +585,7 @@ export default class LinkedInPlatform extends BasePlatform {
         // This is a simplified implementation - actual selectors may vary
         const ratingSelector = `button[aria-label*="${minRating}"], input[value="${minRating}"]`;
         const ratingElement = await this.waitForElement(ratingSelector, 3000);
-        
+
         if (ratingElement) {
           ratingElement.click();
           await this.delay(500);
@@ -464,43 +595,51 @@ export default class LinkedInPlatform extends BasePlatform {
             'button[data-control-name="filter_show_results"]',
             3000
           );
-          
+
           if (applyButton) {
             applyButton.click();
             await this.delay(2000);
-            this.log('✅ Company rating filter applied');
+            this.log("✅ Company rating filter applied");
+            this.statusOverlay.addSuccess("Company rating filter applied");
           }
         }
       }
     } catch (error) {
-      this.log('Failed to apply company rating filter:', error.message);
+      this.log("Failed to apply company rating filter:", error.message);
+      this.statusOverlay.addWarning(
+        "Failed to apply company rating filter: " + error.message
+      );
     }
   }
 
   // Method to validate if a job matches user preferences (client-side filtering)
   doesJobMatchPreferences(jobDetails) {
     const preferences = this.config.preferences || {};
-    
+
     // Check salary range if specified
     if (preferences.salary?.length === 2) {
       const [minSalary, maxSalary] = preferences.salary;
       const jobSalary = this.extractSalaryFromJobDetails(jobDetails);
-      
+
       if (jobSalary && (jobSalary < minSalary || jobSalary > maxSalary)) {
-        this.log(`❌ Job salary ${jobSalary} outside range ${minSalary}-${maxSalary}`);
+        this.log(
+          `❌ Job salary ${jobSalary} outside range ${minSalary}-${maxSalary}`
+        );
         return false;
       }
     }
 
     // Check if positions match (basic keyword matching)
     if (preferences.positions?.length) {
-      const jobTitle = jobDetails.title?.toLowerCase() || '';
-      const hasMatchingPosition = preferences.positions.some(position => 
+      const jobTitle = jobDetails.title?.toLowerCase() || "";
+      const hasMatchingPosition = preferences.positions.some((position) =>
         jobTitle.includes(position.toLowerCase())
       );
-      
+
       if (!hasMatchingPosition) {
-        this.log(`❌ Job title "${jobDetails.title}" doesn't match required positions`);
+        this.log(
+          `❌ Job title "${jobDetails.title}" doesn't match required positions`
+        );
         return false;
       }
     }
@@ -520,22 +659,23 @@ export default class LinkedInPlatform extends BasePlatform {
   extractSalaryFromJobDetails(jobDetails) {
     // Extract salary information from job details
     // This would need to parse salary from job description or salary field
-    const salaryText = jobDetails.salary || jobDetails.description || '';
+    const salaryText = jobDetails.salary || jobDetails.description || "";
     const salaryMatch = salaryText.match(/\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
-    return salaryMatch ? parseInt(salaryMatch[1].replace(/,/g, '')) : null;
+    return salaryMatch ? parseInt(salaryMatch[1].replace(/,/g, "")) : null;
   }
 
   isRemoteJob(jobDetails) {
-    const workplace = jobDetails.workplace?.toLowerCase() || '';
-    const location = jobDetails.location?.toLowerCase() || '';
-    const description = jobDetails.description?.toLowerCase() || '';
-    
-    const remoteKeywords = ['remote', 'work from home', 'wfh', 'telecommute'];
-    
-    return remoteKeywords.some(keyword => 
-      workplace.includes(keyword) || 
-      location.includes(keyword) || 
-      description.includes(keyword)
+    const workplace = jobDetails.workplace?.toLowerCase() || "";
+    const location = jobDetails.location?.toLowerCase() || "";
+    const description = jobDetails.description?.toLowerCase() || "";
+
+    const remoteKeywords = ["remote", "work from home", "wfh", "telecommute"];
+
+    return remoteKeywords.some(
+      (keyword) =>
+        workplace.includes(keyword) ||
+        location.includes(keyword) ||
+        description.includes(keyword)
     );
   }
 
@@ -550,23 +690,35 @@ export default class LinkedInPlatform extends BasePlatform {
     const MAX_NO_NEW_JOBS = 3;
 
     try {
-      this.log(`Starting to process jobs with user preferences. Target: ${jobsToApply} jobs`);
+      this.log(
+        `Starting to process jobs with user preferences. Target: ${jobsToApply} jobs`
+      );
       this.log(`User preferences:`, this.config.preferences);
+      this.statusOverlay.addInfo(
+        `Starting to process ${jobsToApply} jobs with user preferences`
+      );
 
       // Initial scroll to trigger job loading
       await this.initialScroll();
 
       while (appliedCount < jobsToApply) {
         const jobCards = await this.getJobCards();
-        console.log(`Found ${jobCards.length} job cards on page ${currentPage}`);
+        console.log(
+          `Found ${jobCards.length} job cards on page ${currentPage}`
+        );
 
         if (jobCards.length === 0) {
-          console.log("No job cards found, trying to scroll first before pagination");
+          console.log(
+            "No job cards found, trying to scroll first before pagination"
+          );
+          this.statusOverlay.addInfo(
+            "No job cards found, trying to scroll for more"
+          );
           if (await this.scrollAndWaitForNewJobs()) {
             console.log("Scrolling loaded new jobs, continuing on same page");
             continue;
           }
-          
+
           console.log("No new jobs after scrolling, checking pagination");
           const hasNextPage = await this.goToNextPage(currentPage);
           if (hasNextPage) {
@@ -576,6 +728,7 @@ export default class LinkedInPlatform extends BasePlatform {
             continue;
           } else {
             console.log("No more pages available");
+            this.statusOverlay.addWarning("No more pages available");
             break;
           }
         }
@@ -583,11 +736,19 @@ export default class LinkedInPlatform extends BasePlatform {
         let newJobsFound = false;
         let newApplicableJobsFound = false;
 
-        this.log(`Processing ${jobCards.length} job cards on page ${currentPage}`);
+        this.log(
+          `Processing ${jobCards.length} job cards on page ${currentPage}`
+        );
+        this.statusOverlay.addInfo(
+          `Processing ${jobCards.length} job cards on page ${currentPage}`
+        );
 
         for (const jobCard of jobCards) {
           if (appliedCount >= jobsToApply) {
             this.log(`Reached target of ${jobsToApply} jobs`);
+            this.statusOverlay.addSuccess(
+              `Reached target of ${jobsToApply} jobs`
+            );
             break;
           }
 
@@ -614,10 +775,15 @@ export default class LinkedInPlatform extends BasePlatform {
 
             // Get job details for preference matching
             const jobDetails = this.getJobProperties();
-            
+
             // Check if job matches user preferences
             if (!this.doesJobMatchPreferences(jobDetails)) {
-              this.log(`Skipping job "${jobDetails.title}" - doesn't match preferences`);
+              this.log(
+                `Skipping job "${jobDetails.title}" - doesn't match preferences`
+              );
+              this.statusOverlay.addWarning(
+                `Skipping job "${jobDetails.title}" - doesn't match preferences`
+              );
               skippedCount++;
               continue;
             }
@@ -635,18 +801,22 @@ export default class LinkedInPlatform extends BasePlatform {
             newApplicableJobsFound = true;
 
             // Check if already applied using service
-            const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(jobId);
+            const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(
+              jobId
+            );
             if (alreadyApplied) {
-              this.log(`Already applied to job ${jobId} (from database), skipping.`);
+              this.log(
+                `Already applied to job ${jobId} (from database), skipping.`
+              );
               skippedCount++;
               continue;
             }
 
             this.updateProgress({
-              current: `Processing: ${jobDetails.title} (Page ${currentPage})`
+              current: `Processing: ${jobDetails.title} (Page ${currentPage})`,
             });
 
-            this.statusManager.show(`Processing: ${jobDetails.title}`, "info");
+            this.statusOverlay.addInfo(`Processing: ${jobDetails.title}`);
 
             // Attempt to apply
             const success = await this.applyToJob(applyButton, jobDetails);
@@ -655,25 +825,36 @@ export default class LinkedInPlatform extends BasePlatform {
               appliedCount++;
               this.progress.completed = appliedCount;
               this.updateProgress({ completed: appliedCount });
-              
+
               // Update application count using user service
               await this.userService.updateApplicationCount();
-              
-              this.log(`Successfully applied to job ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped)`);
 
-              this.reportApplicationSubmitted(jobDetails, { 
-                method: 'Easy Apply',
+              this.log(
+                `Successfully applied to job ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped)`
+              );
+              this.statusOverlay.addSuccess(
+                `Applied to job ${appliedCount}/${jobsToApply}`
+              );
+
+              this.reportApplicationSubmitted(jobDetails, {
+                method: "Easy Apply",
                 userId: this.config.userId || this.userId,
-                matchedPreferences: true
+                matchedPreferences: true,
               });
             } else {
               this.progress.failed++;
               this.updateProgress({ failed: this.progress.failed });
+              this.statusOverlay.addError(
+                `Failed to apply to job: ${jobDetails.title}`
+              );
             }
 
             await this.sleep(2000);
           } catch (error) {
             this.log(`Error processing job ${jobId} on page ${currentPage}`);
+            this.statusOverlay.addError(
+              `Error processing job ${jobId}: ${error.message}`
+            );
             console.error(`Error processing job ${jobId}:`, error);
             continue;
           }
@@ -681,39 +862,56 @@ export default class LinkedInPlatform extends BasePlatform {
 
         // Handle pagination logic
         if (!newApplicableJobsFound) {
-          this.log(`No new applicable jobs found on page ${currentPage}, trying to scroll for more jobs...`);
+          this.log(
+            `No new applicable jobs found on page ${currentPage}, trying to scroll for more jobs...`
+          );
           if (await this.scrollAndWaitForNewJobs()) {
             noNewJobsCount = 0;
-            this.log(`Scrolling loaded new jobs on page ${currentPage}, continuing processing...`);
+            this.log(
+              `Scrolling loaded new jobs on page ${currentPage}, continuing processing...`
+            );
             continue;
           }
 
-          this.log(`No more jobs loaded by scrolling on page ${currentPage}, moving to next page...`);
+          this.log(
+            `No more jobs loaded by scrolling on page ${currentPage}, moving to next page...`
+          );
           const hasNextPage = await this.goToNextPage(currentPage);
           if (hasNextPage) {
             currentPage++;
             noNewJobsCount = 0;
             this.log(`Successfully moved to page ${currentPage}`);
+            this.statusOverlay.addInfo(`Moving to page ${currentPage}`);
             await this.waitForPageLoad();
           } else {
             noNewJobsCount++;
             if (noNewJobsCount >= MAX_NO_NEW_JOBS) {
-              this.log(`No more applicable jobs to apply. Applied to ${appliedCount}/${jobsToApply} (${skippedCount} jobs)`);
+              this.log(
+                `No more applicable jobs to apply. Applied to ${appliedCount}/${jobsToApply} (${skippedCount} jobs)`
+              );
+              this.statusOverlay.addWarning(
+                `No more applicable jobs available. Applied to ${appliedCount}/${jobsToApply}`
+              );
               break;
             }
           }
         } else {
           noNewJobsCount = 0;
-          this.log(`Found and processed applicable jobs on page ${currentPage}, continuing...`);
+          this.log(
+            `Found and processed applicable jobs on page ${currentPage}, continuing...`
+          );
         }
       }
 
-      const completionStatus = appliedCount >= jobsToApply ? "target_reached" : "no_more_jobs";
-      const message = appliedCount >= jobsToApply
-        ? `Successfully applied to target of ${appliedCount}/${jobsToApply} jobs (Processed ${processedCount} total across ${currentPage} pages)`
-        : `Applied to ${appliedCount}/${jobsToApply} jobs - no more jobs available (Skipped ${skippedCount} jobs that didn't match preferences)`;
+      const completionStatus =
+        appliedCount >= jobsToApply ? "target_reached" : "no_more_jobs";
+      const message =
+        appliedCount >= jobsToApply
+          ? `Successfully applied to target of ${appliedCount}/${jobsToApply} jobs (Processed ${processedCount} total across ${currentPage} pages)`
+          : `Applied to ${appliedCount}/${jobsToApply} jobs - no more jobs available (Skipped ${skippedCount} jobs that didn't match preferences)`;
 
       this.log(message);
+      this.statusOverlay.addSuccess(message);
       this.reportComplete();
 
       return {
@@ -723,24 +921,29 @@ export default class LinkedInPlatform extends BasePlatform {
         processedCount,
         skippedCount,
         totalPages: currentPage,
-        preferencesUsed: this.config.preferences
+        preferencesUsed: this.config.preferences,
       };
     } catch (error) {
       console.error("Error in processJobs:", error);
-      this.reportError(error, { phase: 'processJobs' });
+      this.statusOverlay.addError("Error in processJobs: " + error.message);
+      this.reportError(error, { phase: "processJobs" });
       throw error;
     }
   }
 
   async applyToJob(applyButton, jobDetails) {
     try {
+      this.statusOverlay.addInfo(
+        `Starting application for: ${jobDetails.title}`
+      );
+
       // Start application
       applyButton.click();
 
       let currentStep = "initial";
       let attempts = 0;
       const maxAttempts = 20;
-      
+
       while (currentStep !== "submitted" && attempts < maxAttempts) {
         await this.fillCurrentStep();
         currentStep = await this.moveToNextStep();
@@ -752,14 +955,19 @@ export default class LinkedInPlatform extends BasePlatform {
       }
 
       if (attempts >= maxAttempts) {
+        this.statusOverlay.addError("Application took too many steps, closing");
         await this.closeApplication();
         await this.sleep(1000);
         return false;
       }
 
       await this.saveAppliedJob(jobDetails);
+      this.statusOverlay.addSuccess(
+        `Successfully applied to: ${jobDetails.title}`
+      );
       return true;
     } catch (error) {
+      this.statusOverlay.addError(`Application failed: ${error.message}`);
       await this.handleErrorState();
       await this.sleep(1000);
       return false;
@@ -769,23 +977,32 @@ export default class LinkedInPlatform extends BasePlatform {
   // ===== LINKEDIN-SPECIFIC FORM HANDLING =====
   async fillCurrentStep() {
     // Handle file upload containers using file handler service
-    const fileUploadContainers = document.querySelectorAll(".js-jobs-document-upload__container");
+    const fileUploadContainers = document.querySelectorAll(
+      ".js-jobs-document-upload__container"
+    );
     if (fileUploadContainers.length) {
-      this.statusManager.show("Uploading resume/cover letter...", "info");
-      
+      this.statusOverlay.addInfo("Uploading resume/cover letter...");
+
       for (const container of fileUploadContainers) {
         try {
           const userDetails = await this.userService.getUserDetails();
           const jobDescription = this.scrapeJobDescription();
-          const success = await this.fileHandler.handleFileUpload(container, userDetails, jobDescription);
-          
+          const success = await this.fileHandler.handleFileUpload(
+            container,
+            userDetails,
+            jobDescription
+          );
+
           if (success) {
             this.log(`✅ File uploaded successfully for container`);
+            this.statusOverlay.addSuccess("File uploaded successfully");
           } else {
             this.log(`⚠️ File upload failed for container`);
+            this.statusOverlay.addWarning("File upload failed");
           }
         } catch (error) {
           this.log(`❌ File upload error: ${error.message}`);
+          this.statusOverlay.addError("File upload error: " + error.message);
         }
       }
     }
@@ -798,8 +1015,10 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   async handleQuestion(question) {
-    if (question.classList.contains("js-jobs-document-upload__container") || 
-        question.hasAttribute("data-processed")) {
+    if (
+      question.classList.contains("js-jobs-document-upload__container") ||
+      question.hasAttribute("data-processed")
+    ) {
       return;
     }
 
@@ -824,7 +1043,8 @@ export default class LinkedInPlatform extends BasePlatform {
   getQuestionSelector(type) {
     const selectors = {
       select: "select",
-      radio: 'fieldset[data-test-form-builder-radio-button-form-component="true"]',
+      radio:
+        'fieldset[data-test-form-builder-radio-button-form-component="true"]',
       text: "input[type='text']",
       textarea: "textarea",
       checkbox: "input[type='checkbox']",
@@ -834,7 +1054,9 @@ export default class LinkedInPlatform extends BasePlatform {
 
   async handleSelectQuestion(select) {
     const container = select.closest(".fb-dash-form-element");
-    const labelElement = container.querySelector(".fb-dash-form-element__label");
+    const labelElement = container.querySelector(
+      ".fb-dash-form-element__label"
+    );
     const label = labelElement?.textContent?.trim();
 
     const options = Array.from(select.options)
@@ -848,7 +1070,9 @@ export default class LinkedInPlatform extends BasePlatform {
 
   async handleRadioQuestion(radio) {
     const label = this.getQuestionLabel(radio);
-    const options = Array.from(radio.querySelectorAll('input[type="radio"]')).map((input) => {
+    const options = Array.from(
+      radio.querySelectorAll('input[type="radio"]')
+    ).map((input) => {
       const labelElement = document.querySelector(`label[for="${input.id}"]`);
       return labelElement ? labelElement.textContent : "Unknown";
     });
@@ -865,9 +1089,10 @@ export default class LinkedInPlatform extends BasePlatform {
     const answer = await this.getAnswer(label);
 
     // Handle date fields
-    const isDateField = textInput.getAttribute("placeholder") === "mm/dd/yyyy" ||
-                       textInput.getAttribute("name") === "artdeco-date" ||
-                       label.toLowerCase().includes("date");
+    const isDateField =
+      textInput.getAttribute("placeholder") === "mm/dd/yyyy" ||
+      textInput.getAttribute("name") === "artdeco-date" ||
+      label.toLowerCase().includes("date");
 
     if (isDateField) {
       const formattedDate = this.formatDateForInput(answer);
@@ -884,7 +1109,9 @@ export default class LinkedInPlatform extends BasePlatform {
 
     if (isTypeahead) {
       await this.sleep(1000);
-      textInput.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+      textInput.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown" })
+      );
       await this.sleep(500);
       textInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     }
@@ -908,15 +1135,17 @@ export default class LinkedInPlatform extends BasePlatform {
     const container = element.closest(".fb-dash-form-element");
     if (!container) return "Unknown";
 
-    const label = container.querySelector("label, legend, .fb-dash-form-element__label");
+    const label = container.querySelector(
+      "label, legend, .fb-dash-form-element__label"
+    );
     if (!label) return "Unknown";
 
     return label.textContent.trim().replace(/\s+/g, " ");
   }
 
   async getAnswer(label, options = []) {
-    const normalizedLabel = label?.toLowerCase()?.trim() || '';
-    
+    const normalizedLabel = label?.toLowerCase()?.trim() || "";
+
     // Check cache first
     if (this.answerCache.has(normalizedLabel)) {
       return this.answerCache.get(normalizedLabel);
@@ -927,27 +1156,28 @@ export default class LinkedInPlatform extends BasePlatform {
       const context = {
         platform: this.platform,
         userData: await this.userService.getUserDetails(),
-        jobDescription: this.scrapeJobDescription()
+        jobDescription: this.scrapeJobDescription(),
       };
-      
+
       const answer = await this.aiService.getAnswer(label, options, context);
-      
+
       // Cache the answer
       this.answerCache.set(normalizedLabel, answer);
       return answer;
     } catch (error) {
       console.error("AI Answer Error:", error);
-      
+      this.statusOverlay.addWarning("Using fallback answer for: " + label);
+
       // Fallback to simple default answers
       const defaultAnswers = {
-        'work authorization': 'Yes',
-        'authorized to work': 'Yes',
-        'require sponsorship': 'No',
-        'require visa': 'No',
-        'experience': '2 years',
-        'years of experience': '2 years',
-        'phone': '555-0123',
-        'salary': '80000'
+        "work authorization": "Yes",
+        "authorized to work": "Yes",
+        "require sponsorship": "No",
+        "require visa": "No",
+        experience: "2 years",
+        "years of experience": "2 years",
+        phone: "555-0123",
+        salary: "80000",
       };
 
       for (const [key, value] of Object.entries(defaultAnswers)) {
@@ -974,7 +1204,9 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   scrapeJobDescription() {
-    const descriptionElement = document.querySelector(".jobs-description-content__text");
+    const descriptionElement = document.querySelector(
+      ".jobs-description-content__text"
+    );
     if (!descriptionElement) return "No job description found";
 
     const cleanDescription = Array.from(descriptionElement.children)
@@ -1001,8 +1233,10 @@ export default class LinkedInPlatform extends BasePlatform {
         dismiss: 'button[aria-label="Dismiss"]',
         done: 'button[aria-label="Done"]',
         close: 'button[aria-label="Close"]',
-        continueApplying: 'button[aria-label*="Easy Apply"][aria-label*="Continue applying"]',
-        continueTips: 'button[aria-label="I understand the tips and want to continue the apply process"]',
+        continueApplying:
+          'button[aria-label*="Easy Apply"][aria-label*="Continue applying"]',
+        continueTips:
+          'button[aria-label="I understand the tips and want to continue the apply process"]',
         saveJob: 'button[data-control-name="save_application_btn"]',
       };
 
@@ -1026,6 +1260,7 @@ export default class LinkedInPlatform extends BasePlatform {
       }
 
       if (await this.findAndClickButton(buttonSelectors.submit)) {
+        this.statusOverlay.addInfo("Submitting application...");
         await this.sleep(2000);
         return "submitted";
       }
@@ -1040,9 +1275,11 @@ export default class LinkedInPlatform extends BasePlatform {
         return "next";
       }
 
-      if ((await this.findAndClickButton(buttonSelectors.dismiss)) ||
-          (await this.findAndClickButton(buttonSelectors.done)) ||
-          (await this.findAndClickButton(buttonSelectors.close))) {
+      if (
+        (await this.findAndClickButton(buttonSelectors.dismiss)) ||
+        (await this.findAndClickButton(buttonSelectors.done)) ||
+        (await this.findAndClickButton(buttonSelectors.close))
+      ) {
         await this.sleep(2000);
         return "modal-closed";
       }
@@ -1058,35 +1295,46 @@ export default class LinkedInPlatform extends BasePlatform {
       console.log(`Attempting to go to next page after page ${currentPage}`);
 
       // First try to find the next button
-      const nextButton = document.querySelector("button.jobs-search-pagination__button--next");
+      const nextButton = document.querySelector(
+        "button.jobs-search-pagination__button--next"
+      );
       if (nextButton) {
         console.log("Found next button, clicking it");
+        this.statusOverlay.addInfo("Moving to next page...");
         nextButton.click();
         await this.waitForPageLoad();
         return true;
       }
 
       // Try pagination container
-      const paginationContainer = document.querySelector(".jobs-search-pagination__pages");
+      const paginationContainer = document.querySelector(
+        ".jobs-search-pagination__pages"
+      );
       if (!paginationContainer) {
         console.log("No pagination found");
         return false;
       }
 
       // Get current active page button
-      const activeButton = paginationContainer.querySelector(".jobs-search-pagination__indicator-button--active");
+      const activeButton = paginationContainer.querySelector(
+        ".jobs-search-pagination__indicator-button--active"
+      );
       if (!activeButton) {
         console.log("No active page button found");
         return false;
       }
 
-      const currentPageNum = parseInt(activeButton.querySelector("span").textContent);
+      const currentPageNum = parseInt(
+        activeButton.querySelector("span").textContent
+      );
       console.log(`Current page number: ${currentPageNum}`);
 
       // Find the next page button
-      const pageIndicators = paginationContainer.querySelectorAll(".jobs-search-pagination__indicator");
+      const pageIndicators = paginationContainer.querySelectorAll(
+        ".jobs-search-pagination__indicator"
+      );
       let nextPageButton = null;
-      
+
       pageIndicators.forEach((indicator) => {
         const button = indicator.querySelector("button");
         const span = button.querySelector("span");
@@ -1099,6 +1347,7 @@ export default class LinkedInPlatform extends BasePlatform {
 
       if (nextPageButton) {
         console.log(`Found next page button for page ${currentPageNum + 1}`);
+        this.statusOverlay.addInfo(`Moving to page ${currentPageNum + 1}`);
         nextPageButton.click();
         await this.waitForPageLoad();
         return true;
@@ -1108,6 +1357,9 @@ export default class LinkedInPlatform extends BasePlatform {
       return false;
     } catch (error) {
       console.error("Error navigating to next page:", error);
+      this.statusOverlay.addError(
+        "Error navigating to next page: " + error.message
+      );
       return false;
     }
   }
@@ -1134,7 +1386,9 @@ export default class LinkedInPlatform extends BasePlatform {
     if (!jobsList) return false;
 
     const previousHeight = jobsList.scrollHeight;
-    const previousJobCount = document.querySelectorAll(".job-card-list  [data-occludable-job-id]").length;
+    const previousJobCount = document.querySelectorAll(
+      ".job-card-list  [data-occludable-job-id]"
+    ).length;
 
     // Scroll in smaller increments to trigger job loading
     const currentScroll = jobsList.scrollTop;
@@ -1147,9 +1401,13 @@ export default class LinkedInPlatform extends BasePlatform {
 
     // Check for new content
     const newHeight = jobsList.scrollHeight;
-    const newJobCount = document.querySelectorAll(".job-card-list  [data-occludable-job-id]").length;
+    const newJobCount = document.querySelectorAll(
+      ".job-card-list  [data-occludable-job-id]"
+    ).length;
 
-    console.log(`Scroll check - Previous jobs: ${previousJobCount}, New jobs: ${newJobCount}`);
+    console.log(
+      `Scroll check - Previous jobs: ${previousJobCount}, New jobs: ${newJobCount}`
+    );
 
     return newHeight > previousHeight || newJobCount > previousJobCount;
   }
@@ -1184,6 +1442,7 @@ export default class LinkedInPlatform extends BasePlatform {
       const checkSearchResults = () => {
         if (document.querySelector(".job-card-list ")) {
           console.log("Search results loaded");
+          this.statusOverlay.addSuccess("Search results loaded");
           resolve();
         } else {
           setTimeout(checkSearchResults, 500);
@@ -1194,7 +1453,9 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   async getJobCards() {
-    const jobCards = document.querySelectorAll(".scaffold-layout__list-item[data-occludable-job-id]");
+    const jobCards = document.querySelectorAll(
+      ".scaffold-layout__list-item[data-occludable-job-id]"
+    );
     return jobCards;
   }
 
@@ -1220,19 +1481,30 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   getJobProperties() {
-    const company = document.querySelector(".job-details-jobs-unified-top-card__company-name")?.textContent || "N/A";
-    const title = document.querySelector(".job-details-jobs-unified-top-card__job-title")?.textContent || "N/A";
+    const company =
+      document.querySelector(".job-details-jobs-unified-top-card__company-name")
+        ?.textContent || "N/A";
+    const title =
+      document.querySelector(".job-details-jobs-unified-top-card__job-title")
+        ?.textContent || "N/A";
     const urlParams = new URLSearchParams(window.location.search);
     const jobId = urlParams.get("currentJobId");
-    
-    const detailsContainer = document.querySelector(".job-details-jobs-unified-top-card__primary-description-container .t-black--light.mt2");
+
+    const detailsContainer = document.querySelector(
+      ".job-details-jobs-unified-top-card__primary-description-container .t-black--light.mt2"
+    );
     const detailsText = detailsContainer ? detailsContainer.textContent : "";
     const location = detailsText.match(/^(.*?)\s·/)?.[1] || "Not specified";
     const postedDate = detailsText.match(/·\s(.*?)\s·/)?.[1] || "Not specified";
-    const applications = detailsText.match(/·\s([^·]+)$/)?.[1] || "Not specified";
-    
-    const workplaceElem = document.querySelector(".job-details-preferences-and-skills__pill");
-    const workplace = workplaceElem ? workplaceElem.textContent.trim() : "Not specified";
+    const applications =
+      detailsText.match(/·\s([^·]+)$/)?.[1] || "Not specified";
+
+    const workplaceElem = document.querySelector(
+      ".job-details-preferences-and-skills__pill"
+    );
+    const workplace = workplaceElem
+      ? workplaceElem.textContent.trim()
+      : "Not specified";
 
     return {
       title,
@@ -1247,7 +1519,9 @@ export default class LinkedInPlatform extends BasePlatform {
 
   async clickJobCard(jobCard) {
     try {
-      const clickableElement = jobCard.querySelector("a[href*='jobs/view'], .job-card-list__title, .job-card-container__link");
+      const clickableElement = jobCard.querySelector(
+        "a[href*='jobs/view'], .job-card-list__title, .job-card-container__link"
+      );
 
       if (!clickableElement) {
         throw new Error("No clickable element found in job card");
@@ -1278,7 +1552,10 @@ export default class LinkedInPlatform extends BasePlatform {
   async waitForJobDetailsLoad() {
     try {
       console.log("Waiting for job details to load");
-      const element = await this.waitForElement(".job-details-jobs-unified-top-card__job-title", 10000);
+      const element = await this.waitForElement(
+        ".job-details-jobs-unified-top-card__job-title",
+        10000
+      );
       console.log("Job details title element found");
       await this.sleep(1000);
       return element;
@@ -1321,7 +1598,11 @@ export default class LinkedInPlatform extends BasePlatform {
     if (!element) return false;
 
     const style = window.getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.opacity === "0"
+    ) {
       return false;
     }
 
@@ -1338,7 +1619,8 @@ export default class LinkedInPlatform extends BasePlatform {
     return (
       rect.top >= 0 &&
       rect.left >= 0 &&
-      rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+      rect.bottom <=
+        (window.innerHeight || document.documentElement.clientHeight) &&
       rect.right <= (window.innerWidth || document.documentElement.clientWidth)
     );
   }
@@ -1385,12 +1667,16 @@ export default class LinkedInPlatform extends BasePlatform {
 
   async closeApplication() {
     try {
-      const closeButton = document.querySelector("button[data-test-modal-close-btn]");
+      const closeButton = document.querySelector(
+        "button[data-test-modal-close-btn]"
+      );
       if (closeButton && this.isElementVisible(closeButton)) {
         closeButton.click();
         await this.sleep(1000);
 
-        const discardButton = document.querySelector('button[data-control-name="discard_application_confirm_btn"]');
+        const discardButton = document.querySelector(
+          'button[data-control-name="discard_application_confirm_btn"]'
+        );
         if (discardButton && this.isElementVisible(discardButton)) {
           console.log("Found save dialog, clicking discard");
           discardButton.click();
@@ -1453,22 +1739,28 @@ export default class LinkedInPlatform extends BasePlatform {
         workplace: jobDetails.workplace,
         postedDate: jobDetails.postedDate,
         applicants: jobDetails.applications,
-        platform: this.platform
+        platform: this.platform,
       });
 
       if (success) {
         // Update application count
         await this.appTracker.updateApplicationCount();
         this.log(`✅ Job application saved to database: ${jobDetails.title}`);
-        this.statusManager.show(`Application saved: ${jobDetails.title}`, "success");
+        this.statusOverlay.addSuccess(`Application saved: ${jobDetails.title}`);
         return true;
       } else {
         this.log(`⚠️ Failed to save job application: ${jobDetails.title}`);
+        this.statusOverlay.addWarning(
+          `Failed to save job application: ${jobDetails.title}`
+        );
         return false;
       }
     } catch (error) {
       console.error("Error saving applied job:", error);
       this.log(`❌ Error saving job application: ${error.message}`);
+      this.statusOverlay.addError(
+        `Error saving job application: ${error.message}`
+      );
       return false;
     }
   }
@@ -1482,9 +1774,17 @@ export default class LinkedInPlatform extends BasePlatform {
 
   onNavigation(oldUrl, newUrl) {
     this.log(`🔄 Navigation detected: ${oldUrl} → ${newUrl}`);
-    
-    if (!newUrl.includes('linkedin.com/jobs') && this.automationStarted && this.isRunning) {
-      this.log('⚠️ Navigated away from LinkedIn Jobs, attempting to return');
+    this.statusOverlay.addInfo(`Navigation detected: ${newUrl}`);
+
+    if (
+      !newUrl.includes("linkedin.com/jobs") &&
+      this.automationStarted &&
+      this.isRunning
+    ) {
+      this.log("⚠️ Navigated away from LinkedIn Jobs, attempting to return");
+      this.statusOverlay.addWarning(
+        "Navigated away from LinkedIn Jobs, attempting to return"
+      );
       setTimeout(() => {
         if (this.isRunning) {
           this.navigateToLinkedInJobs();
@@ -1495,30 +1795,41 @@ export default class LinkedInPlatform extends BasePlatform {
 
   async pause() {
     await super.pause();
-    this.log('⏸️ LinkedIn automation paused');
+    this.log("⏸️ LinkedIn automation paused");
+    this.statusOverlay.addWarning("LinkedIn automation paused");
   }
 
   async resume() {
     await super.resume();
-    this.log('▶️ LinkedIn automation resumed');
+    this.log("▶️ LinkedIn automation resumed");
+    this.statusOverlay.addSuccess("LinkedIn automation resumed");
   }
 
   async stop() {
     await super.stop();
     this.hasStarted = false;
     this.automationStarted = false;
-    this.log('⏹️ LinkedIn automation stopped');
+    this.log("⏹️ LinkedIn automation stopped");
+    this.statusOverlay.addWarning("LinkedIn automation stopped");
   }
 
   cleanup() {
     super.cleanup();
     this.processedJobs.clear();
     this.answerCache.clear();
+
+    // Cleanup status overlay
+    if (this.statusOverlay) {
+      this.statusOverlay.destroy();
+      this.statusOverlay = null;
+    }
+
+    this.log("🧹 LinkedIn platform cleanup completed");
   }
 }
 
 // Add the missing isVisible method to Element prototype
-if (typeof Element !== 'undefined' && !Element.prototype.isVisible) {
+if (typeof Element !== "undefined" && !Element.prototype.isVisible) {
   Element.prototype.isVisible = function () {
     return (
       window.getComputedStyle(this).display !== "none" &&

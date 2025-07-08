@@ -8,42 +8,54 @@ import {
   StatusOverlay,
 } from "../../services/index.js";
 import { markLinkAsColor } from "../../utils/mark-links.js";
-
+//apply()
 export default class LeverPlatform extends BasePlatform {
   constructor(config) {
     super(config);
     this.platform = "lever";
     this.baseUrl = "https://jobs.lever.co";
 
-    // Session context from config
+    // Initialize user profile from multiple sources
+    this.userProfile =
+      config.userProfile || config.sessionContext?.userProfile || null;
     this.sessionContext = config.sessionContext || null;
 
-    // Initialize services
+    console.log(
+      `🔧 Lever platform constructor - User profile available: ${!!this
+        .userProfile}`
+    );
+    if (this.userProfile) {
+      console.log(`👤 User profile details:`, {
+        name: this.userProfile.name || this.userProfile.firstName,
+        email: this.userProfile.email,
+        hasResumeUrl: !!this.userProfile.resumeUrl,
+        resumeUrls: this.userProfile.resumeUrls?.length || 0,
+      });
+    }
+
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
       userId: this.userId,
     });
     this.userService = new UserService({ userId: this.userId });
-    this.fileHandler = new LeverFileHandler({
-      statusService: this.statusOverlay,
-      apiHost: this.getApiHost(),
+
+    this.statusOverlay = new StatusOverlay({
+      id: "lever-status-overlay",
+      title: "LEVER AUTOMATION",
+      icon: "🤖",
+      position: { top: "10px", right: "10px" },
     });
 
-    // Initialize status overlay
-    this.statusOverlay = new StatusOverlay({
-      id: 'lever-status-overlay',
-      title: 'LEVER AUTOMATION',
-      icon: '🤖',
-      position: { top: '10px', right: '10px' }
-    });
+    this.fileHandler = null;
+    this.formHandler = null;
 
     // Communication state
     this.port = null;
     this.connectionRetries = 0;
     this.maxRetries = 3;
-    this.hasSessionContext = false;
+    this.hasSessionContext = !!this.sessionContext;
 
-    // Application state (from working code)
+    // Application state
     this.applicationState = {
       isApplicationInProgress: false,
       applicationStartTime: null,
@@ -52,7 +64,7 @@ export default class LeverPlatform extends BasePlatform {
       processedLinksCount: 0,
     };
 
-    // Search data (will be populated from background)
+    // Search data
     this.searchData = {
       limit: 0,
       current: 0,
@@ -61,7 +73,7 @@ export default class LeverPlatform extends BasePlatform {
       searchLinkPattern: null,
     };
 
-    // Timers and intervals
+    // Timers
     this.healthCheckTimer = null;
     this.keepAliveInterval = null;
     this.sendCvPageNotRespondTimeout = null;
@@ -69,15 +81,35 @@ export default class LeverPlatform extends BasePlatform {
     this.stateVerificationInterval = null;
 
     this.markLinkAsColor = markLinkAsColor;
-    // Initialize with session context if available
-    if (this.sessionContext) {
-      this.setSessionContext(this.sessionContext);
+  }
+
+  validateHandlers() {
+    const issues = [];
+
+    if (!this.statusOverlay) issues.push("Status overlay not initialized");
+    if (!this.fileHandler) issues.push("File handler not initialized");
+    if (!this.formHandler) issues.push("Form handler not initialized");
+    if (!this.userProfile) issues.push("User profile not available");
+
+    if (issues.length > 0) {
+      console.error("❌ Handler validation failed:", issues);
+      this.statusOverlay?.addError(
+        "Initialization issues: " + issues.join(", ")
+      );
+      return false;
     }
+
+    console.log("✅ All handlers validated successfully");
+    return true;
   }
 
   async setSessionContext(sessionContext) {
     try {
-      this.log("🔧 Setting session context:", sessionContext);
+      console.log("🔧 Setting session context:", {
+        hasSessionContext: !!sessionContext,
+        hasUserProfile: !!sessionContext?.userProfile,
+        sessionId: sessionContext?.sessionId,
+      });
 
       this.sessionContext = sessionContext;
       this.hasSessionContext = true;
@@ -87,10 +119,30 @@ export default class LeverPlatform extends BasePlatform {
       if (sessionContext.platform) this.platform = sessionContext.platform;
       if (sessionContext.userId) this.userId = sessionContext.userId;
 
-      // Set user profile if available
+      // Set user profile with priority handling
       if (sessionContext.userProfile) {
-        this.userProfile = sessionContext.userProfile;
-        this.log("👤 User profile set from session context");
+        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
+          this.userProfile = sessionContext.userProfile;
+          console.log("👤 User profile set from session context");
+        } else {
+          // Merge profiles, preferring non-null values
+          this.userProfile = {
+            ...this.userProfile,
+            ...sessionContext.userProfile,
+          };
+          console.log("👤 User profile merged from session context");
+        }
+      }
+
+      // Fetch user profile if still missing
+      if (!this.userProfile && this.userId) {
+        console.log("📡 User profile missing, attempting to fetch...");
+        try {
+          this.userProfile = await this.userService.getUserDetails();
+          console.log("✅ User profile fetched successfully");
+        } catch (error) {
+          console.error("❌ Failed to fetch user profile:", error);
+        }
       }
 
       // Update services with user context
@@ -101,20 +153,32 @@ export default class LeverPlatform extends BasePlatform {
         this.userService = new UserService({ userId: this.userId });
       }
 
-      // Update form handler if it exists
-      if (this.formHandler && sessionContext.userProfile) {
-        this.formHandler.userData = sessionContext.userProfile;
-        this.log("📝 Form handler updated with user profile");
+      // FIXED: Update form handler if it exists
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+        console.log("📝 Form handler updated with user profile");
       }
 
       // Store API host from session context
       if (sessionContext.apiHost) {
         this.sessionApiHost = sessionContext.apiHost;
+
+        // FIXED: Update file handler API host if it exists
+        if (this.fileHandler) {
+          this.fileHandler.apiHost = sessionContext.apiHost;
+          console.log("📎 File handler API host updated");
+        }
       }
 
-      this.log("✅ Session context applied successfully");
+      console.log("✅ Session context applied successfully", {
+        hasUserProfile: !!this.userProfile,
+        profileName: this.userProfile?.name || this.userProfile?.firstName,
+        hasResumeUrl: !!(
+          this.userProfile?.resumeUrl || this.userProfile?.resumeUrls?.length
+        ),
+      });
     } catch (error) {
-      this.log("❌ Error setting session context:", error);
+      console.error("❌ Error setting session context:", error);
     }
   }
 
@@ -129,29 +193,41 @@ export default class LeverPlatform extends BasePlatform {
 
   async initialize() {
     await super.initialize();
-    this.log("🎯 Lever platform initialized");
+    console.log("🎯 Lever platform initialized");
 
-    // Create status overlay
+    // Create status overlay FIRST
     this.statusOverlay.create();
+    console.log("✅ Status overlay created");
+
+    // Initialize file handler with the created status overlay
+    this.fileHandler = new LeverFileHandler({
+      statusService: this.statusOverlay,
+      apiHost: this.getApiHost(),
+    });
+    console.log("📎 File handler initialized with status service");
 
     // Set up communication with background script
     this.initializePortConnection();
 
     // Set up health monitoring
     this.startHealthCheck();
-
-    // Set up state verification
     this.startStateVerification();
 
-    // Initialize form handler
+    // FIXED: Initialize form handler with user profile validation
     this.formHandler = new LeverFormHandler({
       logger: (message) => this.statusOverlay.addInfo(message),
       host: this.getApiHost(),
-      userData: this.userProfile || null,
+      userData: this.userProfile || {},
       jobDescription: "",
     });
 
-    this.log("🔧 Form handler initialized with user data:", !!this.userProfile);
+    console.log("🔧 All handlers initialized", {
+      hasFileHandler: !!this.fileHandler,
+      hasFormHandler: !!this.formHandler,
+      hasStatusOverlay: !!this.statusOverlay,
+      hasUserData: !!this.userProfile,
+    });
+
     this.statusOverlay.addSuccess("Lever automation initialized");
   }
 
@@ -173,7 +249,9 @@ export default class LeverPlatform extends BasePlatform {
         window.location.href.includes("/apply") ||
         window.location.pathname.includes("/apply");
 
-      const sessionSuffix = this.sessionId ? `-${this.sessionId.slice(-6)}` : "";
+      const sessionSuffix = this.sessionId
+        ? `-${this.sessionId.slice(-6)}`
+        : "";
       const timestamp = Date.now();
       const portName = isApplyPage
         ? `lever-apply-${timestamp}${sessionSuffix}`
@@ -185,7 +263,9 @@ export default class LeverPlatform extends BasePlatform {
       this.port = chrome.runtime.connect({ name: portName });
 
       if (!this.port) {
-        throw new Error("Failed to establish connection with background script");
+        throw new Error(
+          "Failed to establish connection with background script"
+        );
       }
 
       // Set up message handler
@@ -207,7 +287,9 @@ export default class LeverPlatform extends BasePlatform {
         // Attempt to reconnect
         if (this.connectionRetries < this.maxRetries) {
           this.connectionRetries++;
-          this.log(`🔄 Attempting to reconnect (${this.connectionRetries}/${this.maxRetries})...`);
+          this.log(
+            `🔄 Attempting to reconnect (${this.connectionRetries}/${this.maxRetries})...`
+          );
           setTimeout(() => this.initializePortConnection(), 5000);
         }
       });
@@ -225,6 +307,54 @@ export default class LeverPlatform extends BasePlatform {
         this.connectionRetries++;
         setTimeout(() => this.initializePortConnection(), 5000);
       }
+    }
+  }
+
+  isFormValid(form) {
+    try {
+      const inputs = form.querySelectorAll("input, select, textarea");
+      const visibleInputs = Array.from(inputs).filter(
+        (input) => input.type !== "hidden" && this.isElementVisible(input)
+      );
+
+      return visibleInputs.length >= 2;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  isElementVisible(element) {
+    if (!element) return false;
+
+    try {
+      const style = window.getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        element.offsetWidth > 0 &&
+        element.offsetHeight > 0 &&
+        element.offsetParent !== null
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  isFormVisible(form) {
+    try {
+      if (!form || !form.offsetParent) return false;
+
+      const style = window.getComputedStyle(form);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        form.offsetWidth > 0 &&
+        form.offsetHeight > 0
+      );
+    } catch (e) {
+      return false;
     }
   }
 
@@ -282,13 +412,16 @@ export default class LeverPlatform extends BasePlatform {
         this.applicationState.isApplicationInProgress &&
         this.applicationState.applicationStartTime
       ) {
-        const applicationTime = now - this.applicationState.applicationStartTime;
+        const applicationTime =
+          now - this.applicationState.applicationStartTime;
 
         if (applicationTime > 5 * 60 * 1000) {
           this.log("🚨 Application stuck for over 5 minutes, forcing reset");
           this.applicationState.isApplicationInProgress = false;
           this.applicationState.applicationStartTime = null;
-          this.statusOverlay.addWarning("Application timeout detected - resetting state");
+          this.statusOverlay.addWarning(
+            "Application timeout detected - resetting state"
+          );
           setTimeout(() => this.searchNext(), 1000);
         }
       }
@@ -364,11 +497,19 @@ export default class LeverPlatform extends BasePlatform {
   handleApplicationStatusResponse(data) {
     this.log("📊 Application status response:", data);
 
-    if (data && data.active === false && this.applicationState.isApplicationInProgress) {
-      this.log("⚠️ State mismatch detected! Resetting application progress flag");
+    if (
+      data &&
+      data.active === false &&
+      this.applicationState.isApplicationInProgress
+    ) {
+      this.log(
+        "⚠️ State mismatch detected! Resetting application progress flag"
+      );
       this.applicationState.isApplicationInProgress = false;
       this.applicationState.applicationStartTime = null;
-      this.statusOverlay.addWarning("Detected state mismatch - resetting flags");
+      this.statusOverlay.addWarning(
+        "Detected state mismatch - resetting flags"
+      );
 
       setTimeout(() => this.searchNext(), 1000);
     }
@@ -383,7 +524,9 @@ export default class LeverPlatform extends BasePlatform {
         if (!this.userProfile) {
           this.processSendCvTaskData(data);
         } else {
-          this.log("✅ User profile already available, skipping CV task data processing");
+          this.log(
+            "✅ User profile already available, skipping CV task data processing"
+          );
         }
       }
     }
@@ -433,7 +576,9 @@ export default class LeverPlatform extends BasePlatform {
         } else if (data.status === "ERROR") {
           this.markLinkAsColor(links[i], "red");
           this.statusOverlay.addError(
-            "Error with: " + data.url + (data.message ? ` - ${data.message}` : "")
+            "Error with: " +
+              data.url +
+              (data.message ? ` - ${data.message}` : "")
           );
         } else {
           this.markLinkAsColor(links[i], "orange");
@@ -485,7 +630,9 @@ export default class LeverPlatform extends BasePlatform {
         this.log("🔄 Resetting application in progress flag");
         this.applicationState.isApplicationInProgress = false;
         this.applicationState.applicationStartTime = null;
-        this.statusOverlay.addInfo("No active job application, resuming search");
+        this.statusOverlay.addInfo(
+          "No active job application, resuming search"
+        );
 
         setTimeout(() => this.searchNext(), 1000);
       }
@@ -496,14 +643,18 @@ export default class LeverPlatform extends BasePlatform {
     this.log("⚠️ Duplicate job detected, resetting application state");
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
-    this.statusOverlay.addWarning(`Job already processed: ${data?.url || "Unknown URL"}`);
+    this.statusOverlay.addWarning(
+      `Job already processed: ${data?.url || "Unknown URL"}`
+    );
 
     setTimeout(() => this.searchNext(), 1000);
   }
 
   handleErrorMessage(data) {
     const errorMessage =
-      data && data.message ? data.message : "Unknown error from background script";
+      data && data.message
+        ? data.message
+        : "Unknown error from background script";
     this.log("❌ Error from background script:", errorMessage);
     this.statusOverlay.addError("Background error: " + errorMessage);
   }
@@ -546,7 +697,9 @@ export default class LeverPlatform extends BasePlatform {
   }
 
   isLeverJobPage(url) {
-    return /^https:\/\/jobs\.(eu\.)?lever\.co\/([^\/]*)\/([^\/]*)\/?(.*)?$/.test(url);
+    return /^https:\/\/jobs\.(eu\.)?lever\.co\/([^\/]*)\/([^\/]*)\/?(.*)?$/.test(
+      url
+    );
   }
 
   async startSearchProcess() {
@@ -600,7 +753,9 @@ export default class LeverPlatform extends BasePlatform {
       this.statusOverlay.addSuccess("Search initialization complete");
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
-      this.statusOverlay.addError("Error processing search task data: " + error.message);
+      this.statusOverlay.addError(
+        "Error processing search task data: " + error.message
+      );
     }
   }
 
@@ -611,7 +766,9 @@ export default class LeverPlatform extends BasePlatform {
       // Critical: If an application is in progress, do not continue
       if (this.applicationState.isApplicationInProgress) {
         this.log("Application in progress, not searching for next link");
-        this.statusOverlay.addInfo("Application in progress, waiting to complete...");
+        this.statusOverlay.addInfo(
+          "Application in progress, waiting to complete..."
+        );
 
         // Verify with background script
         this.safeSendPortMessage({ type: "CHECK_JOB_TAB_STATUS" });
@@ -683,7 +840,9 @@ export default class LeverPlatform extends BasePlatform {
         });
 
         // Also check local cache
-        const inLocalCache = this.applicationState.processedUrls && this.applicationState.processedUrls.has(url);
+        const inLocalCache =
+          this.applicationState.processedUrls &&
+          this.applicationState.processedUrls.has(url);
 
         if (processedLink || inLocalCache) {
           // Mark as already processed with the appropriate color
@@ -703,7 +862,12 @@ export default class LeverPlatform extends BasePlatform {
         if (this.searchData.searchLinkPattern) {
           const pattern =
             typeof this.searchData.searchLinkPattern === "string"
-              ? new RegExp(this.searchData.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
+              ? new RegExp(
+                  this.searchData.searchLinkPattern.replace(
+                    /^\/|\/[gimy]*$/g,
+                    ""
+                  )
+                )
               : this.searchData.searchLinkPattern;
 
           if (!pattern.test(url)) {
@@ -711,7 +875,8 @@ export default class LeverPlatform extends BasePlatform {
             this.markLinkAsColor(links[i], "red", "Invalid");
 
             // Add to processed URLs to avoid rechecking
-            if (!this.applicationState.processedUrls) this.applicationState.processedUrls = new Set();
+            if (!this.applicationState.processedUrls)
+              this.applicationState.processedUrls = new Set();
             this.applicationState.processedUrls.add(url);
 
             // Add to search data to maintain consistency
@@ -721,7 +886,9 @@ export default class LeverPlatform extends BasePlatform {
               message: "Link does not match pattern",
             });
 
-            this.statusOverlay.addWarning(`Skipping link that doesn't match pattern: ${url}`);
+            this.statusOverlay.addWarning(
+              `Skipping link that doesn't match pattern: ${url}`
+            );
             continue;
           }
         }
@@ -752,7 +919,9 @@ export default class LeverPlatform extends BasePlatform {
         });
 
         // Also check local cache
-        const inLocalCache = this.applicationState.processedUrls && this.applicationState.processedUrls.has(url);
+        const inLocalCache =
+          this.applicationState.processedUrls &&
+          this.applicationState.processedUrls.has(url);
 
         if (alreadyProcessed || inLocalCache) {
           continue;
@@ -762,7 +931,12 @@ export default class LeverPlatform extends BasePlatform {
         if (this.searchData.searchLinkPattern) {
           const pattern =
             typeof this.searchData.searchLinkPattern === "string"
-              ? new RegExp(this.searchData.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
+              ? new RegExp(
+                  this.searchData.searchLinkPattern.replace(
+                    /^\/|\/[gimy]*$/g,
+                    ""
+                  )
+                )
               : this.searchData.searchLinkPattern;
 
           if (!pattern.test(url)) {
@@ -787,7 +961,8 @@ export default class LeverPlatform extends BasePlatform {
         this.applicationState.applicationStartTime = Date.now();
 
         // Add to local cache immediately to prevent double processing
-        if (!this.applicationState.processedUrls) this.applicationState.processedUrls = new Set();
+        if (!this.applicationState.processedUrls)
+          this.applicationState.processedUrls = new Set();
         this.applicationState.processedUrls.add(url);
 
         // Set timeout for detecting stuck applications BEFORE sending message
@@ -797,7 +972,9 @@ export default class LeverPlatform extends BasePlatform {
 
         this.sendCvPageNotRespondTimeout = setTimeout(() => {
           if (this.applicationState.isApplicationInProgress) {
-            this.statusOverlay.addWarning("No response from job page, resuming search");
+            this.statusOverlay.addWarning(
+              "No response from job page, resuming search"
+            );
             this.safeSendPortMessage({ type: "SEND_CV_TAB_NOT_RESPOND" });
             this.applicationState.isApplicationInProgress = false;
             this.applicationState.applicationStartTime = null;
@@ -850,7 +1027,9 @@ export default class LeverPlatform extends BasePlatform {
         }
 
         // Try to load more results
-        this.statusOverlay.addInfo("No new job links found, trying to load more...");
+        this.statusOverlay.addInfo(
+          "No new job links found, trying to load more..."
+        );
         const loadMoreBtn = this.findLoadMoreElement();
 
         if (loadMoreBtn) {
@@ -873,7 +1052,9 @@ export default class LeverPlatform extends BasePlatform {
           }, 3000);
         } else {
           // No more results and no unprocessed links - we're done!
-          this.statusOverlay.addSuccess("All jobs processed, search completed!");
+          this.statusOverlay.addSuccess(
+            "All jobs processed, search completed!"
+          );
           this.safeSendPortMessage({ type: "SEARCH_TASK_DONE" });
         }
       }
@@ -910,7 +1091,9 @@ export default class LeverPlatform extends BasePlatform {
       // Create a combined selector for all domains
       const selectors = domains.map((domain) => {
         // Handle missing protocol, clean domain
-        const cleanDomain = domain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+        const cleanDomain = domain
+          .replace(/^https?:\/\//, "")
+          .replace(/\/$/, "");
         return `#rso a[href*="${cleanDomain}"], #botstuff a[href*="${cleanDomain}"]`;
       });
 
@@ -928,13 +1111,16 @@ export default class LeverPlatform extends BasePlatform {
   findLoadMoreElement() {
     try {
       // If we're on the last page (prev button but no next button)
-      if (document.getElementById("pnprev") && !document.getElementById("pnnext")) {
+      if (
+        document.getElementById("pnprev") &&
+        !document.getElementById("pnnext")
+      ) {
         return null;
       }
 
       // Method 1: Find "More results" button
-      const moreResultsBtn = Array.from(document.querySelectorAll("a")).find((a) =>
-        a.textContent.includes("More results")
+      const moreResultsBtn = Array.from(document.querySelectorAll("a")).find(
+        (a) => a.textContent.includes("More results")
       );
 
       if (moreResultsBtn) {
@@ -948,7 +1134,11 @@ export default class LeverPlatform extends BasePlatform {
       }
 
       // Method 3: Try to find any navigation button at the bottom
-      const navLinks = [...document.querySelectorAll("#botstuff table a[href^='/search?q=site:']")];
+      const navLinks = [
+        ...document.querySelectorAll(
+          "#botstuff table a[href^='/search?q=site:']"
+        ),
+      ];
       this.log(`Found ${navLinks.length} potential navigation links`);
 
       // Return the last one (typically "More results" or similar)
@@ -973,7 +1163,10 @@ export default class LeverPlatform extends BasePlatform {
 
       const urlObj = new URL(url);
       // Remove trailing slashes and query parameters
-      return (urlObj.origin + urlObj.pathname).toLowerCase().trim().replace(/\/+$/, "");
+      return (urlObj.origin + urlObj.pathname)
+        .toLowerCase()
+        .trim()
+        .replace(/\/+$/, "");
     } catch (e) {
       this.log("Error normalizing URL:", e);
       return url.toLowerCase().trim();
@@ -982,21 +1175,56 @@ export default class LeverPlatform extends BasePlatform {
 
   async startApplicationProcess() {
     try {
-      this.log("📝 Starting application process");
+      console.log("📝 Starting application process");
       this.statusOverlay.addInfo("Starting application process");
-      console.log("this.userProfile", this.userProfile);
-      console.log("this.hasSessionContext", this.hasSessionContext);
-      
-      // Check if we have user profile from session context
-      if (!this.userProfile && this.hasSessionContext) {
-        this.log("⚠️ No user profile in session context, requesting from background");
-        await this.fetchSendCvTaskData();
-      } else if (this.userProfile) {
-        this.log("✅ Using user profile from session context");
-        this.statusOverlay.addSuccess("User profile loaded from session");
+
+      // FIXED: Comprehensive user profile validation and fetching
+      if (!this.userProfile) {
+        console.log(
+          "⚠️ No user profile available, attempting multiple fetch strategies..."
+        );
+
+        // Strategy 1: Try session context
+        if (this.sessionContext && this.sessionContext.userProfile) {
+          this.userProfile = this.sessionContext.userProfile;
+          console.log("✅ User profile loaded from session context");
+        }
+
+        // Strategy 2: Try user service if we have userId
+        if (!this.userProfile && this.userId) {
+          try {
+            console.log("📡 Fetching user profile via user service");
+            this.userProfile = await this.userService.getUserDetails();
+            console.log("✅ User profile fetched via user service");
+          } catch (error) {
+            console.error("❌ User service fetch failed:", error);
+          }
+        }
+
+        // Strategy 3: Try background script
+        if (!this.userProfile) {
+          console.log("📡 Requesting user profile from background script");
+          await this.fetchSendCvTaskData();
+        }
+
+        // Final validation
+        if (!this.userProfile) {
+          this.statusOverlay.addError(
+            "No user profile available - automation may fail"
+          );
+          console.error(
+            "❌ Failed to obtain user profile through all strategies"
+          );
+        } else {
+          this.statusOverlay.addSuccess("User profile loaded successfully");
+          console.log("✅ User profile finally available:", {
+            name: this.userProfile.name || this.userProfile.firstName,
+            email: this.userProfile.email,
+          });
+        }
       } else {
-        this.log("📡 Requesting user profile from background");
-        await this.fetchSendCvTaskData();
+        console.log("✅ Using existing user profile");
+        this.statusOverlay.addSuccess("User profile already available");
       }
 
       // Check for success page first
@@ -1008,7 +1236,9 @@ export default class LeverPlatform extends BasePlatform {
           data: {
             jobId: jobId,
             title: document.title || "Job on Lever",
-            company: this.extractCompanyFromUrl(window.location.href) || "Company on Lever",
+            company:
+              this.extractCompanyFromUrl(window.location.href) ||
+              "Company on Lever",
             location: "Not specified",
             jobUrl: window.location.href,
             salary: "Not specified",
@@ -1020,7 +1250,6 @@ export default class LeverPlatform extends BasePlatform {
 
         this.applicationState.isApplicationInProgress = false;
         this.statusOverlay.addSuccess("Application completed successfully");
-        this.log("Application completed successfully");
         return;
       }
 
@@ -1028,7 +1257,7 @@ export default class LeverPlatform extends BasePlatform {
       await new Promise((resolve, reject) => {
         setTimeout(async () => {
           try {
-            const applied = await this.apply();
+            await this.apply();
             resolve();
           } catch (e) {
             reject(e);
@@ -1038,11 +1267,12 @@ export default class LeverPlatform extends BasePlatform {
     } catch (error) {
       this.reportError(error, { phase: "application" });
       if (error.name === "SendCvSkipError") {
-        this.log("Application skipped:", error.message);
         this.statusOverlay.addWarning("Application skipped: " + error.message);
-        this.safeSendPortMessage({ type: "SEND_CV_TASK_SKIP", data: error.message });
+        this.safeSendPortMessage({
+          type: "SEND_CV_TASK_SKIP",
+          data: error.message,
+        });
       } else {
-        this.log("SEND CV ERROR", error);
         this.statusOverlay.addError("Application error: " + error.message);
         this.safeSendPortMessage({
           type: "SEND_CV_TASK_ERROR",
@@ -1071,28 +1301,52 @@ export default class LeverPlatform extends BasePlatform {
 
   processSendCvTaskData(data) {
     try {
-      this.log("📊 Processing send CV task data:", data);
+      console.log("📊 Processing send CV task data:", {
+        hasData: !!data,
+        hasProfile: !!data?.profile,
+        currentProfileStatus: !!this.userProfile,
+      });
 
       if (!data) {
-        this.log("⚠️ No send CV task data provided");
+        console.warn("⚠️ No send CV task data provided");
         return;
       }
 
-      // Store user profile data (only if not already set from session context)
-      if (!this.userProfile && data.profile) {
-        this.userProfile = data.profile;
-        this.log("👤 User profile set from background response");
+      // FIXED: Only update user profile if we don't have one or the new one is more complete
+      if (data.profile) {
+        if (!this.userProfile) {
+          this.userProfile = data.profile;
+          console.log("👤 User profile set from background response");
+        } else {
+          // Merge profiles, keeping non-null values
+          const mergedProfile = { ...this.userProfile };
+          Object.keys(data.profile).forEach((key) => {
+            if (
+              data.profile[key] &&
+              (!mergedProfile[key] || mergedProfile[key] === "")
+            ) {
+              mergedProfile[key] = data.profile[key];
+            }
+          });
+          this.userProfile = mergedProfile;
+          console.log("👤 User profile merged with background response");
+        }
       }
 
       // Update form handler
-      if (this.formHandler) {
+      if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
+        console.log("📝 Form handler updated with user profile");
       }
 
-      this.log("✅ CV task data processed successfully");
+      console.log("✅ CV task data processed successfully", {
+        hasUserProfile: !!this.userProfile,
+        profileName: this.userProfile?.name || this.userProfile?.firstName,
+      });
+
       this.statusOverlay.addSuccess("Apply initialization complete");
     } catch (error) {
-      this.log("❌ Error processing send CV task data:", error);
+      console.error("❌ Error processing send CV task data:", error);
       this.statusOverlay.addError("Error processing CV data: " + error.message);
     }
   }
@@ -1101,8 +1355,14 @@ export default class LeverPlatform extends BasePlatform {
     try {
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
-      this.log("Starting application process");
+      console.log("Starting application process");
 
+      // FIXED: Validate all handlers are properly initialized
+      if (!this.validateHandlers()) {
+        throw new Error("Required handlers are not properly initialized");
+      }
+
+      // Check for page errors
       if (
         document.body.innerText.includes("Cannot GET") ||
         document.location.search.includes("not_found=true")
@@ -1110,9 +1370,8 @@ export default class LeverPlatform extends BasePlatform {
         throw new Error("Cannot start send cv: Page error");
       }
 
-      // Extract job ID from URL
       const jobId = this.extractJobIdFromUrl(window.location.href);
-      this.log("Extracted job ID:", jobId);
+      console.log("Extracted job ID:", jobId);
 
       // Check if already applied
       const applied = this.checkSubmissionSuccess();
@@ -1122,7 +1381,9 @@ export default class LeverPlatform extends BasePlatform {
           data: {
             jobId: jobId,
             title: document.title || "Job on Lever",
-            company: this.extractCompanyFromUrl(window.location.href) || "Company on Lever",
+            company:
+              this.extractCompanyFromUrl(window.location.href) ||
+              "Company on Lever",
             location: "Not specified",
             jobUrl: window.location.href,
             salary: "Not specified",
@@ -1134,147 +1395,332 @@ export default class LeverPlatform extends BasePlatform {
 
         this.applicationState.isApplicationInProgress = false;
         this.statusOverlay.addSuccess("Application completed successfully");
-        this.log("Application completed successfully");
         return true;
       }
 
-      // Find application form
+      // Enhanced form detection
       const form = this.findApplicationForm();
       if (!form) {
-        throw new Error("Cannot find application form");
+        // Try waiting for dynamic content
+        console.log(
+          "No form found immediately, waiting for dynamic content..."
+        );
+        await this.wait(2000);
+
+        const formAfterWait = this.findApplicationForm();
+        if (!formAfterWait) {
+          throw new Error("Cannot find application form");
+        }
+        return await this.processApplicationForm(formAfterWait);
       }
 
-      // Process the application form
-      const result = await this.processApplicationForm(form);
-      this.statusOverlay.addMessage("Form submission result: " + (result ? "SUCCESS" : "FAILED"), result ? "success" : "error");
-      return result;
+      return await this.processApplicationForm(form);
     } catch (e) {
       if (e.name === "SendCvSkipError") {
         throw e;
       } else {
-        this.log("Error in apply:", e);
-        throw new Error("Error during application process: " + this.errorToString(e));
+        console.error("Error in apply:", e);
+        throw new Error(
+          "Error during application process: " + this.errorToString(e)
+        );
       }
     }
   }
 
   findApplicationForm() {
     try {
-      // Lever forms usually have specific patterns
-      const formSelectors = [
+      console.log("🔍 Searching for application form...");
+
+      // Strategy 1: Lever-specific selectors
+      const leverSelectors = [
         'form[action*="lever"]',
+        'form[action*="apply"]',
         "form.application-form",
         "form#application-form",
         "form.lever-apply-form",
         'form[data-qa="application-form"]',
-        "form",
+        ".posting-apply form",
+        ".application-form form",
+        ".apply-form form",
       ];
 
-      for (const selector of formSelectors) {
+      for (const selector of leverSelectors) {
         const forms = document.querySelectorAll(selector);
-        if (forms.length > 0) {
-          // Return the first visible form
-          for (const form of forms) {
-            if (form.offsetParent !== null) {
-              return form;
-            }
-          }
-        }
-      }
+        console.log(
+          `Checking selector "${selector}": found ${forms.length} forms`
+        );
 
-      // No form found with selectors, look for form elements more deeply
-      const allForms = document.querySelectorAll("form");
-      if (allForms.length > 0) {
-        // Return the first visible form
-        for (const form of allForms) {
-          if (form.offsetParent !== null) {
+        for (const form of forms) {
+          if (this.isFormVisible(form) && this.isFormValid(form)) {
+            console.log(`✅ Found valid Lever form with selector: ${selector}`);
             return form;
           }
         }
       }
 
+      // Strategy 2: Look for forms with file inputs (common in job applications)
+      const formsWithFiles = document.querySelectorAll("form");
+      console.log(
+        `Strategy 2: Checking ${formsWithFiles.length} forms for file inputs`
+      );
+
+      for (const form of formsWithFiles) {
+        if (this.isFormVisible(form)) {
+          const fileInputs = form.querySelectorAll('input[type="file"]');
+          const textInputs = form.querySelectorAll(
+            'input[type="text"], input[type="email"], textarea'
+          );
+
+          if (fileInputs.length > 0 && textInputs.length > 0) {
+            console.log(
+              `✅ Found form with ${fileInputs.length} file inputs and ${textInputs.length} text inputs`
+            );
+            return form;
+          }
+        }
+      }
+
+      // Strategy 3: Look for forms containing common job application fields
+      const applicationKeywords = [
+        "name",
+        "email",
+        "resume",
+        "cv",
+        "cover",
+        "phone",
+        "experience",
+      ];
+
+      for (const form of formsWithFiles) {
+        if (this.isFormVisible(form)) {
+          const formText = form.textContent.toLowerCase();
+          const matchingKeywords = applicationKeywords.filter((keyword) =>
+            formText.includes(keyword)
+          );
+
+          if (matchingKeywords.length >= 2) {
+            console.log(
+              `✅ Found form with application keywords: ${matchingKeywords.join(
+                ", "
+              )}`
+            );
+            return form;
+          }
+        }
+      }
+
+      // Strategy 4: Return the first visible form as fallback
+      for (const form of formsWithFiles) {
+        if (this.isFormVisible(form) && this.isFormValid(form)) {
+          console.log("⚠️ Using first visible form as fallback");
+          return form;
+        }
+      }
+
+      console.log("❌ No suitable form found");
       return null;
     } catch (e) {
-      this.log("Error finding application form:", e);
+      console.error("Error finding application form:", e);
       return null;
     }
   }
 
   async processApplicationForm(form) {
     this.statusOverlay.addInfo("Found application form, beginning to fill out");
+    console.log("📝 Processing application form");
 
-    // Extract profile data
-    const profile = this.userProfile || {};
+    // Validate user profile
+    if (!this.userProfile) {
+      console.error("❌ No user profile available for form filling");
+      this.statusOverlay.addError("No user profile available for form filling");
+      throw new Error("User profile is required for form processing");
+    }
 
-    // Handle file uploads
-    await this.fileHandler.handleFileUploads(form, profile, this.extractJobDescription());
+    console.log("👤 Using user profile for form filling:", {
+      name: this.userProfile.name || this.userProfile.firstName,
+      email: this.userProfile.email,
+      hasResumeUrl: !!this.userProfile.resumeUrl,
+      resumeUrls: this.userProfile.resumeUrls?.length || 0,
+    });
 
-    // Process form fields using form handler
-    await this.formHandler.fillFormWithProfile(form, profile);
+    // Extract job description for AI context
+    const jobDescription = this.extractJobDescription();
+    console.log("📄 Job description extracted:", !!jobDescription);
 
-    // Find submit button
+    // Update form handler with job description
+    if (this.formHandler) {
+      this.formHandler.jobDescription = jobDescription;
+      this.formHandler.userData = this.userProfile;
+    }
+
+    // FIXED: Enhanced file upload handling with validation
+    try {
+      console.log("📎 Starting file upload process...");
+
+      // Validate file handler exists
+      if (!this.fileHandler) {
+        console.error("❌ File handler not initialized!");
+        this.statusOverlay.addError("File handler not available");
+        throw new Error("File handler not initialized");
+      }
+
+      // Validate user profile has file URLs
+      const hasResumeUrl = !!(
+        this.userProfile.resumeUrl ||
+        (this.userProfile.resumeUrl && this.userProfile.resumeUrl.length > 0)
+      );
+      console.log("📄 Resume availability check:", {
+        hasResumeUrl,
+        resumeUrl: this.userProfile.resumeUrl,
+        resumeUrlsCount: this.userProfile.resumeUrl?.length || 0,
+      });
+
+      if (!hasResumeUrl) {
+        this.statusOverlay.addWarning("No resume files available for upload");
+        console.warn("⚠️ No resume files available in user profile");
+      } else {
+        this.statusOverlay.addInfo("Processing file uploads...");
+        const fileUploadResult = await this.fileHandler.handleFileUploads(
+          form,
+          this.userProfile,
+          jobDescription
+        );
+
+        if (fileUploadResult) {
+          console.log("✅ File uploads completed successfully");
+          this.statusOverlay.addSuccess("File uploads completed");
+        } else {
+          console.warn("⚠️ File uploads completed with issues");
+          this.statusOverlay.addWarning(
+            "File uploads completed with some issues"
+          );
+        }
+      }
+    } catch (error) {
+      console.error("❌ File upload failed:", error);
+      this.statusOverlay.addError("File upload failed: " + error.message);
+      // Continue with form filling even if file upload fails
+    }
+
+    // Process form fields
+    // try {
+    //   console.log("📝 Filling form fields...");
+    //   this.statusOverlay.addInfo("Filling form fields...");
+
+    //   if (!this.formHandler) {
+    //     console.error("❌ Form handler not initialized!");
+    //     throw new Error("Form handler not initialized");
+    //   }
+
+    //   await this.formHandler.fillFormWithProfile(form, this.userProfile);
+    //   console.log("✅ Form fields filled");
+    //   this.statusOverlay.addSuccess("Form fields filled");
+    // } catch (error) {
+    //   console.error("⚠️ Form filling failed:", error);
+    //   this.statusOverlay.addWarning("Form filling failed: " + error.message);
+    // }
+
+    // Find and click submit button
     const submitButton = this.findSubmitButton(form);
-
     if (!submitButton) {
       throw new Error("Cannot find submit button");
     }
 
-    // Enable the submit button if disabled
+    // Enable submit button if disabled
     if (submitButton.disabled) {
       submitButton.disabled = false;
+      console.log("✅ Enabled disabled submit button");
     }
 
     // Submit the form
-    const submitted = await this.submitForm(submitButton);
-    return submitted;
+    return await this.submitForm(submitButton);
   }
 
   findSubmitButton(form) {
+    console.log("🔍 Looking for submit button...");
+
     const submitSelectors = [
       'button[type="submit"]',
       'input[type="submit"]',
       'button[data-qa="submit-application-button"]',
       'button[data-qa="btn-submit"]',
+      'button[data-qa="submit"]',
       "button#btn-submit",
       "button.submit-app-btn",
       "button.submit-application",
+      ".posting-btn-submit",
+      "button.btn-primary:last-of-type",
     ];
 
+    // Try specific selectors first
     for (const selector of submitSelectors) {
       try {
-        const btns = form.querySelectorAll(selector);
-        if (btns.length > 0) {
-          for (const btn of btns) {
-            if (btn.offsetParent !== null && !btn.disabled && !btn.classList.contains("disabled")) {
-              return btn;
-            }
+        const buttons = form.querySelectorAll(selector);
+        console.log(
+          `Checking selector "${selector}": found ${buttons.length} buttons`
+        );
+
+        for (const btn of buttons) {
+          if (
+            this.isElementVisible(btn) &&
+            !btn.disabled &&
+            !btn.classList.contains("disabled")
+          ) {
+            console.log(`✅ Found submit button with selector: ${selector}`);
+            return btn;
           }
         }
       } catch (e) {
-        // Continue to next selector
+        console.warn(`Error checking selector ${selector}:`, e);
       }
     }
 
-    // Try to find any button that looks like a submit button
-    const allButtons = form.querySelectorAll('button, input[type="button"], input[type="submit"]');
+    // Look for buttons with submit-like text
+    const allButtons = form.querySelectorAll(
+      'button, input[type="button"], input[type="submit"]'
+    );
+    console.log(`Checking ${allButtons.length} buttons for submit text...`);
+
     for (const btn of allButtons) {
-      const text = btn.textContent.toLowerCase();
       if (
-        (text.includes("submit") || text.includes("apply")) &&
-        btn.offsetParent !== null &&
-        !btn.disabled &&
-        !btn.classList.contains("disabled")
+        !this.isElementVisible(btn) ||
+        btn.disabled ||
+        btn.classList.contains("disabled")
       ) {
+        continue;
+      }
+
+      const text = (btn.textContent || btn.value || "").toLowerCase().trim();
+      const submitTexts = [
+        "submit",
+        "apply",
+        "send application",
+        "send",
+        "continue",
+        "next",
+      ];
+
+      if (submitTexts.some((submitText) => text.includes(submitText))) {
+        console.log(`✅ Found submit button with text: "${text}"`);
         return btn;
       }
     }
 
-    // If no specific submit button found, return the last button in the form
-    const buttons = form.querySelectorAll("button");
-    if (buttons.length > 0) {
-      return buttons[buttons.length - 1];
+    // Last resort: return the last visible button in the form
+    const visibleButtons = Array.from(allButtons).filter(
+      (btn) =>
+        this.isElementVisible(btn) &&
+        !btn.disabled &&
+        !btn.classList.contains("disabled")
+    );
+
+    if (visibleButtons.length > 0) {
+      const lastButton = visibleButtons[visibleButtons.length - 1];
+      console.log("⚠️ Using last visible button as submit button");
+      return lastButton;
     }
 
+    console.log("❌ No submit button found");
     return null;
   }
 
@@ -1302,7 +1748,9 @@ export default class LeverPlatform extends BasePlatform {
       window.location.href.includes("confirmation") ||
       window.location.href.includes("thanks")
     ) {
-      this.statusOverlay.addSuccess("URL indicates success page - application submitted");
+      this.statusOverlay.addSuccess(
+        "URL indicates success page - application submitted"
+      );
       return true;
     }
 
@@ -1317,13 +1765,17 @@ export default class LeverPlatform extends BasePlatform {
         .filter((text) => text.length > 0);
 
       if (errorMessages.length > 0) {
-        this.statusOverlay.addError("Form has validation errors: " + errorMessages.join(", "));
+        this.statusOverlay.addError(
+          "Form has validation errors: " + errorMessages.join(", ")
+        );
         return false;
       }
     }
 
     // If we can't confirm success, report failure
-    this.statusOverlay.addWarning("Unable to confirm submission success - status uncertain");
+    this.statusOverlay.addWarning(
+      "Unable to confirm submission success - status uncertain"
+    );
     return false; // Be cautious and report failure if we can't confirm success
   }
 
@@ -1387,13 +1839,17 @@ export default class LeverPlatform extends BasePlatform {
       }
 
       // Check if element has the necessary methods and properties
-      if (!element.getBoundingClientRect || typeof element.getBoundingClientRect !== "function") {
+      if (
+        !element.getBoundingClientRect ||
+        typeof element.getBoundingClientRect !== "function"
+      ) {
         this.log(`Cannot scroll to element: ${typeof element}, ${element}`);
         return;
       }
 
       const rect = element.getBoundingClientRect();
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollTop =
+        window.pageYOffset || document.documentElement.scrollTop;
 
       window.scrollTo({
         top: rect.top + scrollTop - offset,
@@ -1458,11 +1914,18 @@ export default class LeverPlatform extends BasePlatform {
   }
 
   log(message, data = {}) {
-    const sessionInfo = this.sessionId ? `[Session: ${this.sessionId.slice(-6)}]` : "[No Session]";
-    const contextInfo = this.hasSessionContext ? "[Context: ✓]" : "[Context: ✗]";
+    const sessionInfo = this.sessionId
+      ? `[Session: ${this.sessionId.slice(-6)}]`
+      : "[No Session]";
+    const contextInfo = this.hasSessionContext
+      ? "[Context: ✓]"
+      : "[Context: ✗]";
     const profileInfo = this.userProfile ? "[Profile: ✓]" : "[Profile: ✗]";
 
-    console.log(`🤖 [Lever${sessionInfo}${contextInfo}${profileInfo}] ${message}`, data);
+    console.log(
+      `🤖 [Lever${sessionInfo}${contextInfo}${profileInfo}] ${message}`,
+      data
+    );
   }
 
   cleanup() {

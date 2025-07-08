@@ -96,8 +96,8 @@ Edit `manifest.json` to include your frontend domain:
 {
   "externally_connectable": {
     "matches": [
-      "https://yourdomain.com/*",
-      "https://*.yourdomain.com/*",
+      "https://fastapply.co/*",
+      "https://*.fastapply.co/*",
       "http://localhost:*/*"
     ]
   }

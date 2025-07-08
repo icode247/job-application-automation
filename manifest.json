@@ -14,10 +14,10 @@
   ],
   "externally_connectable": {
     "matches": [
-      "https://yourdomain.com/*",
-      "https://*.yourdomain.com/*",
-      "https://app.yourdomain.com/*",
-      "https://staging.yourdomain.com/*",
+      "https://fastapply.co/*",
+      "https://*.fastapply.co/*",
+      "https://app.fastapply.co/*",
+      "https://staging.fastapply.co/*",
       "http://localhost:*/*",
       "http://127.0.0.1:*/*"
     ]
@@ -132,7 +132,7 @@
     ]
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://yourdomain.com https://*.yourdomain.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://fastapply.co https://*.fastapply.co http://localhost:3000"
   },
   "minimum_chrome_version": "88"
 }

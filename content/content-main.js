@@ -1,4 +1,4 @@
-// content/content-main.js - ENHANCED WITH SESSION CONTEXT HANDLING
+//showAutomationStatus
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -11,7 +11,8 @@ class ContentScriptManager {
     this.indicator = null;
     this.config = {};
     this.initializationTimeout = null;
-    this.sessionContext = null; // NEW: Store full session context
+    this.sessionContext = null;
+    this.userProfile = null;
     this.maxInitializationAttempts = 3;
     this.initializationAttempts = 0;
   }
@@ -25,15 +26,11 @@ class ContentScriptManager {
         `📝 Content script initialization attempt ${this.initializationAttempts}`
       );
 
-      // Enhanced automation window detection
       const isAutomationWindow = await this.checkIfAutomationWindow();
-      // console.log(
-      //   `🔍 Is automation window: ${isAutomationWindow}, attempts: ${this.initialization}`)
 
       if (isAutomationWindow) {
         this.automationActive = true;
 
-        // Get session context with retries
         const sessionContext = await this.getSessionContext();
 
         if (sessionContext) {
@@ -42,10 +39,20 @@ class ContentScriptManager {
           this.platform = sessionContext.platform;
           this.userId = sessionContext.userId;
 
+          if (sessionContext.userProfile) {
+            this.userProfile = sessionContext.userProfile;
+            console.log(`👤 User profile loaded from session context:`, {
+              name: this.userProfile.name || this.userProfile.firstName,
+              email: this.userProfile.email,
+              hasResumeUrl: !!this.userProfile.resumeUrl,
+            });
+          }
+
           console.log(`🤖 Session context retrieved:`, {
             sessionId: this.sessionId,
             platform: this.platform,
             userId: this.userId,
+            hasUserProfile: !!this.userProfile,
             url: window.location.href,
           });
 
@@ -54,11 +61,7 @@ class ContentScriptManager {
             this.isInitialized = true;
 
             console.log(`✅ Content script initialized for ${this.platform}`);
-
-            // Notify background that content script is ready
             this.notifyBackgroundReady();
-
-            // Set a timeout to auto-start if no message received
             this.setAutoStartTimeout();
           }
         } else {
@@ -68,7 +71,6 @@ class ContentScriptManager {
     } catch (error) {
       console.error("❌ Error initializing content script:", error);
 
-      // Retry initialization if we haven't exceeded max attempts
       if (this.initializationAttempts < this.maxInitializationAttempts) {
         console.log(`🔄 Retrying initialization in 3 seconds...`);
         setTimeout(() => this.initialize(), 3000);
@@ -87,7 +89,7 @@ class ContentScriptManager {
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
-    
+
     if (sessionId && platform) {
       console.log("🔍 Automation window detected via sessionStorage");
       window.automationSessionId = sessionId;
@@ -132,16 +134,12 @@ class ContentScriptManager {
   }
 
   async getSessionContext() {
-    // Try multiple methods to get session context
-
-    // Method 1: From window/sessionStorage
     let context = this.getSessionContextFromStorage();
     if (context && context.sessionId) {
       console.log("📊 Session context found in storage");
       return await this.enrichSessionContext(context);
     }
 
-    // Method 2: Request from background script
     try {
       console.log("📡 Requesting session context from background script");
       const response = await this.sendMessageToBackground({
@@ -159,7 +157,6 @@ class ContentScriptManager {
       console.error("Error getting session context from background:", error);
     }
 
-    // Method 3: Detect from URL and request session assignment
     const detectedPlatform = this.detectPlatformFromUrl();
     if (detectedPlatform !== "unknown") {
       try {
@@ -188,7 +185,7 @@ class ContentScriptManager {
 
   getSessionContextFromStorage() {
     try {
-      return {
+      const baseContext = {
         sessionId:
           window.automationSessionId ||
           sessionStorage.getItem("automationSessionId"),
@@ -203,6 +200,50 @@ class ContentScriptManager {
         parentSessionId:
           window.parentSessionId || sessionStorage.getItem("parentSessionId"),
       };
+
+      // FIXED: Retrieve user profile from storage
+      let userProfile = null;
+      try {
+        if (window.automationUserProfile) {
+          userProfile = window.automationUserProfile;
+        } else {
+          const storedProfile = sessionStorage.getItem("automationUserProfile");
+          if (storedProfile) {
+            userProfile = JSON.parse(storedProfile);
+          }
+        }
+      } catch (error) {
+        console.warn("Error parsing stored user profile:", error);
+      }
+
+      // FIXED: Retrieve session config
+      let sessionConfig = null;
+      try {
+        if (window.automationSessionConfig) {
+          sessionConfig = window.automationSessionConfig;
+        } else {
+          const storedConfig = sessionStorage.getItem(
+            "automationSessionConfig"
+          );
+          if (storedConfig) {
+            sessionConfig = JSON.parse(storedConfig);
+          }
+        }
+      } catch (error) {
+        console.warn("Error parsing stored session config:", error);
+      }
+
+      // FIXED: Get API host
+      const apiHost =
+        window.automationApiHost || sessionStorage.getItem("automationApiHost");
+
+      return {
+        ...baseContext,
+        userProfile,
+        sessionConfig,
+        apiHost,
+        preferences: sessionConfig?.preferences || {},
+      };
     } catch (error) {
       console.error("Error getting session context from storage:", error);
       return null;
@@ -211,12 +252,23 @@ class ContentScriptManager {
 
   storeSessionContextInStorage(context) {
     try {
-      // Store in window
+      // Store basic context in window
       window.automationSessionId = context.sessionId;
       window.automationPlatform = context.platform;
       window.automationUserId = context.userId;
       window.isAutomationWindow = true;
       window.isAutomationTab = true;
+
+      // FIXED: Store user profile and session config in window
+      if (context.userProfile) {
+        window.automationUserProfile = context.userProfile;
+      }
+      if (context.sessionConfig) {
+        window.automationSessionConfig = context.sessionConfig;
+      }
+      if (context.apiHost) {
+        window.automationApiHost = context.apiHost;
+      }
 
       // Store in sessionStorage
       sessionStorage.setItem("automationSessionId", context.sessionId);
@@ -225,12 +277,28 @@ class ContentScriptManager {
       sessionStorage.setItem("isAutomationWindow", "true");
       sessionStorage.setItem("isAutomationTab", "true");
 
+      // FIXED: Store additional context in sessionStorage
+      if (context.userProfile) {
+        sessionStorage.setItem(
+          "automationUserProfile",
+          JSON.stringify(context.userProfile)
+        );
+      }
+      if (context.sessionConfig) {
+        sessionStorage.setItem(
+          "automationSessionConfig",
+          JSON.stringify(context.sessionConfig)
+        );
+      }
+      if (context.apiHost) {
+        sessionStorage.setItem("automationApiHost", context.apiHost);
+      }
       if (context.parentSessionId) {
         window.parentSessionId = context.parentSessionId;
         sessionStorage.setItem("parentSessionId", context.parentSessionId);
       }
 
-      console.log("💾 Session context stored in storage");
+      console.log("💾 Enhanced session context stored in storage");
     } catch (error) {
       console.error("Error storing session context:", error);
     }
@@ -313,7 +381,6 @@ class ContentScriptManager {
 
   async setupAutomation() {
     try {
-      // Load platform-specific automation module
       const PlatformClass = await this.loadPlatformModule(this.platform);
       console.log("PlatformClass loaded:", PlatformClass?.name);
 
@@ -321,21 +388,24 @@ class ContentScriptManager {
         throw new Error(`Platform ${this.platform} not supported`);
       }
 
-      // Create platform automation instance with FULL session context
+      // FIXED: Create platform automation with comprehensive config
       const automationConfig = {
         sessionId: this.sessionId,
         platform: this.platform,
         userId: this.userId,
         contentScript: this,
         config: this.config,
-        // NEW: Pass full session context
         sessionContext: this.sessionContext,
+        userProfile: this.userProfile, // FIXED: Pass user profile directly
       };
 
-      console.log(
-        "Creating platform automation with config:",
-        automationConfig
-      );
+      console.log("Creating platform automation with config:", {
+        sessionId: automationConfig.sessionId,
+        platform: automationConfig.platform,
+        userId: automationConfig.userId,
+        hasSessionContext: !!automationConfig.sessionContext,
+        hasUserProfile: !!automationConfig.userProfile,
+      });
 
       this.platformAutomation = new PlatformClass(automationConfig);
 
@@ -345,11 +415,15 @@ class ContentScriptManager {
       this.setupDOMObserver();
       this.setupNavigationListeners();
 
-      // Initialize platform automation with session context
+      // Initialize platform automation
       await this.platformAutomation.initialize();
 
-      // If we have session context, pass it to the platform
+      // FIXED: Set session context with user profile
       if (this.sessionContext) {
+        // Ensure user profile is in session context
+        if (this.userProfile && !this.sessionContext.userProfile) {
+          this.sessionContext.userProfile = this.userProfile;
+        }
         await this.platformAutomation.setSessionContext(this.sessionContext);
       }
 
@@ -363,67 +437,15 @@ class ContentScriptManager {
     }
   }
 
-  async handleStartAutomation(request, sendResponse) {
-    try {
-      if (this.platformAutomation) {
-        // Clear any existing timeout
-        if (this.initializationTimeout) {
-          clearTimeout(this.initializationTimeout);
-          this.initializationTimeout = null;
-        }
-
-        // Update config and session context
-        this.config = { ...this.config, ...request.config };
-
-        // NEW: Update session context if provided
-        if (request.sessionContext) {
-          this.sessionContext = {
-            ...this.sessionContext,
-            ...request.sessionContext,
-          };
-          this.storeSessionContextInStorage(this.sessionContext);
-
-          // Pass updated context to platform automation
-          await this.platformAutomation.setSessionContext(this.sessionContext);
-        }
-
-        this.log(
-          `🤖 Starting automation for ${this.platform} with config:`,
-          this.config
-        );
-        this.log("🚀 Starting platform automation in content script");
-        await this.platformAutomation.start(this.config);
-
-        sendResponse({
-          success: true,
-          message: "Automation started in content script",
-        });
-      } else {
-        sendResponse({
-          success: false,
-          error: "Platform automation not initialized",
-        });
-      }
-    } catch (error) {
-      this.log(`❌ Error starting automation: ${error.message}`);
-      sendResponse({ success: false, error: error.message });
-    }
-  }
-
-  notifyBackgroundReady() {
-    this.sendMessageToBackground({
-      action: "contentScriptReady",
-      sessionId: this.sessionId,
-      platform: this.platform,
-      userId: this.userId,
-      url: window.location.href,
-      sessionContext: this.sessionContext, // Include full context
-    }).catch(console.error);
-  }
-
-  // Add method to handle session context updates
   async updateSessionContext(newContext) {
     this.sessionContext = { ...this.sessionContext, ...newContext };
+
+    // Update user profile if provided
+    if (newContext.userProfile) {
+      this.userProfile = newContext.userProfile;
+      console.log("👤 User profile updated from session context");
+    }
+
     this.storeSessionContextInStorage(this.sessionContext);
 
     if (this.platformAutomation && this.platformAutomation.setSessionContext) {
@@ -531,19 +553,58 @@ class ContentScriptManager {
   async handleStartAutomation(request, sendResponse) {
     try {
       if (this.platformAutomation) {
-        // Clear any existing timeout
         if (this.initializationTimeout) {
           clearTimeout(this.initializationTimeout);
           this.initializationTimeout = null;
         }
 
-        // Update config and start automation
+        // Update config
         this.config = { ...this.config, ...request.config };
-        this.log(
+
+        // FIXED: Update session context and ensure user profile is available
+        if (request.sessionContext) {
+          this.sessionContext = {
+            ...this.sessionContext,
+            ...request.sessionContext,
+          };
+
+          // Extract user profile if not already set
+          if (!this.userProfile && request.sessionContext.userProfile) {
+            this.userProfile = request.sessionContext.userProfile;
+            console.log(`👤 User profile loaded from start message:`, {
+              name: this.userProfile.name || this.userProfile.firstName,
+              email: this.userProfile.email,
+            });
+          }
+
+          this.storeSessionContextInStorage(this.sessionContext);
+          await this.platformAutomation.setSessionContext(this.sessionContext);
+        }
+
+        // FIXED: Validate user profile before starting
+        if (!this.userProfile) {
+          console.warn("⚠️ No user profile available, attempting to fetch...");
+          try {
+            // Try to get user profile from session context one more time
+            const context = this.getSessionContextFromStorage();
+            if (context && context.userProfile) {
+              this.userProfile = context.userProfile;
+              console.log("✅ User profile recovered from storage");
+            }
+          } catch (error) {
+            console.error("Failed to recover user profile:", error);
+          }
+        }
+
+        console.log(
           `🤖 Starting automation for ${this.platform} with config:`,
-          this.config
+          {
+            hasConfig: !!this.config,
+            hasUserProfile: !!this.userProfile,
+            jobsToApply: this.config.jobsToApply,
+          }
         );
-        this.log("🚀 Starting platform automation in content script");
+
         await this.platformAutomation.start(this.config);
 
         sendResponse({
@@ -557,7 +618,7 @@ class ContentScriptManager {
         });
       }
     } catch (error) {
-      this.log(`❌ Error starting automation: ${error.message}`);
+      console.error(`❌ Error starting automation: ${error.message}`);
       sendResponse({ success: false, error: error.message });
     }
   }
@@ -582,12 +643,17 @@ class ContentScriptManager {
   }
 
   addAutomationIndicator() {
-    // Remove existing indicator
     const existing = document.getElementById("automation-indicator");
     if (existing) existing.remove();
 
     const indicator = document.createElement("div");
     indicator.id = "automation-indicator";
+
+    const profileStatus = this.userProfile ? "✓" : "✗";
+    const profileText = this.userProfile
+      ? this.userProfile.name || this.userProfile.firstName || "Unknown"
+      : "No Profile";
+
     indicator.innerHTML = `
       <div style="
         position: fixed;
@@ -611,19 +677,18 @@ class ContentScriptManager {
           <span style="font-size: 16px;">🤖</span>
           <div>
             <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
-            <div style="font-size: 11px; opacity: 0.9;">${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
+            <div style="font-size: 11px; opacity: 0.9;">
+              ${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
       -6
-    )}</div>
+    )}<br/>
+              Profile: ${profileStatus} ${profileText}
+            </div>
           </div>
         </div>
       </div>
     `;
 
-    // Add click handler to show status
-    indicator.addEventListener("click", () => {
-      this.showAutomationStatus();
-    });
-
+    indicator.addEventListener("click", () => this.showAutomationStatus());
     document.documentElement.appendChild(indicator);
     this.indicator = indicator;
   }
@@ -633,8 +698,10 @@ class ContentScriptManager {
       action: "contentScriptReady",
       sessionId: this.sessionId,
       platform: this.platform,
-      userId: this.userId, // Include userId
+      userId: this.userId,
       url: window.location.href,
+      sessionContext: this.sessionContext,
+      hasUserProfile: !!this.userProfile,
     }).catch(console.error);
   }
 
@@ -1003,7 +1070,6 @@ class ContentScriptManager {
   }
 
   showAutomationStatus() {
-    // Show modal with current automation status
     const modal = document.createElement("div");
     modal.style.cssText = `
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -1012,11 +1078,29 @@ class ContentScriptManager {
     `;
 
     modal.innerHTML = `
-      <div style="background: white; padding: 24px; border-radius: 12px; max-width: 400px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+      <div style="background: white; padding: 24px; border-radius: 12px; max-width: 500px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
         <h3 style="margin: 0 0 16px 0; color: #333;">Automation Status</h3>
         <p><strong>Platform:</strong> ${this.platform}</p>
         <p><strong>Session ID:</strong> ${this.sessionId}</p>
         <p><strong>User ID:</strong> ${this.userId}</p>
+        <p><strong>User Profile:</strong> ${
+          this.userProfile ? "✅ Loaded" : "❌ Missing"
+        }</p>
+        ${
+          this.userProfile
+            ? `
+          <p><strong>Profile Name:</strong> ${
+            this.userProfile.name || this.userProfile.firstName || "N/A"
+          }</p>
+          <p><strong>Profile Email:</strong> ${
+            this.userProfile.email || "N/A"
+          }</p>
+          <p><strong>Resume URL:</strong> ${
+            this.userProfile.resumeUrl ? "✅ Available" : "❌ Missing"
+          }</p>
+        `
+            : ""
+        }
         <p><strong>Current URL:</strong> ${window.location.href}</p>
         <p><strong>Status:</strong> ${
           this.automationActive ? "Active" : "Inactive"

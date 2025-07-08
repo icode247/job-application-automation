@@ -1,4 +1,5 @@
 // Platform-specific automation handlers
+
 class LeverAutomationHandler {
   constructor(messageHandler) {
     this.messageHandler = messageHandler;
@@ -7,8 +8,22 @@ class LeverAutomationHandler {
     this.activeConnections = new Set();
     this.lastKeepalive = new Map();
     this.errorCounts = new Map();
-    this.maxErrors = 3;
+    this.maxErrors = 5;
     this.processingMessages = new Set();
+    this.processedCompletions = new Set();
+
+    // Start cleanup process
+    this.startPeriodicCleanup();
+  }
+
+  safePortDisconnect(port) {
+    try {
+      if (port && typeof port.disconnect === "function") {
+        port.disconnect();
+      }
+    } catch (error) {
+      // Ignore disconnection errors
+    }
   }
 
   startPeriodicCleanup() {
@@ -16,34 +31,21 @@ class LeverAutomationHandler {
       const now = Date.now();
       const staleThreshold = 120000; // 2 minutes
 
-      // Clean up stale keepalive entries
+      // Clean up stale ports
       for (const [portName, lastSeen] of this.lastKeepalive.entries()) {
         if (now - lastSeen > staleThreshold) {
           console.log(`🧹 Cleaning up stale port: ${portName}`);
-          this.lastKeepalive.delete(portName);
           this.activeConnections.delete(portName);
-
-          // Find and disconnect the port
-          for (const [tabId, port] of this.portConnections.entries()) {
-            if (port.name === portName) {
-              try {
-                port.disconnect();
-              } catch (e) {
-                // Ignore
-              }
-              this.portConnections.delete(tabId);
-              break;
-            }
-          }
+          this.lastKeepalive.delete(portName);
         }
       }
 
-      // Clean up old processed completions
-      if (this.processedCompletions && this.processedCompletions.size > 100) {
+      // Clean up old completions
+      if (this.processedCompletions.size > 100) {
         const entries = Array.from(this.processedCompletions);
         this.processedCompletions = new Set(entries.slice(-50));
       }
-    }, 60000); // Run every minute
+    }, 60000);
   }
 
   cleanup() {
@@ -75,22 +77,40 @@ class LeverAutomationHandler {
 
   safePortSend(port, message) {
     try {
-      if (port && port.sender && this.isPortAlive(port)) {
-        port.postMessage(message);
-        return true;
-      } else {
+      // Check if port exists and is in active connections
+      if (!port || !port.name || !this.activeConnections.has(port.name)) {
         console.warn(
-          "⚠️ Cannot send message to disconnected/invalid port:",
-          message.type
+          `⚠️ Cannot send message to disconnected/invalid port: ${message.type}`
         );
         return false;
       }
-    } catch (error) {
-      console.warn("⚠️ Failed to send port message:", error);
-      // Clean up the port if it's dead
-      if (port) {
+
+      // Check if sender still exists (indicates port is alive)
+      if (!port.sender || !port.sender.tab) {
+        console.warn(`⚠️ Port sender no longer exists: ${message.type}`);
         this.activeConnections.delete(port.name);
+        return false;
       }
+
+      // Attempt to send message
+      port.postMessage(message);
+
+      // Update keepalive on successful send
+      this.lastKeepalive.set(port.name, Date.now());
+
+      return true;
+    } catch (error) {
+      console.warn(
+        `⚠️ Failed to send port message (${message.type}):`,
+        error.message
+      );
+
+      // Clean up failed port
+      if (port && port.name) {
+        this.activeConnections.delete(port.name);
+        this.lastKeepalive.delete(port.name);
+      }
+
       return false;
     }
   }
@@ -171,26 +191,11 @@ class LeverAutomationHandler {
       return false;
     }
   }
+
   getSessionIdFromPort(port) {
-    // Try to extract session ID from port name or find it from active automations
     const portName = port.name;
-    const sessionFromName = this.extractSessionFromPortName(portName);
-    if (sessionFromName) return sessionFromName;
-
-    // Fallback: look up by window ID
-    const windowId = port.sender?.tab?.windowId;
-    if (windowId) {
-      for (const [
-        sessionId,
-        automation,
-      ] of this.messageHandler.activeAutomations.entries()) {
-        if (automation.windowId === windowId) {
-          return sessionId;
-        }
-      }
-    }
-
-    return null;
+    const parts = portName.split("-");
+    return parts.length > 3 ? parts[3] : null;
   }
 
   async handleSendCvTaskError(port, data) {
@@ -201,50 +206,23 @@ class LeverAutomationHandler {
 
       console.log(`❌ Lever job application failed in tab ${tabId}:`, data);
 
-      // FIXED: Check for completion ID to prevent duplicate processing
+      // Prevent duplicate error processing
       if (data && data.completionId) {
-        const completionKey = `${sessionId}-${data.completionId}`;
-        if (
-          this.processedCompletions &&
-          this.processedCompletions.has(completionKey)
-        ) {
+        const completionKey = `error-${sessionId}-${data.completionId}`;
+        if (this.processedCompletions.has(completionKey)) {
           console.log(
-            `⚠️ Completion ${data.completionId} already processed, ignoring`
+            `⚠️ Error completion ${data.completionId} already processed`
           );
           return;
         }
-
-        if (!this.processedCompletions) {
-          this.processedCompletions = new Set();
-        }
         this.processedCompletions.add(completionKey);
-
-        // Clean up old completions (keep only last 50)
-        if (this.processedCompletions.size > 50) {
-          const entries = Array.from(this.processedCompletions);
-          this.processedCompletions = new Set(entries.slice(-50));
-        }
       }
 
-      // Increment error count with session-based tracking
+      // Track errors per session
       const errorCount = (this.errorCounts.get(sessionId) || 0) + 1;
       this.errorCounts.set(sessionId, errorCount);
 
-      // Check if too many errors for this session
-      if (errorCount >= this.maxErrors) {
-        console.error(
-          `🚨 Too many errors (${errorCount}) for session ${sessionId}, stopping automation`
-        );
-        this.safePortSend(port, {
-          type: "AUTOMATION_STOPPED",
-          message: `Too many errors (${errorCount}), automation stopped`,
-        });
-
-        // Clean up this session's error count
-        this.errorCounts.delete(sessionId);
-        return;
-      }
-
+      // Find automation
       let automation = null;
       for (const [
         sid,
@@ -257,6 +235,7 @@ class LeverAutomationHandler {
       }
 
       if (automation) {
+        // Update submitted links
         const url = automation.platformState.currentJobUrl;
         if (url && automation.platformState.submittedLinks) {
           const linkIndex = automation.platformState.submittedLinks.findIndex(
@@ -270,7 +249,7 @@ class LeverAutomationHandler {
           }
         }
 
-        // Close job tab if it exists
+        // Close job tab
         if (automation.platformState.currentJobTabId) {
           try {
             await chrome.tabs.remove(automation.platformState.currentJobTabId);
@@ -286,11 +265,11 @@ class LeverAutomationHandler {
         automation.platformState.currentJobTabId = null;
         automation.platformState.applicationStartTime = null;
 
-        // Send search next with exponential backoff delay
+        // Continue with delay if not too many errors
         if (errorCount < this.maxErrors) {
-          const delay = Math.min(2000 * errorCount, 10000); // Max 10 second delay
+          const delay = Math.min(3000 * errorCount, 15000);
           console.log(
-            `⏳ Waiting ${delay}ms before continuing due to error (count: ${errorCount})`
+            `⏳ Waiting ${delay}ms before continuing (error ${errorCount}/${this.maxErrors})`
           );
 
           setTimeout(async () => {
@@ -301,6 +280,16 @@ class LeverAutomationHandler {
               errorCount: errorCount,
             });
           }, delay);
+        } else {
+          console.error(
+            `🚨 Too many errors (${errorCount}) for session ${sessionId}, stopping automation`
+          );
+          this.safePortSend(port, {
+            type: "AUTOMATION_STOPPED",
+            message: `Too many errors (${errorCount}), automation stopped`,
+          });
+          this.errorCounts.delete(sessionId);
+          return;
         }
       }
 
@@ -309,8 +298,7 @@ class LeverAutomationHandler {
         message: "Error acknowledged",
       });
     } catch (error) {
-      console.error("❌ Error handling Lever SEND_CV_TASK_ERROR:", error);
-      // Don't send another error response to avoid recursion
+      console.error("❌ Error handling SEND_CV_TASK_ERROR:", error);
     }
   }
 
@@ -323,8 +311,10 @@ class LeverAutomationHandler {
   }
 
   cleanupPort(port, tabId, sessionId) {
-    // Remove from active connections
-    this.activeConnections.delete(port.name);
+    if (port && port.name) {
+      this.activeConnections.delete(port.name);
+      this.lastKeepalive.delete(port.name);
+    }
 
     if (tabId) {
       this.portConnections.delete(tabId);
@@ -339,8 +329,6 @@ class LeverAutomationHandler {
         }
       }
     }
-
-    this.lastKeepalive.delete(port.name);
   }
 
   cleanupPortsForTab(tabId) {
@@ -365,59 +353,55 @@ class LeverAutomationHandler {
     const parts = portName.split("-");
     return parts.length > 3 ? parts[3] : null;
   }
+
   handlePortConnection(port) {
     const portNameParts = port.name.split("-");
     const portType = portNameParts[1]; // 'search' or 'apply'
-    const tabId = parseInt(portNameParts[2]) || port.sender?.tab?.id;
-    const sessionId = this.extractSessionFromPortName(port.name);
+    const timestamp = portNameParts[2];
+    const sessionId = portNameParts[3]; // Extract session ID
+    const tabId = port.sender?.tab?.id;
 
-    // FIXED: Prevent duplicate connections
+    // Prevent duplicate connections
     if (this.activeConnections.has(port.name)) {
-      console.log(
-        `⚠️ Port ${port.name} already exists, ignoring duplicate connection`
-      );
-      try {
-        port.disconnect();
-      } catch (e) {
-        // Ignore errors
-      }
+      console.log(`⚠️ Duplicate port connection attempt: ${port.name}`);
+      this.safePortDisconnect(port);
       return;
-    }
-
-    // FIXED: Clean up existing connections for this tab before creating new one
-    if (tabId) {
-      this.cleanupPortsForTab(tabId);
     }
 
     console.log(
       `📝 Registering Lever ${portType} port for tab ${tabId}, session ${sessionId}`
     );
 
-    // Mark connection as active
-    this.activeConnections.add(port.name);
+    // Clean up existing port for this tab
+    if (tabId && this.portConnections.has(tabId)) {
+      const existingPort = this.portConnections.get(tabId);
+      this.cleanupPort(existingPort, tabId, sessionId);
+    }
 
+    // Register new port
+    this.activeConnections.add(port.name);
     if (tabId) {
       this.portConnections.set(tabId, port);
+    }
 
-      // Track by session
-      if (sessionId) {
-        if (!this.sessionPorts.has(sessionId)) {
-          this.sessionPorts.set(sessionId, new Set());
-        }
-        this.sessionPorts.get(sessionId).add(port);
+    // Track by session
+    if (sessionId) {
+      if (!this.sessionPorts.has(sessionId)) {
+        this.sessionPorts.set(sessionId, new Set());
       }
+      this.sessionPorts.get(sessionId).add(port);
     }
 
     // Set initial keepalive
     this.lastKeepalive.set(port.name, Date.now());
 
-    // FIXED: Add error handling to message listener
+    // Set up message handler with error protection
     port.onMessage.addListener((message) => {
-      // Prevent duplicate message processing
       const messageId = `${port.name}-${message.type}-${Date.now()}`;
+
       if (this.processingMessages.has(messageId)) {
         console.log(
-          `⚠️ Duplicate message ${message.type} from ${port.name}, ignoring`
+          `⚠️ Duplicate message ignored: ${message.type} from ${port.name}`
         );
         return;
       }
@@ -427,28 +411,32 @@ class LeverAutomationHandler {
       try {
         this.handlePortMessage(message, port);
       } catch (error) {
-        console.error(
-          `❌ Error handling message ${message.type} from ${port.name}:`,
-          error
-        );
+        console.error(`❌ Error handling message ${message.type}:`, error);
+        this.safePortSend(port, {
+          type: "ERROR",
+          message: `Error processing ${message.type}: ${error.message}`,
+        });
       } finally {
-        // Clean up after processing
-        setTimeout(() => {
-          this.processingMessages.delete(messageId);
-        }, 1000);
+        // Clean up after 1 second
+        setTimeout(() => this.processingMessages.delete(messageId), 1000);
       }
     });
 
+    // Handle disconnection
     port.onDisconnect.addListener(() => {
-      console.log("📪 Lever port disconnected:", port.name);
+      console.log(`📪 Lever port disconnected: ${port.name}`);
       this.cleanupPort(port, tabId, sessionId);
     });
 
-    // Send initial connection confirmation
-    this.safePortSend(port, {
-      type: "CONNECTION_ESTABLISHED",
-      data: { tabId, sessionId, portType },
-    });
+    // Send connection confirmation - ONLY if port is still active
+    setTimeout(() => {
+      if (this.activeConnections.has(port.name)) {
+        this.safePortSend(port, {
+          type: "CONNECTION_ESTABLISHED",
+          data: { tabId, sessionId, portType },
+        });
+      }
+    }, 100);
   }
 
   async handleGetSearchTask(port, data) {
@@ -488,26 +476,88 @@ class LeverAutomationHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
+    console.log(
+      `🔍 GET_SEND_CV_TASK request from tab ${tabId}, window ${windowId}`
+    );
+
     let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
     for (const [
       sessionId,
-      automation,
+      auto,
     ] of this.messageHandler.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        sessionData = {
-          devMode: automation.params?.devMode || false,
-          profile: automation.userProfile,
-          session: automation.sessionConfig,
-          avatarUrl: automation.userProfile?.avatarUrl,
-        };
+      if (auto.windowId === windowId) {
+        automation = auto;
+        console.log(`✅ Found automation session: ${sessionId}`);
         break;
       }
     }
 
-    this.messageHandler.sendPortResponse(port, {
+    if (automation) {
+      // FIXED: Ensure we have user profile data
+      let userProfile = automation.userProfile;
+
+      // If no user profile in automation, try to fetch from user service
+      if (!userProfile && automation.userId) {
+        try {
+          console.log(`📡 Fetching user profile for user ${automation.userId}`);
+
+          // Import UserService dynamically
+          const { default: UserService } = await import(
+            "../../services/user-service.js"
+          );
+          const userService = new UserService({ userId: automation.userId });
+          userProfile = await userService.getUserDetails();
+
+          // Cache it in automation for future use
+          automation.userProfile = userProfile;
+
+          console.log(`✅ User profile fetched and cached`);
+        } catch (error) {
+          console.error(`❌ Failed to fetch user profile:`, error);
+        }
+      }
+
+      sessionData = {
+        devMode: automation.params?.devMode || false,
+        profile: userProfile || null,
+        session: automation.sessionConfig || null,
+        avatarUrl: userProfile?.avatarUrl || null,
+        userId: automation.userId,
+        sessionId: automation.sessionId || null,
+      };
+
+      console.log(`📊 Session data prepared:`, {
+        hasProfile: !!sessionData.profile,
+        hasSession: !!sessionData.session,
+        userId: sessionData.userId,
+        devMode: sessionData.devMode,
+      });
+    } else {
+      console.warn(`⚠️ No automation found for window ${windowId}`);
+      sessionData = {
+        devMode: false,
+        profile: null,
+        session: null,
+        avatarUrl: null,
+        userId: null,
+        sessionId: null,
+      };
+    }
+
+    // Send response with detailed logging
+    const sent = this.safePortSend(port, {
       type: "SUCCESS",
-      data: sessionData || {},
+      data: sessionData,
     });
+
+    if (!sent) {
+      console.error(`❌ Failed to send CV task data to port ${port.name}`);
+    } else {
+      console.log(`✅ CV task data sent successfully to tab ${tabId}`);
+    }
   }
 
   async handleSendCvTask(port, data) {
