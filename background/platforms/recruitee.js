@@ -13,7 +13,6 @@ class RecruiteeAutomationHandler {
     // Start cleanup process
     this.startPeriodicCleanup();
   }
-  
   startPeriodicCleanup() {
     setInterval(() => {
       const now = Date.now();

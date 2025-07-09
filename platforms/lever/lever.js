@@ -8,7 +8,8 @@ import {
   StatusOverlay,
 } from "../../services/index.js";
 import { markLinkAsColor } from "../../utils/mark-links.js";
-//apply()
+//Job description cached
+//extractJobDescription
 export default class LeverPlatform extends BasePlatform {
   constructor(config) {
     super(config);
@@ -92,7 +93,6 @@ export default class LeverPlatform extends BasePlatform {
     if (!this.userProfile) issues.push("User profile not available");
 
     if (issues.length > 0) {
-      console.error("❌ Handler validation failed:", issues);
       this.statusOverlay?.addError(
         "Initialization issues: " + issues.join(", ")
       );
@@ -105,12 +105,6 @@ export default class LeverPlatform extends BasePlatform {
 
   async setSessionContext(sessionContext) {
     try {
-      console.log("🔧 Setting session context:", {
-        hasSessionContext: !!sessionContext,
-        hasUserProfile: !!sessionContext?.userProfile,
-        sessionId: sessionContext?.sessionId,
-      });
-
       this.sessionContext = sessionContext;
       this.hasSessionContext = true;
 
@@ -123,25 +117,23 @@ export default class LeverPlatform extends BasePlatform {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile set from session context");
         } else {
           // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged from session context");
         }
       }
 
       // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
-        console.log("📡 User profile missing, attempting to fetch...");
         try {
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
         } catch (error) {
-          console.error("❌ Failed to fetch user profile:", error);
+          this.statusOverlay?.addError(
+            "Failed to fetch user profile: " + error.message
+          );
         }
       }
 
@@ -156,32 +148,130 @@ export default class LeverPlatform extends BasePlatform {
       // FIXED: Update form handler if it exists
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
-        console.log("📝 Form handler updated with user profile");
       }
 
       // Store API host from session context
       if (sessionContext.apiHost) {
         this.sessionApiHost = sessionContext.apiHost;
 
-        // FIXED: Update file handler API host if it exists
         if (this.fileHandler) {
           this.fileHandler.apiHost = sessionContext.apiHost;
-          console.log("📎 File handler API host updated");
         }
       }
-
-      console.log("✅ Session context applied successfully", {
-        hasUserProfile: !!this.userProfile,
-        profileName: this.userProfile?.name || this.userProfile?.firstName,
-        hasResumeUrl: !!(
-          this.userProfile?.resumeUrl || this.userProfile?.resumeUrls?.length
-        ),
-      });
     } catch (error) {
-      console.error("❌ Error setting session context:", error);
+      this.statusOverlay?.addError(
+        "❌ Error setting session context: " + error.message
+      );
     }
   }
 
+  async extractJobDescription() {
+    try {
+      console.log("🔍 Extracting job details...");
+      this.statusOverlay.addInfo("Extracting job details...");
+
+      let jobDescription = {
+        title: "",
+        location: "",
+        department: "",
+        commitment: "",
+        workplaceType: "",
+      };
+
+      // Extract job title from heading
+      const titleElement = document.querySelector(
+        ".posting-header h2, .section h2, h2"
+      );
+      if (titleElement) {
+        jobDescription.title = titleElement.textContent.trim();
+        console.log(`Job title: ${jobDescription.title}`);
+      }
+
+      // Extract categories (location, department, etc.) from the posting categories
+      const locationElement = document.querySelector(
+        ".posting-category.location, .location"
+      );
+      if (locationElement) {
+        jobDescription.location = locationElement.textContent.trim();
+      }
+
+      const departmentElement = document.querySelector(
+        ".posting-category.department, .department"
+      );
+      if (departmentElement) {
+        jobDescription.department = departmentElement.textContent.trim();
+      }
+
+      const commitmentElement = document.querySelector(
+        ".posting-category.commitment, .commitment"
+      );
+      if (commitmentElement) {
+        jobDescription.commitment = commitmentElement.textContent.trim();
+      }
+
+      const workplaceElement = document.querySelector(
+        ".posting-category.workplaceTypes, .workplaceTypes"
+      );
+      if (workplaceElement) {
+        jobDescription.workplaceType = workplaceElement.textContent.trim();
+      }
+
+      // If we couldn't find structured elements, try text-based extraction as fallback
+      if (!jobDescription.title) {
+        const possibleTitleElements = document.querySelectorAll("h1, h2, h3");
+        for (const element of possibleTitleElements) {
+          if (
+            element.textContent.length > 5 &&
+            element.textContent.length < 100
+          ) {
+            jobDescription.title = element.textContent.trim();
+            break;
+          }
+        }
+      }
+
+      // Extract company name from URL or page content if possible
+      const companyMatch = window.location.hostname.match(
+        /jobs\.lever\.co\/([^\/]+)/i
+      );
+      if (companyMatch && companyMatch[1]) {
+        jobDescription.company = companyMatch[1].replace(/-/g, " ");
+        // Capitalize the company name
+        jobDescription.company = jobDescription.company
+          .split(" ")
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(" ");
+      }
+
+      // Extract full job description text for better context
+      const fullDescriptionElement = document.querySelector(
+        ".posting-content, .posting-description, .job-description, .section-wrapper"
+      );
+      if (fullDescriptionElement) {
+        jobDescription.fullDescription =
+          fullDescriptionElement.textContent.trim();
+      }
+
+      console.log("✅ Job details extracted successfully:", {
+        title: jobDescription.title,
+        company: jobDescription.company,
+        location: jobDescription.location,
+      });
+
+      return jobDescription;
+    } catch (error) {
+      console.error("❌ Error extracting job details:", error);
+      this.statusOverlay.addError(
+        `Error extracting job details: ${error.message}`
+      );
+
+      // Return minimal info even if extraction fails
+      return {
+        title: document.title || "Job Position",
+      };
+    }
+  }
+  
   getApiHost() {
     return (
       this.sessionApiHost ||
@@ -193,18 +283,15 @@ export default class LeverPlatform extends BasePlatform {
 
   async initialize() {
     await super.initialize();
-    console.log("🎯 Lever platform initialized");
 
     // Create status overlay FIRST
     this.statusOverlay.create();
-    console.log("✅ Status overlay created");
 
     // Initialize file handler with the created status overlay
     this.fileHandler = new LeverFileHandler({
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
     });
-    console.log("📎 File handler initialized with status service");
 
     // Set up communication with background script
     this.initializePortConnection();
@@ -221,19 +308,14 @@ export default class LeverPlatform extends BasePlatform {
       jobDescription: "",
     });
 
-    console.log("🔧 All handlers initialized", {
-      hasFileHandler: !!this.fileHandler,
-      hasFormHandler: !!this.formHandler,
-      hasStatusOverlay: !!this.statusOverlay,
-      hasUserData: !!this.userProfile,
-    });
-
     this.statusOverlay.addSuccess("Lever automation initialized");
   }
 
   initializePortConnection() {
     try {
-      this.log("📡 Initializing port connection with background script");
+      this.statusOverlay.addInfo(
+        "📡 Initializing port connection with background script"
+      );
 
       // Disconnect existing port if any
       if (this.port) {
@@ -697,9 +779,96 @@ export default class LeverPlatform extends BasePlatform {
   }
 
   isLeverJobPage(url) {
-    return /^https:\/\/jobs\.(eu\.)?lever\.co\/([^\/]*)\/([^\/]*)\/?(.*)?$/.test(
+    return /^https:\/\/jobs\.(eu\.)?lever\.co\/[^\/]+\/[^\/]+/.test(url);
+  }
+
+  isLeverJobListingPage(url) {
+    return /^https:\/\/jobs\.(eu\.)?lever\.co\/[^\/]+\/[^\/]+(?!\/apply)/.test(
       url
     );
+  }
+
+  isLeverApplicationPage(url) {
+    return /^https:\/\/jobs\.(eu\.)?lever\.co\/[^\/]+\/[^\/]+\/apply/.test(url);
+  }
+
+  findApplyButton() {
+    // Look for "Apply for this job" or similar buttons
+    const applySelectors = [
+      'a[href*="/apply"]',
+      "a.postings-btn",
+      'a.button[href*="/apply"]',
+      'a.btn[href*="/apply"]',
+      "a.btn-apply",
+      "a.apply-button",
+      'a[data-qa="btn-apply"]',
+      "div.apply-button a",
+      "div.application-action a",
+      ".postings-apply a",
+      ".posting-apply a",
+      ".posting-actions a",
+    ];
+
+    for (const selector of applySelectors) {
+      try {
+        const elements = document.querySelectorAll(selector);
+        console.log(
+          `Looking for apply button with selector: ${selector}, found: ${elements.length}`
+        );
+
+        for (const element of elements) {
+          if (
+            this.isElementVisible(element) &&
+            (element.href?.includes("/apply") ||
+              element.textContent.toLowerCase().includes("apply"))
+          ) {
+            return element;
+          }
+        }
+      } catch (e) {
+        console.warn(`Error with selector ${selector}:`, e);
+      }
+    }
+
+    // If selectors fail, try finding by text content
+    const allLinks = document.querySelectorAll("a");
+    for (const link of allLinks) {
+      if (this.isElementVisible(link)) {
+        const text = link.textContent.toLowerCase();
+        if (
+          (text.includes("apply") || text.includes("application")) &&
+          (link.href?.includes("/apply") ||
+            link.getAttribute("href")?.includes("/apply"))
+        ) {
+          return link;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async waitForApplicationPage(timeout = 10000) {
+    console.log("Waiting for application page...");
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      // Check if URL contains /apply
+      if (window.location.href.includes("/apply")) {
+        console.log("URL contains /apply, checking for form...");
+        // Also check for application form presence
+        const form = this.findApplicationForm();
+        if (form) {
+          console.log("Application form found!");
+          return true;
+        }
+      }
+
+      await this.wait(500);
+    }
+
+    console.warn("Timeout waiting for application page");
+    throw new Error("Timeout waiting for application page to load");
   }
 
   async startSearchProcess() {
@@ -1227,6 +1396,41 @@ export default class LeverPlatform extends BasePlatform {
         this.statusOverlay.addSuccess("User profile already available");
       }
 
+      // NEW: Check if we're on a job listing page and click the "Apply" button if needed
+      const currentUrl = window.location.href;
+      if (this.isLeverJobListingPage(currentUrl)) {
+        console.log("📋 On job listing page, need to click Apply button");
+        this.statusOverlay.addInfo(
+          "Job listing page detected - clicking Apply button"
+        );
+
+        // Extract job description while on the listing page
+        console.log("📄 Extracting job description from listing page");
+        this.cachedJobDescription = await this.extractJobDescription();
+        console.log("✅ Job description cached:", {
+          title: this.cachedJobDescription.title,
+          company: this.cachedJobDescription.company,
+        });
+
+        // Find and click the Apply button
+        const applyButton = this.findApplyButton();
+        if (!applyButton) {
+          throw new Error("Cannot find Apply button on job listing page");
+        }
+
+        console.log("🖱️ Clicking Apply button");
+        this.statusOverlay.addInfo("Clicking Apply button");
+        applyButton.click();
+
+        // Wait for the application page to load
+        console.log("⏳ Waiting for application page to load");
+        this.statusOverlay.addInfo("Waiting for application page to load");
+        await this.waitForApplicationPage();
+
+        console.log("✅ Application page loaded");
+        this.statusOverlay.addSuccess("Application page loaded successfully");
+      }
+
       // Check for success page first
       const applied = this.checkSubmissionSuccess();
       if (applied) {
@@ -1536,27 +1740,24 @@ export default class LeverPlatform extends BasePlatform {
       throw new Error("User profile is required for form processing");
     }
 
-    console.log("👤 Using user profile for form filling:", {
-      name: this.userProfile.name || this.userProfile.firstName,
-      email: this.userProfile.email,
-      hasResumeUrl: !!this.userProfile.resumeUrl,
-      resumeUrls: this.userProfile.resumeUrls?.length || 0,
-    });
-
     // Extract job description for AI context
-    const jobDescription = this.extractJobDescription();
-    console.log("📄 Job description extracted:", !!jobDescription);
+    const jobDescription =
+      this.cachedJobDescription || (await this.extractJobDescription());
+    console.log("📄 Job description extracted:", {
+      title: jobDescription.title,
+      location: jobDescription.location,
+      department: jobDescription.department,
+    });
 
     // Update form handler with job description
     if (this.formHandler) {
       this.formHandler.jobDescription = jobDescription;
       this.formHandler.userData = this.userProfile;
+      console.log("🔄 Updated form handler with job description and user data");
     }
 
     // FIXED: Enhanced file upload handling with validation
     try {
-      console.log("📎 Starting file upload process...");
-
       // Validate file handler exists
       if (!this.fileHandler) {
         console.error("❌ File handler not initialized!");
@@ -1567,58 +1768,42 @@ export default class LeverPlatform extends BasePlatform {
       // Validate user profile has file URLs
       const hasResumeUrl = !!(
         this.userProfile.resumeUrl ||
-        (this.userProfile.resumeUrl && this.userProfile.resumeUrl.length > 0)
+        (this.userProfile.resumeUrls && this.userProfile.resumeUrls.length > 0)
       );
-      console.log("📄 Resume availability check:", {
-        hasResumeUrl,
-        resumeUrl: this.userProfile.resumeUrl,
-        resumeUrlsCount: this.userProfile.resumeUrl?.length || 0,
-      });
 
       if (!hasResumeUrl) {
         this.statusOverlay.addWarning("No resume files available for upload");
-        console.warn("⚠️ No resume files available in user profile");
       } else {
-        this.statusOverlay.addInfo("Processing file uploads...");
-        const fileUploadResult = await this.fileHandler.handleFileUploads(
+        // Pass the job description to the file handler
+        await this.fileHandler.handleFileUploads(
           form,
           this.userProfile,
           jobDescription
         );
-
-        if (fileUploadResult) {
-          console.log("✅ File uploads completed successfully");
-          this.statusOverlay.addSuccess("File uploads completed");
-        } else {
-          console.warn("⚠️ File uploads completed with issues");
-          this.statusOverlay.addWarning(
-            "File uploads completed with some issues"
-          );
-        }
       }
     } catch (error) {
-      console.error("❌ File upload failed:", error);
       this.statusOverlay.addError("File upload failed: " + error.message);
-      // Continue with form filling even if file upload fails
     }
 
     // Process form fields
-    // try {
-    //   console.log("📝 Filling form fields...");
-    //   this.statusOverlay.addInfo("Filling form fields...");
+    try {
+      this.statusOverlay.addInfo("Filling form fields...");
 
-    //   if (!this.formHandler) {
-    //     console.error("❌ Form handler not initialized!");
-    //     throw new Error("Form handler not initialized");
-    //   }
+      if (!this.formHandler) {
+        console.error("❌ Form handler not initialized!");
+        throw new Error("Form handler not initialized");
+      }
 
-    //   await this.formHandler.fillFormWithProfile(form, this.userProfile);
-    //   console.log("✅ Form fields filled");
-    //   this.statusOverlay.addSuccess("Form fields filled");
-    // } catch (error) {
-    //   console.error("⚠️ Form filling failed:", error);
-    //   this.statusOverlay.addWarning("Form filling failed: " + error.message);
-    // }
+      // Pass job description to form filling method if available
+      await this.formHandler.fillFormWithProfile(
+        form,
+        this.userProfile,
+        jobDescription
+      );
+      this.statusOverlay.addSuccess("Form fields filled");
+    } catch (error) {
+      this.statusOverlay.addWarning("Form filling failed: " + error.message);
+    }
 
     // Find and click submit button
     const submitButton = this.findSubmitButton(form);
@@ -1629,7 +1814,6 @@ export default class LeverPlatform extends BasePlatform {
     // Enable submit button if disabled
     if (submitButton.disabled) {
       submitButton.disabled = false;
-      console.log("✅ Enabled disabled submit button");
     }
 
     // Submit the form
@@ -1637,8 +1821,6 @@ export default class LeverPlatform extends BasePlatform {
   }
 
   findSubmitButton(form) {
-    console.log("🔍 Looking for submit button...");
-
     const submitSelectors = [
       'button[type="submit"]',
       'input[type="submit"]',
@@ -1656,9 +1838,6 @@ export default class LeverPlatform extends BasePlatform {
     for (const selector of submitSelectors) {
       try {
         const buttons = form.querySelectorAll(selector);
-        console.log(
-          `Checking selector "${selector}": found ${buttons.length} buttons`
-        );
 
         for (const btn of buttons) {
           if (
@@ -1666,7 +1845,6 @@ export default class LeverPlatform extends BasePlatform {
             !btn.disabled &&
             !btn.classList.contains("disabled")
           ) {
-            console.log(`✅ Found submit button with selector: ${selector}`);
             return btn;
           }
         }
@@ -1679,7 +1857,6 @@ export default class LeverPlatform extends BasePlatform {
     const allButtons = form.querySelectorAll(
       'button, input[type="button"], input[type="submit"]'
     );
-    console.log(`Checking ${allButtons.length} buttons for submit text...`);
 
     for (const btn of allButtons) {
       if (
@@ -1701,7 +1878,6 @@ export default class LeverPlatform extends BasePlatform {
       ];
 
       if (submitTexts.some((submitText) => text.includes(submitText))) {
-        console.log(`✅ Found submit button with text: "${text}"`);
         return btn;
       }
     }
@@ -1716,11 +1892,9 @@ export default class LeverPlatform extends BasePlatform {
 
     if (visibleButtons.length > 0) {
       const lastButton = visibleButtons[visibleButtons.length - 1];
-      console.log("⚠️ Using last visible button as submit button");
       return lastButton;
     }
 
-    console.log("❌ No submit button found");
     return null;
   }
 
@@ -1732,11 +1906,12 @@ export default class LeverPlatform extends BasePlatform {
     await this.wait(600);
 
     try {
-      this.log("Clicking submit button:", submitButton);
       submitButton.click();
       this.statusOverlay.addSuccess("Clicked submit button");
     } catch (e) {
-      this.log("Standard click failed:", e);
+      this.statusOverlay.addError(
+        "Failed to click submit button: " + e.message
+      );
     }
     return true;
   }
@@ -1790,7 +1965,7 @@ export default class LeverPlatform extends BasePlatform {
       // Fallback to a timestamp-based ID if we can't find a UUID
       return "job-" + Date.now();
     } catch (error) {
-      this.log("Error extracting job ID:", error);
+      this.statusOverlay.addError("Error extracting job ID: " + error.message);
       return "job-" + Date.now();
     }
   }
@@ -1805,18 +1980,6 @@ export default class LeverPlatform extends BasePlatform {
       return null;
     } catch (error) {
       return null;
-    }
-  }
-
-  extractJobDescription() {
-    try {
-      const descriptionElement = document.querySelector(
-        ".posting-content, .posting-description, .job-description"
-      );
-      return descriptionElement ? descriptionElement.textContent.trim() : "";
-    } catch (error) {
-      this.log("⚠️ Error extracting job description", error);
-      return "";
     }
   }
 

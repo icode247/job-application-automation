@@ -3,6 +3,7 @@ import SessionManager from "./session-manager.js";
 import WindowManager from "./window-manager.js";
 import LeverAutomationHandler from "./platforms/lever.js";
 
+//handleStartApplying
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -17,7 +18,6 @@ export default class MessageHandler {
     this.pendingRequests = new Set();
 
     this.setupPortHandlers();
-    this.initializePlatformHandlers();
     this.setupTabListeners();
   }
 
@@ -177,6 +177,15 @@ export default class MessageHandler {
         preferences = {},
         apiHost = "http://localhost:3000",
       } = request;
+
+      const platformHandler = this.initializePlatformHandler(platform);
+      if (!platformHandler) {
+        sendResponse({
+          status: "error",
+          message: `Platform handler for ${platform} is not available`,
+        });
+        return;
+      }
 
       // FIXED: Fetch user profile data before starting automation
       let userProfile = null;
@@ -390,10 +399,43 @@ export default class MessageHandler {
     };
   }
 
-  initializePlatformHandlers() {
-    this.platformHandlers.set("lever", new LeverAutomationHandler(this));
-    // this.platformHandlers.set('workable', new WorkableAutomationHandler(this));
-    // this.platformHandlers.set('recruitee', new RecruiteeAutomationHandler(this));
+  initializePlatformHandler(platform) {
+    if (this.platformHandlers.has(platform)) {
+      return this.platformHandlers.get(platform);
+    }
+
+    console.log(`🔧 Initializing platform handler for: ${platform}`);
+
+    let handler = null;
+
+    switch (platform) {
+      case "lever":
+        handler = new LeverAutomationHandler(this);
+        break;
+      case "workable":
+        handler = new WorkableAutomationHandler(this);
+        break;
+      case "recruitee":
+        handler = new RecruiteeAutomationHandler(this);
+        break;
+      default:
+        console.error(`❌ Unsupported platform: ${platform}`);
+        return null;
+    }
+
+    if (handler) {
+      this.platformHandlers.set(platform, handler);
+      console.log(`✅ Platform handler initialized for: ${platform}`);
+    }
+
+    return handler;
+  }
+
+  getPlatformHandler(platform) {
+    return (
+      this.platformHandlers.get(platform) ||
+      this.initializePlatformHandler(platform)
+    );
   }
 
   setupPortHandlers() {
@@ -403,7 +445,7 @@ export default class MessageHandler {
       const portParts = port.name.split("-");
       if (portParts.length >= 3) {
         const platform = portParts[0];
-        const handler = this.platformHandlers.get(platform);
+        const handler = this.getPlatformHandler(platform);
 
         if (handler) {
           handler.handlePortConnection(port);
@@ -418,7 +460,7 @@ export default class MessageHandler {
     try {
       console.log(`📨 ${platform} port message received:`, message);
 
-      const handler = this.platformHandlers.get(platform);
+      const handler = this.getPlatformHandler(platform);
       if (handler) {
         await handler.handlePortMessage(message, port);
       } else {

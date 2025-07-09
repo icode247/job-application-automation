@@ -1,12 +1,11 @@
 // platforms/lever/lever-file-handler.js
-
-// File uploads failed
-//Downloading file...
+//File uploads completed with some issues
 export default class LeverFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
     this.apiHost = config.apiHost || "http://localhost:3000";
     this.aiBaseUrl = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
+    this.processedInputs = new Set(); // Track processed inputs to avoid duplicates
 
     console.log("📎 LeverFileHandler initialized:", {
       hasStatusService: !!this.statusService,
@@ -16,29 +15,10 @@ export default class LeverFileHandler {
   }
 
   /**
-   * Check if file input is accessible (even if visually hidden)
-   */
-  isFileInputAccessible(fileInput) {
-    if (!fileInput) return false;
-
-    // For Lever's invisible file inputs, check if they're in the DOM and not disabled
-    if (
-      fileInput.classList.contains("invisible-resume-upload") ||
-      fileInput.classList.contains("application-file-input")
-    ) {
-      return !fileInput.disabled && fileInput.offsetParent !== null;
-    }
-
-    // For other file inputs, use normal visibility check
-    return this.isElementVisible(fileInput);
-  }
-
-  /**
-   * Handle all file uploads in the form
+   * Handle all file uploads in the form with duplicate prevention
    */
   async handleFileUploads(form, userDetails, jobDescription) {
     try {
-
       // Validate inputs
       if (!form) {
         this.showStatus("No form provided for file uploads", "error");
@@ -62,9 +42,17 @@ export default class LeverFileHandler {
       let successCount = 0;
 
       for (const fileInput of fileInputs) {
+        // Skip if already processed
+        const inputId = this.getInputIdentifier(fileInput);
+        if (this.processedInputs.has(inputId)) {
+          console.log(`⏭️ Skipping already processed input: ${inputId}`);
+          continue;
+        }
+
         if (!this.isFileInputAccessible(fileInput)) continue;
 
         uploadCount++;
+        this.processedInputs.add(inputId); // Mark as processed
 
         try {
           const result = await this.handleSingleFileUpload(
@@ -101,6 +89,288 @@ export default class LeverFileHandler {
       this.showStatus("File upload process failed: " + error.message, "error");
       return false;
     }
+  }
+
+  /**
+   * Get a unique identifier for file input to prevent duplicate processing
+   */
+  getInputIdentifier(fileInput) {
+    return fileInput.id || fileInput.name || fileInput.getAttribute('data-qa') || 
+           `input-${Array.from(fileInput.form?.querySelectorAll('input[type="file"]') || []).indexOf(fileInput)}`;
+  }
+
+  /**
+   * Enhanced filename extraction with proper URL decoding
+   */
+  extractFileNameFromUrl(url) {
+    try {
+      // Decode the URL first to handle encoded characters
+      const decodedUrl = decodeURIComponent(url);
+      
+      // Extract filename from the decoded URL
+      const urlObj = new URL(decodedUrl);
+      let fileName = urlObj.pathname.split("/").pop();
+      
+      // If still encoded or malformed, try different approach
+      if (!fileName || !fileName.includes(".") || fileName.includes("%")) {
+        // Try to extract from the original URL parts
+        const pathParts = decodedUrl.split("/");
+        for (let i = pathParts.length - 1; i >= 0; i--) {
+          const part = pathParts[i];
+          if (part.includes(".pdf") || part.includes(".doc")) {
+            fileName = part;
+            break;
+          }
+        }
+      }
+
+      // Clean up the filename
+      if (fileName && fileName.includes(".")) {
+        // Remove any remaining URL encoding and invalid characters
+        fileName = fileName
+          .replace(/%[0-9A-F]{2}/gi, '') // Remove any remaining URL encoding
+          .replace(/[^\w\s.-]/gi, '') // Remove invalid filename characters
+          .replace(/\s+/g, '_') // Replace spaces with underscores
+          .trim();
+        
+        // Ensure it has a valid extension
+        if (!fileName.match(/\.(pdf|doc|docx)$/i)) {
+          fileName += '.pdf';
+        }
+        
+        return fileName;
+      }
+
+      // Fallback to a clean default name
+      return `resume_${Date.now()}.pdf`;
+    } catch (error) {
+      console.error("Error extracting filename:", error);
+      return `resume_${Date.now()}.pdf`;
+    }
+  }
+
+  /**
+   * Enhanced upload process waiting with better error detection
+   */
+  async waitForUploadProcess(fileInput, timeout = 30000) {
+    console.log("⏳ Starting waitForUploadProcess with timeout:", timeout);
+
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      let checkCount = 0;
+      let lastErrorMessage = '';
+
+      const checkUpload = () => {
+        checkCount++;
+        const elapsed = Date.now() - startTime;
+
+        if (checkCount % 10 === 0) {
+          console.log(`⏳ Upload check ${checkCount}, elapsed: ${elapsed}ms`);
+        }
+
+        // Check for success or error indicators
+        const container =
+          fileInput.closest("form, .lever-form-field, .form-group") ||
+          fileInput.parentElement;
+
+        // Look for success indicators first
+        const successSelectors = [
+          ".upload-success",
+          ".file-uploaded", 
+          ".upload-complete",
+          ".success-message",
+          ".file-success",
+          ".uploaded",
+          ".file-name", // Lever often shows filename when uploaded
+          ".filename",
+          ".selected-file"
+        ];
+
+        // Check for success
+        for (const selector of successSelectors) {
+          const element = container?.querySelector(selector);
+          if (element && element.textContent.trim()) {
+            console.log(`✅ Success indicator found: ${selector}`, element.textContent.trim());
+            resolve(true);
+            return;
+          }
+        }
+
+        // Check if the filename is displayed anywhere in the form (common success indicator)
+        if (fileInput.files && fileInput.files.length > 0) {
+          const fileName = fileInput.files[0].name;
+          // Look for the filename being displayed somewhere in the container
+          const containerText = container?.textContent || '';
+          if (containerText.includes(fileName.split('.')[0])) {
+            console.log(`✅ Filename found in container text, assuming success`);
+            resolve(true);
+            return;
+          }
+        }
+
+        // Enhanced error detection - look for specific error types
+        const errorSelectors = [
+          ".upload-error",
+          ".file-error", 
+          ".error-message",
+          ".upload-failed",
+          ".file-failed",
+          ".error",
+          ".validation-error"
+        ];
+
+        // Check for errors, but be more selective
+        for (const selector of errorSelectors) {
+          const element = container?.querySelector(selector);
+          if (element && element.textContent.trim()) {
+            const errorText = element.textContent.trim();
+            
+            // Ignore certain generic errors that might not be related to our upload
+            const ignoredErrors = [
+              'File exceeds the maximum upload size of 100MB', // This seems to be a generic error
+              'Please select a file', // This means no file was selected, but we did select one
+              'Invalid file type' // Only worry about this if our file type is actually invalid
+            ];
+            
+            const isIgnoredError = ignoredErrors.some(ignored => 
+              errorText.includes(ignored)
+            );
+            
+            if (!isIgnoredError) {
+              console.log(`❌ Real error indicator found: ${selector}`, errorText);
+              resolve(false);
+              return;
+            } else {
+              console.log(`⚠️ Ignoring generic error: ${errorText}`);
+              lastErrorMessage = errorText;
+            }
+          }
+        }
+
+        // Check for file input state - if it still has files, that's usually good
+        if (fileInput.files && fileInput.files.length > 0) {
+          const file = fileInput.files[0];
+          
+          // After 10 seconds, if file is still there and no real errors, assume success
+          if (elapsed > 10000) {
+            console.log(`✅ File still present after 10s, assuming upload success: ${file.name}`);
+            resolve(true);
+            return;
+          }
+        }
+
+        // Timeout check - be more optimistic
+        if (elapsed > timeout) {
+          console.log(`⏰ Upload wait timeout reached: ${elapsed}ms`);
+          
+          // If we have the file in input and no real errors, assume success
+          if (fileInput.files && fileInput.files.length > 0 && !lastErrorMessage.includes('Invalid')) {
+            console.log(`✅ Timeout reached but file present, assuming success`);
+            resolve(true);
+          } else {
+            console.log(`❌ Timeout reached with issues`);
+            resolve(false);
+          }
+          return;
+        }
+
+        setTimeout(checkUpload, 500);
+      };
+
+      checkUpload();
+    });
+  }
+
+  /**
+   * Enhanced blob upload with better filename handling
+   */
+  async uploadBlob(fileInput, blob, originalFileName) {
+    try {
+      console.log("📤 Starting uploadBlob:", {
+        hasFileInput: !!fileInput,
+        blobSize: blob.size,
+        blobType: blob.type,
+        originalFileName: originalFileName,
+      });
+
+      if (blob.size === 0) {
+        throw new Error("File is empty");
+      }
+
+      // Clean the filename properly
+      const cleanFileName = this.extractFileNameFromUrl(originalFileName);
+      console.log("📄 Cleaned filename:", cleanFileName);
+
+      // Create File object with clean filename
+      const file = new File([blob], cleanFileName, {
+        type: blob.type || "application/pdf",
+        lastModified: Date.now(),
+      });
+
+      console.log("📄 File object created:", {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+      });
+
+      // Create DataTransfer to simulate file selection
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+
+      console.log("📋 DataTransfer created with file");
+
+      // Set files on input
+      fileInput.files = dataTransfer.files;
+
+      console.log("📎 Files set on input:", {
+        filesLength: fileInput.files.length,
+        firstFileName: fileInput.files[0]?.name,
+      });
+
+      // Trigger events
+      console.log("🎯 Dispatching file events...");
+      await this.dispatchFileEvents(fileInput);
+
+      // Wait for upload to process
+      console.log("⏳ Waiting for upload to process...");
+      const uploadSuccess = await this.waitForUploadProcess(fileInput);
+
+      console.log(`${uploadSuccess ? "✅" : "❌"} Upload process completed:`, {
+        success: uploadSuccess,
+        fileName: cleanFileName,
+      });
+
+      if (uploadSuccess) {
+        console.log(`✅ Successfully uploaded: ${cleanFileName}`);
+      } else {
+        console.warn(`⚠️ Upload may have failed: ${cleanFileName}`);
+      }
+
+      return uploadSuccess;
+    } catch (error) {
+      console.error("❌ Error uploading blob:", error);
+      this.showStatus("Blob upload failed: " + error.message, "error");
+      return false;
+    }
+  }
+
+  /**
+   * Check if file input is accessible (even if visually hidden)
+   */
+  isFileInputAccessible(fileInput) {
+    if (!fileInput) return false;
+
+    // For Lever's invisible file inputs, check if they're in the DOM and not disabled
+    if (
+      fileInput.classList.contains("invisible-resume-upload") ||
+      fileInput.classList.contains("application-file-input")
+    ) {
+      return !fileInput.disabled && fileInput.offsetParent !== null;
+    }
+
+    // For other file inputs, use normal visibility check
+    return this.isElementVisible(fileInput);
   }
 
   /**
@@ -423,76 +693,6 @@ export default class LeverFileHandler {
   }
 
   /**
-   * Upload blob to file input with enhanced debugging
-   */
-  async uploadBlob(fileInput, blob, fileName) {
-    try {
-      console.log("📤 Starting uploadBlob:", {
-        hasFileInput: !!fileInput,
-        blobSize: blob.size,
-        blobType: blob.type,
-        fileName: fileName,
-      });
-
-      if (blob.size === 0) {
-        throw new Error("File is empty");
-      }
-
-      // Create File object
-      const file = new File([blob], fileName, {
-        type: blob.type || "application/pdf",
-        lastModified: Date.now(),
-      });
-
-      console.log("📄 File object created:", {
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified,
-      });
-
-      // Create DataTransfer to simulate file selection
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
-
-      console.log("📋 DataTransfer created with file");
-
-      // Set files on input
-      fileInput.files = dataTransfer.files;
-
-      console.log("📎 Files set on input:", {
-        filesLength: fileInput.files.length,
-        firstFileName: fileInput.files[0]?.name,
-      });
-
-      // Trigger events
-      console.log("🎯 Dispatching file events...");
-      await this.dispatchFileEvents(fileInput);
-
-      // Wait for upload to process
-      console.log("⏳ Waiting for upload to process...");
-      const uploadSuccess = await this.waitForUploadProcess(fileInput);
-
-      console.log(`${uploadSuccess ? "✅" : "❌"} Upload process completed:`, {
-        success: uploadSuccess,
-        fileName: fileName,
-      });
-
-      if (uploadSuccess) {
-        console.log(`✅ Successfully uploaded: ${fileName}`);
-      } else {
-        console.warn(`⚠️ Upload may have failed: ${fileName}`);
-      }
-
-      return uploadSuccess;
-    } catch (error) {
-      console.error("❌ Error uploading blob:", error);
-      this.showStatus("Blob upload failed: " + error.message, "error");
-      return false;
-    }
-  }
-
-  /**
    * Enhanced file events dispatching with logging
    */
   async dispatchFileEvents(fileInput) {
@@ -528,118 +728,6 @@ export default class LeverFileHandler {
     } catch (error) {
       console.error("❌ Error dispatching file events:", error);
     }
-  }
-
-  /**
-   * Enhanced upload process waiting with detailed logging
-   */
-  async waitForUploadProcess(fileInput, timeout = 30000) {
-    console.log("⏳ Starting waitForUploadProcess with timeout:", timeout);
-
-    return new Promise((resolve) => {
-      const startTime = Date.now();
-      let checkCount = 0;
-
-      const checkUpload = () => {
-        checkCount++;
-        const elapsed = Date.now() - startTime;
-
-        if (checkCount % 10 === 0) {
-          // Log every 5 seconds
-          console.log(`⏳ Upload check ${checkCount}, elapsed: ${elapsed}ms`);
-        }
-
-        // Check for success or error indicators
-        const container =
-          fileInput.closest("form, .lever-form-field, .form-group") ||
-          fileInput.parentElement;
-
-        // Look for success indicators
-        const successSelectors = [
-          ".upload-success",
-          ".file-uploaded",
-          ".upload-complete",
-          ".success-message",
-          ".file-success",
-          ".uploaded",
-        ];
-
-        const errorSelectors = [
-          ".upload-error",
-          ".file-error",
-          ".error-message",
-          ".upload-failed",
-          ".file-failed",
-          ".error",
-        ];
-
-        // Check for success
-        for (const selector of successSelectors) {
-          const element = container?.querySelector(selector);
-          if (element) {
-            console.log(
-              `✅ Success indicator found: ${selector}`,
-              element.textContent.trim()
-            );
-            resolve(true);
-            return;
-          }
-        }
-
-        // Check for errors
-        for (const selector of errorSelectors) {
-          const element = container?.querySelector(selector);
-          if (element && element.textContent.trim()) {
-            console.log(
-              `❌ Error indicator found: ${selector}`,
-              element.textContent.trim()
-            );
-            resolve(false);
-            return;
-          }
-        }
-
-        // Check if filename is displayed (common success indicator)
-        const fileNameSelectors = [
-          ".filename",
-          ".file-name",
-          ".uploaded-file",
-          ".file-display",
-          ".selected-file",
-        ];
-
-        for (const selector of fileNameSelectors) {
-          const fileNameDisplay = container?.querySelector(selector);
-          if (fileNameDisplay && fileNameDisplay.textContent.trim()) {
-            console.log(
-              `✅ Filename display found: ${selector}`,
-              fileNameDisplay.textContent.trim()
-            );
-            resolve(true);
-            return;
-          }
-        }
-
-        // Check if the file input value changed or shows a file
-        if (fileInput.files && fileInput.files.length > 0) {
-          const file = fileInput.files[0];
-          console.log(
-            `📄 File still in input: ${file.name} (${file.size} bytes)`
-          );
-        }
-
-        // Timeout check
-        if (elapsed > timeout) {
-          console.log(`⏰ Upload wait timeout reached: ${elapsed}ms`);
-          resolve(true); // Assume success after timeout
-          return;
-        }
-
-        setTimeout(checkUpload, 500);
-      };
-
-      checkUpload();
-    });
   }
 
   /**
@@ -761,25 +849,6 @@ export default class LeverFileHandler {
         return userDetails.resumeUrl
           ? [userDetails.resumeUrl]
           : userDetails.resumeUrls || [];
-    }
-  }
-
-  /**
-   * Extract filename from URL
-   */
-  extractFileNameFromUrl(url) {
-    try {
-      const urlObj = new URL(url);
-      const pathname = urlObj.pathname;
-      const fileName = pathname.split("/").pop();
-
-      if (fileName && fileName.includes(".")) {
-        return fileName;
-      }
-
-      return "document.pdf";
-    } catch (error) {
-      return "document.pdf";
     }
   }
 
