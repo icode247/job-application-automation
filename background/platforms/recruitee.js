@@ -1,5 +1,4 @@
 // background/platforms/recruitee.js
-
 class RecruiteeAutomationHandler {
   constructor(messageHandler) {
     this.messageHandler = messageHandler;
@@ -11,13 +10,16 @@ class RecruiteeAutomationHandler {
     this.maxErrors = 5;
     this.processingMessages = new Set();
     this.processedCompletions = new Set();
+
     // Start cleanup process
     this.startPeriodicCleanup();
   }
+
   startPeriodicCleanup() {
     setInterval(() => {
       const now = Date.now();
       const staleThreshold = 120000; // 2 minutes
+
       // Clean up stale ports
       for (const [portName, lastSeen] of this.lastKeepalive.entries()) {
         if (now - lastSeen > staleThreshold) {
@@ -34,8 +36,10 @@ class RecruiteeAutomationHandler {
       }
     }, 60000);
   }
+
   cleanup() {
     console.log("🧹 Starting RecruiteeAutomationHandler cleanup");
+
     // Clear all port connections
     for (const port of this.portConnections.values()) {
       try {
@@ -59,6 +63,7 @@ class RecruiteeAutomationHandler {
 
     console.log("✅ RecruiteeAutomationHandler cleanup completed");
   }
+
   safePortSend(port, message) {
     try {
       if (!port || !port.name || !this.activeConnections.has(port.name)) {
@@ -67,6 +72,7 @@ class RecruiteeAutomationHandler {
         );
         return false;
       }
+
       if (!port.sender || !port.sender.tab) {
         console.warn(
           `⚠️ Recruitee port sender no longer exists: ${message.type}`
@@ -83,19 +89,23 @@ class RecruiteeAutomationHandler {
         `⚠️ Failed to send Recruitee port message (${message.type}):`,
         error.message
       );
+
       if (port && port.name) {
         this.activeConnections.delete(port.name);
         this.lastKeepalive.delete(port.name);
       }
+
       return false;
     }
   }
+
   handlePortConnection(port) {
     const portNameParts = port.name.split("-");
     const portType = portNameParts[1]; // 'search' or 'apply'
     const timestamp = portNameParts[2];
     const sessionId = portNameParts[3];
     const tabId = port.sender?.tab?.id;
+
     // Prevent duplicate connections
     if (this.activeConnections.has(port.name)) {
       console.log(
@@ -181,11 +191,13 @@ class RecruiteeAutomationHandler {
       }
     }, 100);
   }
+
   cleanupPort(port, tabId, sessionId) {
     if (port && port.name) {
       this.activeConnections.delete(port.name);
       this.lastKeepalive.delete(port.name);
     }
+
     if (tabId) {
       this.portConnections.delete(tabId);
     }
@@ -200,9 +212,11 @@ class RecruiteeAutomationHandler {
       }
     }
   }
+
   async handlePortMessage(message, port) {
     const { type, data } = message || {};
     if (!type) return;
+
     // Update keepalive timestamp
     this.lastKeepalive.set(port.name, Date.now());
 
@@ -270,36 +284,75 @@ class RecruiteeAutomationHandler {
       });
     }
   }
+
   async handleKeepalive(port, data) {
     this.safePortSend(port, {
       type: "KEEPALIVE_RESPONSE",
       data: { timestamp: Date.now() },
     });
   }
+
   async handleGetSearchTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
+
     let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
     for (const [
       sessionId,
-      automation,
+      auto,
     ] of this.messageHandler.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        const platformState = automation.platformState;
-        sessionData = {
-          tabId: tabId,
-          limit: platformState.searchData.limit,
-          current: platformState.searchData.current,
-          domain: platformState.searchData.domain,
-          submittedLinks: platformState.submittedLinks || [],
-          searchLinkPattern:
-            platformState.searchData.searchLinkPattern?.toString() ||
-            "/^https:\\/\\/.*\\.recruitee\\.com\\/(o|career)\\/([^\\/]+)\\/?.*$/",
-        };
-
-        platformState.searchTabId = tabId;
+      if (auto.windowId === windowId) {
+        automation = auto;
         break;
       }
+    }
+
+    if (automation) {
+      // FIXED: Ensure we have user profile data
+      let userProfile = automation.userProfile;
+
+      // If no user profile in automation, try to fetch from user service
+      if (!userProfile && automation.userId) {
+        try {
+          console.log(`📡 Fetching user profile for user ${automation.userId}`);
+
+          // Import UserService dynamically
+          const { default: UserService } = await import(
+            "../../services/user-service.js"
+          );
+          const userService = new UserService({ userId: automation.userId });
+          userProfile = await userService.getUserDetails();
+
+          // Cache it in automation for future use
+          automation.userProfile = userProfile;
+
+          console.log(`✅ User profile fetched and cached`);
+        } catch (error) {
+          console.error(`❌ Failed to fetch user profile:`, error);
+        }
+      }
+
+      const platformState = automation.platformState;
+      sessionData = {
+        tabId: tabId,
+        limit: platformState.searchData.limit,
+        current: platformState.searchData.current,
+        domain: platformState.searchData.domain,
+        submittedLinks: platformState.submittedLinks || [],
+        searchLinkPattern:
+          platformState.searchData.searchLinkPattern?.toString() ||
+          "/^https:\\/\\/.*\\.recruitee\\.com\\/(o|career)\\/([^\\/]+)\\/?.*$/",
+        // FIXED: Include user profile and session context
+        profile: userProfile || null,
+        session: automation.sessionConfig || null,
+        userId: automation.userId,
+        sessionId: automation.sessionId || null,
+      };
+
+      platformState.searchTabId = tabId;
     }
 
     this.safePortSend(port, {
@@ -479,6 +532,7 @@ class RecruiteeAutomationHandler {
       });
     }
   }
+
   async handleApplicationCompleted(port, data) {
     try {
       const windowId = port.sender?.tab?.windowId;
@@ -555,6 +609,7 @@ class RecruiteeAutomationHandler {
       });
     }
   }
+
   async handleApplicationError(port, data) {
     try {
       const windowId = port.sender?.tab?.windowId;
@@ -618,6 +673,7 @@ class RecruiteeAutomationHandler {
       console.error("❌ Error handling Recruitee APPLICATION_ERROR:", error);
     }
   }
+
   async handleApplicationSkipped(port, data) {
     try {
       const windowId = port.sender?.tab?.windowId;
@@ -682,6 +738,7 @@ class RecruiteeAutomationHandler {
       console.error("❌ Error handling Recruitee APPLICATION_SKIPPED:", error);
     }
   }
+
   async handleSearchCompleted(port, data) {
     const windowId = port.sender?.tab?.windowId;
     console.log(`🏁 Recruitee search task completed for window ${windowId}`);
@@ -702,8 +759,10 @@ class RecruiteeAutomationHandler {
       message: "Search completion acknowledged",
     });
   }
+
   async handleCheckApplicationStatus(port, data) {
     const windowId = port.sender?.tab?.windowId;
+
     let automation = null;
     for (const [
       sessionId,
@@ -728,15 +787,19 @@ class RecruiteeAutomationHandler {
       },
     });
   }
+
   async handleSearchNextReady(port, data) {
     console.log("🔄 Recruitee search ready for next job");
+
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
       data: { status: "success" },
     });
   }
+
   async handleGetProfileData(port, data) {
     const windowId = port.sender?.tab?.windowId;
+
     let automation = null;
     for (const [
       sessionId,
@@ -760,12 +823,14 @@ class RecruiteeAutomationHandler {
       });
     }
   }
+
   async sendSearchNextMessage(windowId, data) {
     try {
       console.log(
         `📤 Sending SEARCH_NEXT message to Recruitee window ${windowId}:`,
         data
       );
+
       const tabs = await chrome.tabs.query({ windowId: windowId });
 
       for (const tab of tabs) {
@@ -816,4 +881,5 @@ class RecruiteeAutomationHandler {
     }
   }
 }
+
 export default RecruiteeAutomationHandler;
