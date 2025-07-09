@@ -58,8 +58,14 @@ const CONFIG = {
  * RecruiteeJobAutomation - Content script for automating Recruitee job applications
  */
 export class RecruiteeJobAutomation {
-  constructor() {
+  constructor(config = {}) {
     debugLog("Initializing RecruiteeJobAutomation");
+
+    // Extract config properly
+    this.userProfile = config.userProfile || null;
+    this.sessionContext = config.sessionContext || null;
+    this.userId = config.userId || null;
+    this.sessionId = config.sessionId || null;
 
     // State tracking
     this.state = {
@@ -74,12 +80,6 @@ export class RecruiteeJobAutomation {
       debounceTimers: {},
     };
 
-    // Connection to background script
-    this.port = null;
-    this.portReconnectTimer = null;
-    this.messageQueue = [];
-    this.isProcessingQueue = false;
-
     // Search data
     this.searchData = {
       limit: null,
@@ -89,9 +89,6 @@ export class RecruiteeJobAutomation {
       searchLinkPattern: null,
     };
 
-    // Create status overlay
-    this.createStatusOverlay();
-
     // Create file handler for resume uploads
     this.fileHandler = new RecruiteeFileHandler({
       show: (message, type) => {
@@ -99,384 +96,6 @@ export class RecruiteeJobAutomation {
         this.appendStatusMessage(message);
       },
     });
-
-    // Initialize based on page type
-    this.initializeConnection();
-    this.detectPageTypeAndInitialize();
-
-    // Set up health check timer
-    this.healthCheckTimer = setInterval(() => this.checkHealth(), 30000);
-  }
-
-  /**
-   * Initialize connection with the background script
-   */
-  initializeConnection() {
-    try {
-      debugLog("Initializing communication with background script");
-
-      // Clean up existing connection if any
-      if (this.port) {
-        try {
-          this.port.disconnect();
-        } catch (e) {
-          // Ignore errors when disconnecting
-        }
-        this.port = null;
-      }
-
-      // Determine port name based on the current page type
-      const isApplyPage = window.location.href.match(
-        /(recruitee\.com\/(o|career))/i
-      );
-      const tabId = Date.now(); // Using timestamp as a unique identifier
-      const portName = isApplyPage
-        ? `recruitee-apply-${tabId}`
-        : `recruitee-search-${tabId}`;
-
-      debugLog(`Creating connection with port name: ${portName}`);
-
-      // Create the connection
-      this.port = chrome.runtime.connect({ name: portName });
-
-      if (!this.port) {
-        throw new Error(
-          "Failed to establish connection with background script"
-        );
-      }
-
-      // Set up message listener
-      this.port.onMessage.addListener((message) =>
-        this.handlePortMessage(message)
-      );
-
-      // Handle disconnection
-      this.port.onDisconnect.addListener(() => {
-        const error = chrome.runtime.lastError;
-        if (error) {
-          debugLog("Port disconnected due to error:", error);
-        } else {
-          debugLog("Port disconnected");
-        }
-
-        this.port = null;
-
-        // Schedule reconnection after a delay
-        if (!this.portReconnectTimer) {
-          this.portReconnectTimer = setTimeout(() => {
-            debugLog("Attempting to reconnect");
-            this.initializeConnection();
-            this.portReconnectTimer = null;
-          }, 5000);
-        }
-      });
-
-      // Start keepalive interval
-      this.startKeepAliveInterval();
-
-      // Process any queued messages
-      if (this.messageQueue.length > 0 && !this.isProcessingQueue) {
-        this.processMessageQueue();
-      }
-
-      return true;
-    } catch (error) {
-      errorLog("Error initializing connection:", error);
-
-      // Schedule reconnection after a delay
-      if (!this.portReconnectTimer) {
-        this.portReconnectTimer = setTimeout(() => {
-          debugLog("Attempting to reconnect after error");
-          this.initializeConnection();
-          this.portReconnectTimer = null;
-        }, 5000);
-      }
-
-      return false;
-    }
-  }
-
-  /**
-   * Start keepalive interval to maintain connection
-   */
-  startKeepAliveInterval() {
-    // Clear any existing interval
-    if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
-    }
-
-    // Send keepalive every 25 seconds
-    this.keepAliveInterval = setInterval(() => {
-      this.safeSendMessage({ type: "KEEPALIVE" });
-    }, 25000);
-  }
-
-  /**
-   * Queue a message to be sent when connection is available
-   */
-  safeSendMessage(message) {
-    // Add message to queue with timestamp
-    this.messageQueue.push({
-      ...message,
-      timestamp: Date.now(),
-    });
-
-    // Start processing queue if not already in progress
-    if (!this.isProcessingQueue) {
-      this.processMessageQueue();
-    }
-  }
-
-  /**
-   * Process queued messages
-   */
-  async processMessageQueue() {
-    if (this.isProcessingQueue || this.messageQueue.length === 0) {
-      return;
-    }
-
-    this.isProcessingQueue = true;
-
-    try {
-      // Check if we have a connection
-      if (!this.port) {
-        debugLog("No connection available, attempting to reconnect");
-        this.initializeConnection();
-
-        // Wait for connection to establish
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
-        // If still no connection, try again later
-        if (!this.port) {
-          this.isProcessingQueue = false;
-          setTimeout(() => this.processMessageQueue(), 2000);
-          return;
-        }
-      }
-
-      // Process the oldest message in the queue
-      const message = this.messageQueue.shift();
-
-      try {
-        this.port.postMessage(message);
-        debugLog("Sent message:", message.type);
-      } catch (error) {
-        debugLog("Error sending message, reconnecting:", error);
-
-        // Put the message back in the queue
-        this.messageQueue.unshift(message);
-
-        // Try to reconnect
-        this.initializeConnection();
-
-        // Delay before trying again
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-
-      // Continue processing queue after a small delay
-      setTimeout(() => {
-        this.isProcessingQueue = false;
-        this.processMessageQueue();
-      }, 100);
-    } catch (error) {
-      errorLog("Error processing message queue:", error);
-
-      // Reset processing flag and try again later
-      setTimeout(() => {
-        this.isProcessingQueue = false;
-        this.processMessageQueue();
-      }, 2000);
-    }
-  }
-
-  /**
-   * Handle messages received through the port
-   */
-  handlePortMessage(message) {
-    try {
-      debugLog("Received port message:", message);
-
-      const { type, data } = message || {};
-
-      if (!type) {
-        debugLog("Received message without type, ignoring");
-        return;
-      }
-
-      switch (type) {
-        case "SEARCH_TASK_DATA":
-          this.handleSearchTaskData(data);
-          break;
-
-        case "APPLICATION_TASK_DATA":
-          this.handleApplicationTaskData(data);
-          break;
-
-        case "APPLICATION_STARTING":
-          this.handleApplicationStarting(data);
-          break;
-
-        case "APPLICATION_STATUS":
-          this.handleApplicationStatus(data);
-          break;
-
-        case "PROFILE_DATA":
-          this.handleProfileData(data);
-          break;
-
-        case "DUPLICATE":
-          this.handleDuplicate(data);
-          break;
-
-        case "SEARCH_NEXT":
-          this.handleSearchNext(data);
-          break;
-
-        case "ERROR":
-          this.handleError(message);
-          break;
-
-        case "KEEPALIVE_RESPONSE":
-          // Just a ping-pong response, no action needed
-          break;
-
-        default:
-          debugLog(`Unhandled message type: ${type}`);
-      }
-    } catch (error) {
-      errorLog("Error handling port message:", error);
-    }
-  }
-
-  /**
-   * Detect the page type and initialize accordingly
-   */
-  detectPageTypeAndInitialize() {
-    const url = window.location.href;
-    debugLog("Detecting page type for:", url);
-
-    // Wait for page to load fully
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () =>
-        this.initializeByPageType(url)
-      );
-    } else {
-      this.initializeByPageType(url);
-    }
-  }
-
-  /**
-   * Initialize based on detected page type
-   */
-  initializeByPageType(url) {
-    debugLog("Initializing by page type:", url);
-
-    if (url.includes("google.com/search")) {
-      debugLog("On Google search page");
-      this.appendStatusMessage("Google search page detected");
-      this.safeSendMessage({ type: "GET_SEARCH_TASK" });
-    } else if (url.match(/(recruitee\.com\/(o|career))/i)) {
-      debugLog("On Recruitee job page");
-      this.appendStatusMessage("Recruitee job page detected");
-      this.safeSendMessage({ type: "GET_APPLICATION_TASK" });
-    }
-  }
-
-  /**
-   * Handle search task data
-   */
-  handleSearchTaskData(data) {
-    try {
-      debugLog("Processing search task data:", data);
-
-      if (!data) {
-        debugLog("No search task data provided");
-        return;
-      }
-
-      // Extract and store search parameters
-      const { limit, current, domain, submittedLinks, searchLinkPattern } =
-        data;
-
-      this.searchData.limit = limit;
-      this.searchData.current = current;
-      this.searchData.domain = domain;
-
-      // Process submitted links to include tries count
-      this.searchData.submittedLinks = submittedLinks
-        ? submittedLinks.map((link) => ({ ...link, tries: 0 }))
-        : [];
-
-      // Convert search link pattern string to RegExp if needed
-      if (searchLinkPattern) {
-        try {
-          if (typeof searchLinkPattern === "string") {
-            const patternParts = searchLinkPattern.match(/^\/(.*)\/([gimy]*)$/);
-            if (patternParts) {
-              this.searchData.searchLinkPattern = new RegExp(
-                patternParts[1],
-                patternParts[2]
-              );
-            } else {
-              this.searchData.searchLinkPattern = new RegExp(searchLinkPattern);
-            }
-          } else {
-            this.searchData.searchLinkPattern = searchLinkPattern;
-          }
-        } catch (regexErr) {
-          errorLog("Error parsing search link pattern:", regexErr);
-          this.searchData.searchLinkPattern = null;
-        }
-      }
-
-      debugLog("Search data initialized:", this.searchData);
-
-      // Update state
-      this.state.ready = true;
-      this.state.initialized = true;
-
-      this.appendStatusMessage("Search initialization complete");
-      this.updateStatusIndicator("ready");
-
-      // Start processing search results after a short delay
-      this.debounce("searchNext", () => this.searchNext(), 1000);
-    } catch (error) {
-      errorLog("Error processing search task data:", error);
-      this.appendStatusErrorMessage(error);
-    }
-  }
-
-  /**
-   * Handle application task data
-   */
-  handleApplicationTaskData(data) {
-    try {
-      debugLog("Processing application task data:", data);
-
-      if (!data) {
-        debugLog("No application task data provided");
-        return;
-      }
-
-      // Store profile data for application
-      this.profile = data.profile;
-      this.devMode = data.devMode;
-      this.session = data.session;
-      this.avatarUrl = data.avatarUrl;
-
-      // Update state
-      this.state.ready = true;
-      this.state.initialized = true;
-
-      this.appendStatusMessage("Application initialization complete");
-      this.updateStatusIndicator("ready");
-
-      // Start application process after a short delay
-      this.debounce("startApplying", () => this.startApplying(), 1000);
-    } catch (error) {
-      errorLog("Error processing application task data:", error);
-      this.appendStatusErrorMessage(error);
-    }
   }
 
   /**
@@ -510,10 +129,7 @@ export class RecruiteeJobAutomation {
 
       // Start countdown timer
       this.state.countDown = this.startCountDownTimer(60 * 5, () => {
-        this.safeSendMessage({
-          type: "APPLICATION_ERROR",
-          data: "Application timed out after 5 minutes",
-        });
+        // Application timeout - parent platform will handle this
       });
 
       // Wait a moment for page to fully load
@@ -553,21 +169,7 @@ export class RecruiteeJobAutomation {
           location = locationEl.textContent.trim();
         }
 
-        // Send completion message
-        this.safeSendMessage({
-          type: "APPLICATION_COMPLETED",
-          data: {
-            jobId,
-            title: jobTitle,
-            company: companyName,
-            location,
-            jobUrl: window.location.href,
-            salary: "Not specified",
-            workplace: "Not specified",
-            postedDate: "Not specified",
-            applicants: "Not specified",
-          },
-        });
+        // Application completed successfully - parent platform will handle this
 
         // Reset application state
         this.state.isApplicationInProgress = false;
@@ -581,17 +183,9 @@ export class RecruiteeJobAutomation {
       if (error instanceof SkipApplicationError) {
         errorLog("Application skipped:", error.message);
         this.appendStatusMessage("Application skipped: " + error.message);
-        this.safeSendMessage({
-          type: "APPLICATION_SKIPPED",
-          data: error.message,
-        });
       } else {
         errorLog("Application error:", error);
         this.appendStatusErrorMessage(error);
-        this.safeSendMessage({
-          type: "APPLICATION_ERROR",
-          data: this.errorToString(error),
-        });
       }
 
       // Reset application state
@@ -800,7 +394,90 @@ export class RecruiteeJobAutomation {
     }
   }
 
-  // Additional helper methods...
+  /**
+   * Search for job links and process them
+   */
+  searchNext() {
+    debugLog("searchNext called - searching for job links");
+    
+    try {
+      // Find job links on the current page
+      const jobLinks = this.findJobLinks();
+      
+      if (jobLinks.length > 0) {
+        debugLog(`Found ${jobLinks.length} job links`);
+        this.processJobLinks(jobLinks);
+      } else {
+        debugLog("No job links found on current page");
+      }
+    } catch (error) {
+      errorLog("Error in searchNext:", error);
+    }
+  }
+
+  /**
+   * Find job links on the current page
+   */
+  findJobLinks() {
+    const links = document.querySelectorAll(CONFIG.SELECTORS.JOB_LINKS);
+    const validLinks = [];
+
+    for (const link of links) {
+      const href = link.href;
+      
+      // Check if link matches the search pattern
+      if (this.searchData.searchLinkPattern && !this.searchData.searchLinkPattern.test(href)) {
+        continue;
+      }
+
+      // Check if already processed
+      if (this.state.processedUrls.has(href)) {
+        continue;
+      }
+
+      // Check if in submitted links
+      const isSubmitted = this.searchData.submittedLinks.some(
+        submitted => submitted.url === href
+      );
+      
+      if (!isSubmitted) {
+        validLinks.push({
+          url: href,
+          title: link.textContent.trim(),
+          element: link
+        });
+        this.state.processedUrls.add(href);
+      }
+    }
+
+    return validLinks;
+  }
+
+  /**
+   * Process found job links
+   */
+  processJobLinks(jobLinks) {
+    jobLinks.forEach((jobLink, index) => {
+      // Mark link as processed
+      this.markLinkAsProcessed(jobLink.element);
+      
+      debugLog(`Processed job link ${index + 1}/${jobLinks.length}: ${jobLink.title}`);
+    });
+
+    this.state.processedLinksCount += jobLinks.length;
+    this.appendStatusMessage(`Processed ${jobLinks.length} job links`);
+  }
+
+  /**
+   * Mark a link as processed visually
+   */
+  markLinkAsProcessed(linkElement) {
+    if (linkElement && typeof this.markLinkAsColor === 'function') {
+      this.markLinkAsColor(linkElement, 'processed');
+    }
+  }
+
+  // Utility methods
   wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -825,25 +502,6 @@ export class RecruiteeJobAutomation {
     return String(e);
   }
 
-  // Status overlay methods...
-  createStatusOverlay() {
-    // Implementation from paste.txt
-    // ... (keeping this brief for space)
-  }
-
-  appendStatusMessage(message) {
-    console.log(`[Recruitee] ${message}`);
-  }
-
-  appendStatusErrorMessage(error) {
-    console.error(`[Recruitee Error] ${error}`);
-  }
-
-  updateStatusIndicator(status) {
-    console.log(`[Recruitee Status] ${status}`);
-  }
-
-  // Additional methods from paste.txt...
   extractCompanyFromUrl(url) {
     try {
       const matches = url.match(/\/\/(.+?)\.recruitee\.com\//);
@@ -860,7 +518,6 @@ export class RecruiteeJobAutomation {
   }
 
   extractJobDescription() {
-    // Implementation from paste.txt
     let description = "";
 
     const descriptionSelectors = [
@@ -951,56 +608,20 @@ export class RecruiteeJobAutomation {
     }
   }
 
-  cleanup() {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-    }
-    if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
-    }
-    if (this.port) {
-      try {
-        this.port.disconnect();
-      } catch (e) {
-        // Ignore errors
-      }
-    }
+  // Status methods (to be implemented by parent or UI layer)
+  appendStatusMessage(message) {
+    console.log(`[Recruitee] ${message}`);
   }
 
-  // Stub methods for missing functionality
-  searchNext() {
-    // Search functionality would go here
-    debugLog("searchNext called");
+  appendStatusErrorMessage(error) {
+    console.error(`[Recruitee Error] ${error}`);
   }
 
-  handleSearchNext(data) {
-    debugLog("handleSearchNext called with:", data);
+  updateStatusIndicator(status) {
+    console.log(`[Recruitee Status] ${status}`);
   }
 
-  handleApplicationStarting(data) {
-    debugLog("handleApplicationStarting called with:", data);
-  }
-
-  handleApplicationStatus(data) {
-    debugLog("handleApplicationStatus called with:", data);
-  }
-
-  handleProfileData(data) {
-    debugLog("handleProfileData called with:", data);
-  }
-
-  handleDuplicate(data) {
-    debugLog("handleDuplicate called with:", data);
-  }
-
-  handleError(message) {
-    debugLog("handleError called with:", message);
-  }
-
-  checkHealth() {
-    debugLog("checkHealth called");
-  }
-
+  // Stub methods that need to be implemented
   startCountDownTimer(duration, callback) {
     return {
       stop: () => {},
@@ -1009,6 +630,23 @@ export class RecruiteeJobAutomation {
   }
 
   async getProfileData() {
-    return this.profile;
+    return this.profile || this.userProfile;
+  }
+
+  cleanup() {
+    // Clear any timers
+    Object.values(this.state.debounceTimers).forEach(timer => {
+      if (timer) clearTimeout(timer);
+    });
+    this.state.debounceTimers = {};
+
+    // Stop countdown if active
+    if (this.state.countDown && this.state.countDown.stop) {
+      this.state.countDown.stop();
+    }
+
+    // Reset state
+    this.state.isApplicationInProgress = false;
+    this.state.applicationStartTime = null;
   }
 }

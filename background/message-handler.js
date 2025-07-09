@@ -3,8 +3,8 @@ import SessionManager from "./session-manager.js";
 import WindowManager from "./window-manager.js";
 import LeverAutomationHandler from "./platforms/lever.js";
 import RecruiteeAutomationHandler from "./platforms/recruitee.js";
+import LinkedInAutomationHandler from "./platforms/linkedin.js";
 
-//handleStartApplying
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -418,6 +418,9 @@ export default class MessageHandler {
         break;
       case "recruitee":
         handler = new RecruiteeAutomationHandler(this);
+        break;
+      case "linkedin":
+        handler = new LinkedInAutomationHandler(this);
         break;
       default:
         console.error(`❌ Unsupported platform: ${platform}`);
