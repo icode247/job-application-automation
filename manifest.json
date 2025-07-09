@@ -90,20 +90,14 @@
         "ui/styles/automation.css",
         "ui/components/*.js",
         "platforms/*/config.json",
-        "utils/mark-links.js"
+        "utils/mark-links.js",
+        "platforms/recruitee/recruitee-automation.js",
+        "platforms/recruitee/recruitee-form-handler.js",
+        "platforms/recruitee/recruitee-file-handler.js",
+        "core/constants.js"
       ],
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://www.indeed.com/*",
-        "https://www.glassdoor.com/*",
-        "https://recruitee.com/*",
-        "https://*.recruitee.com/*",
-        "https://*.workday.com/*",
-        "https://*.myworkdayjobs.com/*",
-        "https://*.lever.co/*",
-        "https://jobs.lever.co/*",
-        "https://www.google.com/*",
-        "https://google.com/*"
+        "<all_urls>"
       ]
     }
   ],

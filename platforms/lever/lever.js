@@ -8,8 +8,7 @@ import {
   StatusOverlay,
 } from "../../services/index.js";
 import { markLinkAsColor } from "../../utils/mark-links.js";
-//Job description cached
-//extractJobDescription
+
 export default class LeverPlatform extends BasePlatform {
   constructor(config) {
     super(config);

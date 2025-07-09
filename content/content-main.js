@@ -1,4 +1,4 @@
-//showAutomationStatus
+//⚠️ No user profile available, attempting to fetch...
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -32,7 +32,7 @@ class ContentScriptManager {
         this.automationActive = true;
 
         const sessionContext = await this.getSessionContext();
-
+        console.log("Session context retrieved:", sessionContext);
         if (sessionContext) {
           this.sessionContext = sessionContext;
           this.sessionId = sessionContext.sessionId;

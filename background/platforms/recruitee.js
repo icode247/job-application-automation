@@ -1,4 +1,5 @@
 // background/platforms/recruitee.js
+
 class RecruiteeAutomationHandler {
   constructor(messageHandler) {
     this.messageHandler = messageHandler;
@@ -306,30 +307,97 @@ class RecruiteeAutomationHandler {
       data: sessionData || {},
     });
   }
+
   async handleGetApplicationTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
+
+    console.log(
+      `🔍 GET_APPLICATION_TASK request from tab ${tabId}, window ${windowId}`
+    );
+
     let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
     for (const [
       sessionId,
-      automation,
+      auto,
     ] of this.messageHandler.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        sessionData = {
-          devMode: automation.params?.devMode || false,
-          profile: automation.userProfile,
-          session: automation.sessionConfig,
-          avatarUrl: automation.userProfile?.avatarUrl,
-        };
+      if (auto.windowId === windowId) {
+        automation = auto;
+        console.log(`✅ Found automation session: ${sessionId}`);
         break;
       }
     }
 
-    this.safePortSend(port, {
+    if (automation) {
+      // FIXED: Ensure we have user profile data
+      let userProfile = automation.userProfile;
+
+      // If no user profile in automation, try to fetch from user service
+      if (!userProfile && automation.userId) {
+        try {
+          console.log(`📡 Fetching user profile for user ${automation.userId}`);
+
+          // Import UserService dynamically
+          const { default: UserService } = await import(
+            "../../services/user-service.js"
+          );
+          const userService = new UserService({ userId: automation.userId });
+          userProfile = await userService.getUserDetails();
+
+          // Cache it in automation for future use
+          automation.userProfile = userProfile;
+
+          console.log(`✅ User profile fetched and cached`);
+        } catch (error) {
+          console.error(`❌ Failed to fetch user profile:`, error);
+        }
+      }
+
+      sessionData = {
+        devMode: automation.params?.devMode || false,
+        profile: userProfile || null,
+        session: automation.sessionConfig || null,
+        avatarUrl: userProfile?.avatarUrl || null,
+        userId: automation.userId,
+        sessionId: automation.sessionId || null,
+      };
+
+      console.log(`📊 Session data prepared:`, {
+        hasProfile: !!sessionData.profile,
+        hasSession: !!sessionData.session,
+        userId: sessionData.userId,
+        devMode: sessionData.devMode,
+      });
+    } else {
+      console.warn(`⚠️ No automation found for window ${windowId}`);
+      sessionData = {
+        devMode: false,
+        profile: null,
+        session: null,
+        avatarUrl: null,
+        userId: null,
+        sessionId: null,
+      };
+    }
+
+    // Send response with detailed logging
+    const sent = this.safePortSend(port, {
       type: "APPLICATION_TASK_DATA",
-      data: sessionData || {},
+      data: sessionData,
     });
+
+    if (!sent) {
+      console.error(
+        `❌ Failed to send application task data to port ${port.name}`
+      );
+    } else {
+      console.log(`✅ Application task data sent successfully to tab ${tabId}`);
+    }
   }
+
   async handleStartApplication(port, data) {
     try {
       const { url, title } = data;
