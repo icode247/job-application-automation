@@ -1,4 +1,3 @@
-//⚠️ No user profile available, attempting to fetch...
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -492,6 +491,12 @@ class ContentScriptManager {
           );
           return LeverPlatform;
 
+
+        case "breezy":
+          const { default: BreezyPlatform } = await import(
+            "../platforms/breezy/breezy.js"
+          );
+          return BreezyPlatform;
         default:
           console.warn(`Platform ${platform} not supported`);
           return null;

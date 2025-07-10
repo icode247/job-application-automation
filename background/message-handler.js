@@ -798,6 +798,7 @@ export default class MessageHandler {
       "lever",
       "workable",
       "greenhouse",
+      "breezy",
     ];
 
     if (!supportedPlatforms.includes(request.platform)) {
