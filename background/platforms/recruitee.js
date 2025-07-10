@@ -1,297 +1,69 @@
-// background/platforms/recruitee.js
-class RecruiteeAutomationHandler {
+
+// background/platforms/recruitee.js - REFACTORED VERSION
+import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
+
+export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    this.messageHandler = messageHandler;
-    this.portConnections = new Map();
-    this.sessionPorts = new Map();
-    this.activeConnections = new Set();
-    this.lastKeepalive = new Map();
-    this.errorCounts = new Map();
-    this.maxErrors = 5;
-    this.processingMessages = new Set();
-    this.processedCompletions = new Set();
-
-    // Start cleanup process
-    this.startPeriodicCleanup();
+    super(messageHandler, "recruitee"); // Pass platform name to base class
   }
 
-  startPeriodicCleanup() {
-    setInterval(() => {
-      const now = Date.now();
-      const staleThreshold = 120000; // 2 minutes
+  /**
+   * Platform-specific message handling - only Recruitee-specific logic here
+   */
+  async handlePlatformSpecificMessage(type, data, port) {
+    switch (type) {
+      case "GET_SEARCH_TASK":
+        await this.handleGetSearchTask(port, data);
+        break;
 
-      // Clean up stale ports
-      for (const [portName, lastSeen] of this.lastKeepalive.entries()) {
-        if (now - lastSeen > staleThreshold) {
-          console.log(`🧹 Cleaning up stale Recruitee port: ${portName}`);
-          this.activeConnections.delete(portName);
-          this.lastKeepalive.delete(portName);
-        }
-      }
+      case "GET_APPLICATION_TASK":
+        await this.handleGetApplicationTask(port, data);
+        break;
 
-      // Clean up old completions
-      if (this.processedCompletions.size > 100) {
-        const entries = Array.from(this.processedCompletions);
-        this.processedCompletions = new Set(entries.slice(-50));
-      }
-    }, 60000);
-  }
+      case "START_APPLICATION":
+        await this.handleStartApplication(port, data);
+        break;
 
-  cleanup() {
-    console.log("🧹 Starting RecruiteeAutomationHandler cleanup");
+      case "APPLICATION_COMPLETED":
+        await this.handleTaskCompletion(port, data, "SUCCESS");
+        break;
 
-    // Clear all port connections
-    for (const port of this.portConnections.values()) {
-      try {
-        this.activeConnections.delete(port.name);
-        port.disconnect();
-      } catch (e) {
-        // Ignore errors
-      }
-    }
+      case "APPLICATION_ERROR":
+        await this.handleTaskCompletion(port, data, "ERROR");
+        break;
 
-    this.portConnections.clear();
-    this.sessionPorts.clear();
-    this.activeConnections.clear();
-    this.lastKeepalive.clear();
-    this.errorCounts.clear();
-    this.processingMessages.clear();
+      case "APPLICATION_SKIPPED":
+        await this.handleTaskCompletion(port, data, "SKIPPED");
+        break;
 
-    if (this.processedCompletions) {
-      this.processedCompletions.clear();
-    }
+      case "SEARCH_COMPLETED":
+        await this.handleSearchCompleted(port, data);
+        break;
 
-    console.log("✅ RecruiteeAutomationHandler cleanup completed");
-  }
+      case "CHECK_APPLICATION_STATUS":
+        await this.handleCheckApplicationStatus(port, data);
+        break;
 
-  safePortSend(port, message) {
-    try {
-      if (!port || !port.name || !this.activeConnections.has(port.name)) {
-        console.warn(
-          `⚠️ Cannot send message to disconnected/invalid Recruitee port: ${message.type}`
-        );
-        return false;
-      }
+      case "SEARCH_NEXT_READY":
+        await this.handleSearchNextReady(port, data);
+        break;
 
-      if (!port.sender || !port.sender.tab) {
-        console.warn(
-          `⚠️ Recruitee port sender no longer exists: ${message.type}`
-        );
-        this.activeConnections.delete(port.name);
-        return false;
-      }
+      case "GET_PROFILE_DATA":
+        await this.handleGetProfileData(port, data);
+        break;
 
-      port.postMessage(message);
-      this.lastKeepalive.set(port.name, Date.now());
-      return true;
-    } catch (error) {
-      console.warn(
-        `⚠️ Failed to send Recruitee port message (${message.type}):`,
-        error.message
-      );
-
-      if (port && port.name) {
-        this.activeConnections.delete(port.name);
-        this.lastKeepalive.delete(port.name);
-      }
-
-      return false;
-    }
-  }
-
-  handlePortConnection(port) {
-    const portNameParts = port.name.split("-");
-    const portType = portNameParts[1]; // 'search' or 'apply'
-    const timestamp = portNameParts[2];
-    const sessionId = portNameParts[3];
-    const tabId = port.sender?.tab?.id;
-
-    // Prevent duplicate connections
-    if (this.activeConnections.has(port.name)) {
-      console.log(
-        `⚠️ Duplicate Recruitee port connection attempt: ${port.name}`
-      );
-      try {
-        port.disconnect();
-      } catch (e) {
-        // Ignore errors
-      }
-      return;
-    }
-
-    console.log(
-      `📝 Registering Recruitee ${portType} port for tab ${tabId}, session ${sessionId}`
-    );
-
-    // Clean up existing port for this tab
-    if (tabId && this.portConnections.has(tabId)) {
-      const existingPort = this.portConnections.get(tabId);
-      this.cleanupPort(existingPort, tabId, sessionId);
-    }
-
-    // Register new port
-    this.activeConnections.add(port.name);
-    if (tabId) {
-      this.portConnections.set(tabId, port);
-    }
-
-    // Track by session
-    if (sessionId) {
-      if (!this.sessionPorts.has(sessionId)) {
-        this.sessionPorts.set(sessionId, new Set());
-      }
-      this.sessionPorts.get(sessionId).add(port);
-    }
-
-    // Set initial keepalive
-    this.lastKeepalive.set(port.name, Date.now());
-
-    // Set up message handler
-    port.onMessage.addListener((message) => {
-      const messageId = `${port.name}-${message.type}-${Date.now()}`;
-
-      if (this.processingMessages.has(messageId)) {
-        console.log(
-          `⚠️ Duplicate Recruitee message ignored: ${message.type} from ${port.name}`
-        );
-        return;
-      }
-
-      this.processingMessages.add(messageId);
-
-      try {
-        this.handlePortMessage(message, port);
-      } catch (error) {
-        console.error(
-          `❌ Error handling Recruitee message ${message.type}:`,
-          error
-        );
+      default:
+        console.log(`❓ Unhandled Recruitee port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
-          message: `Error processing ${message.type}: ${error.message}`,
+          message: `Unknown message type: ${type}`,
         });
-      } finally {
-        setTimeout(() => this.processingMessages.delete(messageId), 1000);
-      }
-    });
-
-    // Handle disconnection
-    port.onDisconnect.addListener(() => {
-      console.log(`📪 Recruitee port disconnected: ${port.name}`);
-      this.cleanupPort(port, tabId, sessionId);
-    });
-
-    // Send connection confirmation
-    setTimeout(() => {
-      if (this.activeConnections.has(port.name)) {
-        this.safePortSend(port, {
-          type: "CONNECTION_ESTABLISHED",
-          data: { tabId, sessionId, portType },
-        });
-      }
-    }, 100);
-  }
-
-  cleanupPort(port, tabId, sessionId) {
-    if (port && port.name) {
-      this.activeConnections.delete(port.name);
-      this.lastKeepalive.delete(port.name);
-    }
-
-    if (tabId) {
-      this.portConnections.delete(tabId);
-    }
-
-    if (sessionId) {
-      const sessionPortSet = this.sessionPorts.get(sessionId);
-      if (sessionPortSet) {
-        sessionPortSet.delete(port);
-        if (sessionPortSet.size === 0) {
-          this.sessionPorts.delete(sessionId);
-        }
-      }
     }
   }
 
-  async handlePortMessage(message, port) {
-    const { type, data } = message || {};
-    if (!type) return;
-
-    // Update keepalive timestamp
-    this.lastKeepalive.set(port.name, Date.now());
-
-    try {
-      switch (type) {
-        case "KEEPALIVE":
-          await this.handleKeepalive(port, data);
-          break;
-
-        case "GET_SEARCH_TASK":
-          await this.handleGetSearchTask(port, data);
-          break;
-
-        case "GET_APPLICATION_TASK":
-          await this.handleGetApplicationTask(port, data);
-          break;
-
-        case "START_APPLICATION":
-          await this.handleStartApplication(port, data);
-          break;
-
-        case "APPLICATION_COMPLETED":
-          await this.handleApplicationCompleted(port, data);
-          break;
-
-        case "APPLICATION_ERROR":
-          await this.handleApplicationError(port, data);
-          break;
-
-        case "APPLICATION_SKIPPED":
-          await this.handleApplicationSkipped(port, data);
-          break;
-
-        case "SEARCH_COMPLETED":
-          await this.handleSearchCompleted(port, data);
-          break;
-
-        case "CHECK_APPLICATION_STATUS":
-          await this.handleCheckApplicationStatus(port, data);
-          break;
-
-        case "SEARCH_NEXT_READY":
-          await this.handleSearchNextReady(port, data);
-          break;
-
-        case "GET_PROFILE_DATA":
-          await this.handleGetProfileData(port, data);
-          break;
-
-        default:
-          console.log(`❓ Unhandled Recruitee port message type: ${type}`);
-          this.safePortSend(port, {
-            type: "ERROR",
-            message: `Unknown message type: ${type}`,
-          });
-      }
-    } catch (error) {
-      console.error(
-        `❌ Error handling Recruitee port message type ${type}:`,
-        error
-      );
-      this.safePortSend(port, {
-        type: "ERROR",
-        message: `Error processing ${type}: ${error.message}`,
-      });
-    }
-  }
-
-  async handleKeepalive(port, data) {
-    this.safePortSend(port, {
-      type: "KEEPALIVE_RESPONSE",
-      data: { timestamp: Date.now() },
-    });
-  }
-
+  /**
+   * Handle search task request - Recruitee specific data structure
+   */
   async handleGetSearchTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
@@ -311,15 +83,15 @@ class RecruiteeAutomationHandler {
     }
 
     if (automation) {
-      // FIXED: Ensure we have user profile data
+      // Ensure we have user profile data
       let userProfile = automation.userProfile;
 
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(`📡 Fetching user profile for user ${automation.userId}`);
-
-          // Import UserService dynamically
+          console.log(
+            `📡 Fetching user profile for Recruitee user ${automation.userId}`
+          );
           const { default: UserService } = await import(
             "../../services/user-service.js"
           );
@@ -328,10 +100,12 @@ class RecruiteeAutomationHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-
-          console.log(`✅ User profile fetched and cached`);
+          console.log(`✅ User profile fetched and cached for Recruitee`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile:`, error);
+          console.error(
+            `❌ Failed to fetch user profile for Recruitee:`,
+            error
+          );
         }
       }
 
@@ -345,7 +119,7 @@ class RecruiteeAutomationHandler {
         searchLinkPattern:
           platformState.searchData.searchLinkPattern?.toString() ||
           "/^https:\\/\\/.*\\.recruitee\\.com\\/(o|career)\\/([^\\/]+)\\/?.*$/",
-        // FIXED: Include user profile and session context
+        // Include user profile and session context
         profile: userProfile || null,
         session: automation.sessionConfig || null,
         userId: automation.userId,
@@ -361,12 +135,15 @@ class RecruiteeAutomationHandler {
     });
   }
 
+  /**
+   * Handle application task request - Recruitee specific data structure
+   */
   async handleGetApplicationTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
     console.log(
-      `🔍 GET_APPLICATION_TASK request from tab ${tabId}, window ${windowId}`
+      `🔍 GET_APPLICATION_TASK request from Recruitee tab ${tabId}, window ${windowId}`
     );
 
     let sessionData = null;
@@ -379,21 +156,21 @@ class RecruiteeAutomationHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found automation session: ${sessionId}`);
+        console.log(`✅ Found Recruitee automation session: ${sessionId}`);
         break;
       }
     }
 
     if (automation) {
-      // FIXED: Ensure we have user profile data
+      // Ensure we have user profile data
       let userProfile = automation.userProfile;
 
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(`📡 Fetching user profile for user ${automation.userId}`);
-
-          // Import UserService dynamically
+          console.log(
+            `📡 Fetching user profile for Recruitee user ${automation.userId}`
+          );
           const { default: UserService } = await import(
             "../../services/user-service.js"
           );
@@ -402,10 +179,12 @@ class RecruiteeAutomationHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-
-          console.log(`✅ User profile fetched and cached`);
+          console.log(`✅ User profile fetched and cached for Recruitee`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile:`, error);
+          console.error(
+            `❌ Failed to fetch user profile for Recruitee:`,
+            error
+          );
         }
       }
 
@@ -418,14 +197,14 @@ class RecruiteeAutomationHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Session data prepared:`, {
+      console.log(`📊 Recruitee session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No automation found for window ${windowId}`);
+      console.warn(`⚠️ No Recruitee automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -436,7 +215,7 @@ class RecruiteeAutomationHandler {
       };
     }
 
-    // Send response with detailed logging
+    // Send response
     const sent = this.safePortSend(port, {
       type: "APPLICATION_TASK_DATA",
       data: sessionData,
@@ -444,13 +223,18 @@ class RecruiteeAutomationHandler {
 
     if (!sent) {
       console.error(
-        `❌ Failed to send application task data to port ${port.name}`
+        `❌ Failed to send Recruitee application task data to port ${port.name}`
       );
     } else {
-      console.log(`✅ Application task data sent successfully to tab ${tabId}`);
+      console.log(
+        `✅ Recruitee application task data sent successfully to tab ${tabId}`
+      );
     }
   }
 
+  /**
+   * Handle start application (opening job in new tab) - Recruitee specific logic
+   */
   async handleStartApplication(port, data) {
     try {
       const { url, title } = data;
@@ -469,7 +253,7 @@ class RecruiteeAutomationHandler {
       }
 
       if (!automation) {
-        throw new Error("No automation session found");
+        throw new Error("No Recruitee automation session found");
       }
 
       if (automation.platformState.isProcessingJob) {
@@ -495,9 +279,9 @@ class RecruiteeAutomationHandler {
         return;
       }
 
-      // Create new tab for job application
+      // Create new tab for job application - Recruitee uses direct URLs
       const tab = await chrome.tabs.create({
-        url: url,
+        url: url, // Recruitee doesn't need "/apply" suffix
         windowId: windowId,
         active: true,
       });
@@ -533,212 +317,9 @@ class RecruiteeAutomationHandler {
     }
   }
 
-  async handleApplicationCompleted(port, data) {
-    try {
-      const windowId = port.sender?.tab?.windowId;
-      const tabId = port.sender?.tab?.id;
-      console.log(
-        `✅ Recruitee job application completed successfully in tab ${tabId}`
-      );
-
-      let automation = null;
-      for (const [
-        sessionId,
-        auto,
-      ] of this.messageHandler.activeAutomations.entries()) {
-        if (auto.windowId === windowId) {
-          automation = auto;
-          break;
-        }
-      }
-
-      if (automation) {
-        const url = automation.platformState.currentJobUrl;
-        if (url && automation.platformState.submittedLinks) {
-          const linkIndex = automation.platformState.submittedLinks.findIndex(
-            (link) =>
-              this.messageHandler.normalizeUrl(link.url) ===
-              this.messageHandler.normalizeUrl(url)
-          );
-          if (linkIndex >= 0) {
-            automation.platformState.submittedLinks[linkIndex].status =
-              "SUCCESS";
-            automation.platformState.submittedLinks[linkIndex].details = data;
-          }
-        }
-
-        // Close the job tab
-        if (automation.platformState.currentJobTabId) {
-          try {
-            await chrome.tabs.remove(automation.platformState.currentJobTabId);
-          } catch (error) {
-            console.warn("⚠️ Error closing Recruitee job tab:", error);
-          }
-        }
-
-        // Reset processing state
-        automation.platformState.isProcessingJob = false;
-        const oldUrl = automation.platformState.currentJobUrl;
-        automation.platformState.currentJobUrl = null;
-        automation.platformState.currentJobTabId = null;
-        automation.platformState.applicationStartTime = null;
-
-        // Increment current count
-        automation.platformState.searchData.current++;
-
-        // Notify search tab to continue
-        await this.sendSearchNextMessage(windowId, {
-          url: oldUrl,
-          status: "SUCCESS",
-          data: data,
-        });
-      }
-
-      this.safePortSend(port, {
-        type: "SUCCESS",
-        message: "Application completed",
-      });
-    } catch (error) {
-      console.error(
-        "❌ Error handling Recruitee APPLICATION_COMPLETED:",
-        error
-      );
-      this.safePortSend(port, {
-        type: "ERROR",
-        message: error.message,
-      });
-    }
-  }
-
-  async handleApplicationError(port, data) {
-    try {
-      const windowId = port.sender?.tab?.windowId;
-      const tabId = port.sender?.tab?.id;
-      console.log(`❌ Recruitee job application failed in tab ${tabId}:`, data);
-
-      let automation = null;
-      for (const [
-        sessionId,
-        auto,
-      ] of this.messageHandler.activeAutomations.entries()) {
-        if (auto.windowId === windowId) {
-          automation = auto;
-          break;
-        }
-      }
-
-      if (automation) {
-        const url = automation.platformState.currentJobUrl;
-        if (url && automation.platformState.submittedLinks) {
-          const linkIndex = automation.platformState.submittedLinks.findIndex(
-            (link) =>
-              this.messageHandler.normalizeUrl(link.url) ===
-              this.messageHandler.normalizeUrl(url)
-          );
-          if (linkIndex >= 0) {
-            automation.platformState.submittedLinks[linkIndex].status = "ERROR";
-            automation.platformState.submittedLinks[linkIndex].error = data;
-          }
-        }
-
-        // Close the job tab
-        if (automation.platformState.currentJobTabId) {
-          try {
-            await chrome.tabs.remove(automation.platformState.currentJobTabId);
-          } catch (error) {
-            console.warn("⚠️ Error closing Recruitee job tab:", error);
-          }
-        }
-
-        // Reset processing state
-        automation.platformState.isProcessingJob = false;
-        const oldUrl = automation.platformState.currentJobUrl;
-        automation.platformState.currentJobUrl = null;
-        automation.platformState.currentJobTabId = null;
-        automation.platformState.applicationStartTime = null;
-
-        // Notify search tab to continue
-        await this.sendSearchNextMessage(windowId, {
-          url: oldUrl,
-          status: "ERROR",
-          message: typeof data === "string" ? data : "Application error",
-        });
-      }
-
-      this.safePortSend(port, {
-        type: "SUCCESS",
-        message: "Error acknowledged",
-      });
-    } catch (error) {
-      console.error("❌ Error handling Recruitee APPLICATION_ERROR:", error);
-    }
-  }
-
-  async handleApplicationSkipped(port, data) {
-    try {
-      const windowId = port.sender?.tab?.windowId;
-      const tabId = port.sender?.tab?.id;
-      console.log(
-        `⏭️ Recruitee job application skipped in tab ${tabId}:`,
-        data
-      );
-
-      let automation = null;
-      for (const [
-        sessionId,
-        auto,
-      ] of this.messageHandler.activeAutomations.entries()) {
-        if (auto.windowId === windowId) {
-          automation = auto;
-          break;
-        }
-      }
-
-      if (automation) {
-        const url = automation.platformState.currentJobUrl;
-        if (url && automation.platformState.submittedLinks) {
-          const linkIndex = automation.platformState.submittedLinks.findIndex(
-            (link) =>
-              this.messageHandler.normalizeUrl(link.url) ===
-              this.messageHandler.normalizeUrl(url)
-          );
-          if (linkIndex >= 0) {
-            automation.platformState.submittedLinks[linkIndex].status =
-              "SKIPPED";
-            automation.platformState.submittedLinks[linkIndex].reason = data;
-          }
-        }
-
-        if (automation.platformState.currentJobTabId) {
-          try {
-            await chrome.tabs.remove(automation.platformState.currentJobTabId);
-          } catch (error) {
-            console.warn("⚠️ Error closing Recruitee job tab:", error);
-          }
-        }
-
-        automation.platformState.isProcessingJob = false;
-        const oldUrl = automation.platformState.currentJobUrl;
-        automation.platformState.currentJobUrl = null;
-        automation.platformState.currentJobTabId = null;
-        automation.platformState.applicationStartTime = null;
-
-        await this.sendSearchNextMessage(windowId, {
-          url: oldUrl,
-          status: "SKIPPED",
-          message: data,
-        });
-      }
-
-      this.safePortSend(port, {
-        type: "SUCCESS",
-        message: "Skip acknowledged",
-      });
-    } catch (error) {
-      console.error("❌ Error handling Recruitee APPLICATION_SKIPPED:", error);
-    }
-  }
-
+  /**
+   * Handle search completion
+   */
   async handleSearchCompleted(port, data) {
     const windowId = port.sender?.tab?.windowId;
     console.log(`🏁 Recruitee search task completed for window ${windowId}`);
@@ -756,10 +337,13 @@ class RecruiteeAutomationHandler {
 
     this.safePortSend(port, {
       type: "SUCCESS",
-      message: "Search completion acknowledged",
+      message: "Recruitee search completion acknowledged",
     });
   }
 
+  /**
+   * Handle application status check
+   */
   async handleCheckApplicationStatus(port, data) {
     const windowId = port.sender?.tab?.windowId;
 
@@ -788,6 +372,9 @@ class RecruiteeAutomationHandler {
     });
   }
 
+  /**
+   * Handle search next ready notification
+   */
   async handleSearchNextReady(port, data) {
     console.log("🔄 Recruitee search ready for next job");
 
@@ -797,6 +384,9 @@ class RecruiteeAutomationHandler {
     });
   }
 
+  /**
+   * Handle profile data request
+   */
   async handleGetProfileData(port, data) {
     const windowId = port.sender?.tab?.windowId;
 
@@ -824,62 +414,32 @@ class RecruiteeAutomationHandler {
     }
   }
 
-  async sendSearchNextMessage(windowId, data) {
-    try {
-      console.log(
-        `📤 Sending SEARCH_NEXT message to Recruitee window ${windowId}:`,
-        data
-      );
-
-      const tabs = await chrome.tabs.query({ windowId: windowId });
-
-      for (const tab of tabs) {
-        if (tab.url && tab.url.includes("google.com/search")) {
-          // Try port first
-          const port = this.portConnections.get(tab.id);
-          if (port && this.activeConnections.has(port.name)) {
-            try {
-              this.safePortSend(port, {
-                type: "SEARCH_NEXT",
-                data: data,
-              });
-              console.log(
-                `✅ Sent SEARCH_NEXT via port to Recruitee tab ${tab.id}`
-              );
-              return true;
-            } catch (error) {
-              console.warn(
-                "⚠️ Recruitee port message failed, trying tabs API:",
-                error
-              );
-            }
-          }
-
-          // Fallback to tabs API
-          try {
-            await chrome.tabs.sendMessage(tab.id, {
-              type: "SEARCH_NEXT",
-              data: data,
-            });
-            console.log(
-              `✅ Sent SEARCH_NEXT via tabs API to Recruitee tab ${tab.id}`
-            );
-            return true;
-          } catch (error) {
-            console.warn("⚠️ Recruitee tabs API message failed:", error);
-          }
-        }
-      }
-
-      console.warn(
-        "⚠️ Could not find Recruitee search tab to send SEARCH_NEXT message"
-      );
-      return false;
-    } catch (error) {
-      console.error("❌ Error sending Recruitee SEARCH_NEXT message:", error);
-      return false;
+  /**
+   * Override base class method to provide Recruitee-specific continuation logic
+   */
+  async continueOrComplete(automation, windowId, status, data) {
+    if (status === "SUCCESS") {
+      automation.platformState.searchData.current++;
     }
+
+    const oldUrl = automation.platformState.currentJobUrl;
+
+    // Recruitee-specific delay logic (shorter delays than Lever)
+    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const delay = status === "ERROR" ? Math.min(2000 * errorCount, 10000) : 0;
+
+    setTimeout(async () => {
+      await this.sendSearchNextMessage(windowId, {
+        url: oldUrl,
+        status: status,
+        data: data,
+        message:
+          typeof data === "string"
+            ? data
+            : status === "ERROR"
+            ? "Application error"
+            : undefined,
+      });
+    }, delay);
   }
 }
-
-export default RecruiteeAutomationHandler;

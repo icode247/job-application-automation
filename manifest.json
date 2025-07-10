@@ -31,33 +31,8 @@
   ],
   "content_scripts": [
     {
-      "matches": [
-        "https://*.lever.co/*",
-        "*://www.google.com/search?*lever*",
-        "https://*.indeed.com/*",
-        "https://smartapply.indeed.com/*",
-        "https://*.glassdoor.com/*",
-        "https://*.glassdoor.fr/*",
-        "https://*.glassdoor.co.uk/*",
-        "https://*.glassdoor.de/*",
-        "https://*.glassdoor.ca/*",
-        "https://*.glassdoor.in/*",
-        "https://*.linkedin.com/*",
-        "https://*.lever.co/*",
-        "*://www.google.com/search?*lever*",
-        "*://www.google.com/search?*workable*",
-        "*://*.workable.com/*",
-        "*://www.google.com/search?*breezy*",
-        "*://*.breezy.hr/*",
-        "*://app.breezy.hr/*",
-        "*://www.google.com/search?*recruitee*",
-        "https://*.recruitee.com/*",
-        "*://*.recruitee.hr/*",
-        "https://*.ziprecruiter.com/jobs-search*",
-        "https://*.ziprecruiter.com/jobs/*",
-        "https://*.ziprecruiter.com/job/*",
-        "https://*.ziprecruiter.com/apply/*",
-        "https://*.ziprecruiter.com/jz/*"
+     "matches": [
+        "<all_urls>"
       ],
       "js": [
         "content/content-main.js"
@@ -94,7 +69,14 @@
         "platforms/recruitee/recruitee-automation.js",
         "platforms/recruitee/recruitee-form-handler.js",
         "platforms/recruitee/recruitee-file-handler.js",
-        "core/constants.js"
+        "core/constants.js",
+        "shared/utilities/index.js",
+        "shared/utilities/url-utils.js",
+        "shared/utilities/dom-utils.js",
+        "shared/utilities/form-utils.js",
+        "shared/utilities/file-utils.js",
+        "shared/base/base-platform-automation.js",
+        "shared/base/base-platform.js"
       ],
       "matches": [
         "<all_urls>"

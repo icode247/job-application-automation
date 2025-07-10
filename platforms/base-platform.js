@@ -1,5 +1,4 @@
 // platforms/base-platform.js
-///Page loaded, current URL
 export default class BasePlatform {
   constructor(config) {
     this.sessionId = config.sessionId;
@@ -32,6 +31,59 @@ export default class BasePlatform {
   // Abstract methods - must be implemented by platform-specific classes
   async initialize() {
     this.log("🚀 Initializing platform automation");
+  }
+
+  async initialize() {
+    this.log("🚀 Initializing platform automation");
+  }
+
+  async start(params = {}) {
+    throw new Error("start() method must be implemented by platform class");
+  }
+
+  async findJobs() {
+    throw new Error("findJobs() method must be implemented by platform class");
+  }
+
+  async applyToJob(jobElement) {
+    throw new Error(
+      "applyToJob() method must be implemented by platform class"
+    );
+  }
+
+  async setSessionContext(sessionContext) {
+    try {
+      this.sessionContext = sessionContext;
+
+      // Update basic properties if available
+      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
+      if (sessionContext.platform) this.platform = sessionContext.platform;
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+      if (sessionContext.userProfile)
+        this.userProfile = sessionContext.userProfile;
+
+      this.log("✅ Session context set successfully");
+    } catch (error) {
+      this.log("❌ Error setting session context:", error);
+      throw error;
+    }
+  }
+
+  handlePortMessage(message) {
+    const { type, data } = message || {};
+
+    switch (type) {
+      case "CONNECTION_ESTABLISHED":
+        this.log("✅ Port connection established");
+        break;
+
+      case "KEEPALIVE_RESPONSE":
+        // Acknowledge keepalive
+        break;
+
+      default:
+        this.log(`❓ Unhandled message type: ${type}`);
+    }
   }
 
   async start(params = {}) {
