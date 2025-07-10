@@ -1,5 +1,4 @@
 // core/automation-orchestrator.js
-//handleNoUnprocessedLinks
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
 
@@ -165,12 +164,86 @@ export default class AutomationOrchestrator {
     }
   }
 
+  buildZipRecruiterUrl(preferences) {
+    const params = new URLSearchParams();
+
+    // Keywords from positions
+    if (preferences.positions?.length) {
+      params.set("search", preferences.positions.join(" OR "));
+    }
+
+    // Location
+    if (preferences.location?.length && !preferences.remoteOnly) {
+      params.set("location", preferences.location[0]);
+    }
+
+    // Remote work
+    if (preferences.remoteOnly || preferences.workMode?.includes("Remote")) {
+      params.set("refine_by_location_type", "only_remote");
+    } else {
+      params.set("refine_by_location_type", ""); // For in-person jobs
+    }
+
+    // Date posted
+    const datePostedMap = {
+      "Any time": "",
+      "Past month": "30",
+      "Past week": "7",
+      "Past 24 hours": "1",
+      "Few Minutes Ago": "1",
+    };
+
+    if (preferences.datePosted && datePostedMap[preferences.datePosted]) {
+      params.set("days", datePostedMap[preferences.datePosted]);
+    }
+
+    // Job type
+    const jobTypeMap = {
+      "Full-time": "full_time",
+      "Part-time": "part_time",
+      Contract: "contract",
+      Temporary: "temp",
+      Internship: "internship",
+    };
+
+    if (preferences.jobType?.length) {
+      const zipRecruiterJobType = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean)[0]; // ZipRecruiter typically takes one job type
+
+      if (zipRecruiterJobType) {
+        params.set(
+          "refine_by_employment",
+          `employment_type:${zipRecruiterJobType}`
+        );
+      }
+    }
+
+    // Salary filters
+    if (preferences.salary?.length === 2) {
+      const [minSalary, maxSalary] = preferences.salary;
+      if (minSalary > 0) {
+        params.set("refine_by_salary", minSalary.toString());
+      }
+      if (maxSalary > 0) {
+        params.set("refine_by_salary_ceil", maxSalary.toString());
+      }
+    }
+
+    // Default search radius
+    params.set("radius", "25");
+
+    return `https://www.ziprecruiter.com/jobs-search?${params.toString()}`;
+  }
+
   buildStartingUrl(platform, preferences) {
     switch (platform) {
       case "linkedin":
         return this.buildLinkedInUrl(preferences);
       case "indeed":
         return this.buildIndeedUrl(preferences);
+      case "ziprecruiter":
+        return this.buildZipRecruiterUrl(preferences);
       case "glassdoor":
         return this.buildGlassdoorUrl(preferences);
       case "workday":

@@ -5,7 +5,8 @@ import LeverAutomationHandler from "./platforms/lever.js";
 import RecruiteeAutomationHandler from "./platforms/recruitee.js";
 import LinkedInAutomationHandler from "./platforms/linkedin.js";
 import BreezyAutomationHandler from "./platforms/breezy.js";
-//validateStartApplyingRequest
+import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
+
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -426,6 +427,10 @@ export default class MessageHandler {
       case "breezy":
         handler = new BreezyAutomationHandler(this);
         break;
+
+      case "ziprecruiter":
+        handler = new ZipRecruiterAutomationHandler(this);
+        break;
       default:
         console.error(`❌ Unsupported platform: ${platform}`);
         return null;
@@ -599,6 +604,7 @@ export default class MessageHandler {
       recruitee: ["https://recruitee.com"],
       greenhouse: ["https://boards.greenhouse.io"],
       breezy: ["breezy.hr", "app.breezy.hr"],
+      ziprecruiter: ["https://www.ziprecruiter.com"],
     };
 
     return domainMap[platform] || [];
@@ -607,6 +613,9 @@ export default class MessageHandler {
   // Get platform-specific link patterns
   getPlatformLinkPattern(platform) {
     const patternMap = {
+      ziprecruiter:
+        /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|jz|apply).*$/,
+
       lever: /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/,
       workable: /^https:\/\/apply\.workable\.com\/[^\/]+\/[^\/]+\/?.*$/,
       recruitee: /^https:\/\/.*\.recruitee\.com\/o\/[^\/]+\/?.*$/,
@@ -777,7 +786,7 @@ export default class MessageHandler {
   // Validation method
   validateStartApplyingRequest(request) {
     const required = ["platform", "userId", "jobsToApply"];
-
+  
     for (const field of required) {
       if (!request[field]) {
         return {
@@ -786,26 +795,27 @@ export default class MessageHandler {
         };
       }
     }
-
+  
     if (!Number.isInteger(request.jobsToApply) || request.jobsToApply <= 0) {
       return {
         valid: false,
         error: "jobsToApply must be a positive integer",
       };
     }
-
+  
     const supportedPlatforms = [
       "linkedin",
       "indeed",
+      "ziprecruiter",
       "recruitee",
-      "glassdoor",
+      "glassdoor", 
       "workday",
       "lever",
       "workable",
       "greenhouse",
       "breezy",
     ];
-
+  
     if (!supportedPlatforms.includes(request.platform)) {
       return {
         valid: false,
@@ -814,7 +824,7 @@ export default class MessageHandler {
         }. Supported platforms: ${supportedPlatforms.join(", ")}`,
       };
     }
-
+  
     return { valid: true };
   }
 

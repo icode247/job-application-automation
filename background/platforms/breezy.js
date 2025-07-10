@@ -1,4 +1,6 @@
 // background/platforms/breezy.js
+
+//handleSuccessMessage
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
 
 export default class BreezyAutomationHandler extends BaseBackgroundHandler {
@@ -67,40 +69,85 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  /**
-   * Handle search task request - Breezy specific data structure
-   */
   async handleGetSearchTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
+    console.log(
+      `🔍 GET_SEARCH_TASK request from Breezy tab ${tabId}, window ${windowId}`
+    );
+
     let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
     for (const [
       sessionId,
-      automation,
+      auto,
     ] of this.messageHandler.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        const platformState = automation.platformState;
-        sessionData = {
-          tabId: tabId,
-          limit: platformState.searchData.limit,
-          current: platformState.searchData.current,
-          domain: platformState.searchData.domain,
-          submittedLinks: platformState.submittedLinks || [],
-          searchLinkPattern:
-            platformState.searchData.searchLinkPattern.toString(),
-        };
-
-        // Update search tab ID
-        platformState.searchTabId = tabId;
+      if (auto.windowId === windowId) {
+        automation = auto;
+        console.log(`✅ Found Breezy automation session: ${sessionId}`);
         break;
       }
     }
 
-    this.safePortSend(port, {
+    if (automation) {
+      const platformState = automation.platformState;
+
+      // Add safety check for searchLinkPattern
+      let searchLinkPatternString = "";
+      try {
+        if (platformState.searchData.searchLinkPattern) {
+          searchLinkPatternString =
+            platformState.searchData.searchLinkPattern.toString();
+        } else {
+          console.warn("⚠️ searchLinkPattern is null, using empty string");
+          searchLinkPatternString = "";
+        }
+      } catch (error) {
+        console.error(
+          "❌ Error converting searchLinkPattern to string:",
+          error
+        );
+        searchLinkPatternString = "";
+      }
+
+      sessionData = {
+        tabId: tabId,
+        limit: platformState.searchData.limit,
+        current: platformState.searchData.current,
+        domain: platformState.searchData.domain,
+        submittedLinks: platformState.submittedLinks || [],
+        searchLinkPattern: searchLinkPatternString,
+      };
+
+      // Update search tab ID
+      platformState.searchTabId = tabId;
+      console.log(`📊 Breezy session data prepared:`, sessionData);
+    } else {
+      console.warn(`⚠️ No Breezy automation found for window ${windowId}`);
+      console.log(
+        `Active automations:`,
+        Array.from(this.messageHandler.activeAutomations.keys())
+      );
+    }
+
+    // Send response
+    const sent = this.safePortSend(port, {
       type: "SUCCESS",
       data: sessionData || {},
     });
+
+    if (!sent) {
+      console.error(
+        `❌ Failed to send Breezy search task data to port ${port.name}`
+      );
+    } else {
+      console.log(
+        `✅ Breezy search task data sent successfully to tab ${tabId}`
+      );
+    }
   }
 
   /**

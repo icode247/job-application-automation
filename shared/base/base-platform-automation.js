@@ -310,7 +310,10 @@ export default class BasePlatformAutomation extends BasePlatform {
           break;
 
         case "KEEPALIVE_RESPONSE":
-          // Just acknowledge keepalive
+          break;
+
+        case "SUCCESS":
+          this.handleSuccessMessage(data);
           break;
 
         default:

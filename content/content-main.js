@@ -354,18 +354,23 @@ class ContentScriptManager {
 
     if (url.includes("linkedin.com")) return "linkedin";
     if (url.includes("indeed.com")) return "indeed";
+    if (url.includes("ziprecruiter.com")) return "ziprecruiter";
     if (url.includes("recruitee.com")) return "recruitee";
     if (url.includes("glassdoor.com")) return "glassdoor";
     if (url.includes("myworkdayjobs.com")) return "workday";
     if (url.includes("lever.co")) return "lever";
     if (url.includes("greenhouse.io")) return "greenhouse";
     if (url.includes("workable.com")) return "workable";
-    if (url.includes("breezy.hr")) return "breezy";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
       if (url.includes("site:recruitee.com") || url.includes("recruitee.com"))
         return "recruitee";
+      if (
+        url.includes("site:ziprecruiter.com") ||
+        url.includes("ziprecruiter.com")
+      )
+        return "ziprecruiter";
       if (
         url.includes("site:myworkdayjobs.com") ||
         url.includes("myworkdayjobs.com")
@@ -375,8 +380,6 @@ class ContentScriptManager {
         return "lever";
       if (url.includes("site:workable.com") || url.includes("workable.com"))
         return "workable";
-      if (url.includes("site:breezy.hr") || url.includes("breezy.hr"))
-        return "breezy";
     }
 
     return "unknown";
@@ -471,6 +474,12 @@ class ContentScriptManager {
           );
           return IndeedPlatform;
 
+        case "ziprecruiter":
+          const { default: ZipRecruiterPlatform } = await import(
+            "../platforms/ziprecruiter/ziprecruiter.js"
+          );
+          return ZipRecruiterPlatform;
+
         case "recruitee":
           const { default: RecruiteePlatform } = await import(
             "../platforms/recruitee/recruitee.js"
@@ -500,7 +509,6 @@ class ContentScriptManager {
             "../platforms/breezy/breezy.js"
           );
           return BreezyPlatform;
-
         default:
           console.warn(`Platform ${platform} not supported`);
           return null;
