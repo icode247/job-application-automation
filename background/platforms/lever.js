@@ -1,7 +1,6 @@
-
 // background/platforms/lever.js - REFACTORED VERSION
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
-
+//handlePlatformSpecificMessage
 export default class LeverAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     super(messageHandler, "lever"); // Pass platform name to base class
@@ -40,6 +39,8 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         await this.handleSearchTaskDone(port, data);
         break;
 
+      // ✅ FIX: Add missing message types that the frontend sends
+      case "CHECK_APPLICATION_STATUS":
       case "VERIFY_APPLICATION_STATUS":
         await this.handleVerifyApplicationStatus(port, data);
         break;
@@ -52,6 +53,11 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         await this.handleSearchNextReady(port, data);
         break;
 
+      // ✅ FIX: Add SEARCH_COMPLETED handler
+      case "SEARCH_COMPLETED":
+        await this.handleSearchCompleted(port, data);
+        break;
+
       default:
         console.log(`❓ Unhandled Lever port message type: ${type}`);
         this.safePortSend(port, {
@@ -59,6 +65,27 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
           message: `Unknown message type: ${type}`,
         });
     }
+  }
+
+  async handleSearchCompleted(port, data) {
+    const windowId = port.sender?.tab?.windowId;
+    console.log(`🏁 Lever search completed for window ${windowId}`);
+
+    try {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icons/icon48.png",
+        title: "Lever Job Search Completed",
+        message: "All job applications have been processed.",
+      });
+    } catch (error) {
+      console.warn("⚠️ Error showing notification:", error);
+    }
+
+    this.safePortSend(port, {
+      type: "SUCCESS",
+      message: "Lever search completion acknowledged",
+    });
   }
 
   /**

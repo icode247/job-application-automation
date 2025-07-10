@@ -9,6 +9,7 @@ import {
   UserService,
 } from "../../services/index.js";
 
+//isValidJobPage
 // Custom error types for Recruitee
 class ApplicationError extends Error {
   constructor(message, details) {
@@ -55,7 +56,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
   }
 
   isValidJobPage(url) {
-    return /recruitee\.com\/(o|career)\//.test(url);
+    return /\/(o|career)\//.test(url);
   }
 
   async setSessionContext(sessionContext) {
@@ -244,11 +245,11 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
   }
 
   isApplicationPage(url) {
-    return this.isValidJobPage(url); // Recruitee doesn't have separate apply URLs
+    return this.isValidJobPage(url);
   }
 
   getJobTaskMessageType() {
-    return "START_APPLICATION"; // Recruitee-specific message type
+    return "START_APPLICATION";
   }
 
   // ========================================
@@ -529,7 +530,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
 
       // Check if we're on a job details page or application form page
       const applyButton = document.querySelector(
-        "a.c-button--primary, a.c-button--apply, a.cta-button, button.c-button--apply"
+        'button[data-testid="header-tab-apply-button"], button[data-cy="apply-button-nav"], a.c-button--primary, a.c-button--apply, a.cta-button, button.c-button--apply'
       );
       if (applyButton) {
         this.statusOverlay.addInfo("Found apply button, clicking it");

@@ -9,6 +9,7 @@ import {
   UserService,
 } from "../../services/index.js";
 
+//setSessionContext
 export default class LeverPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -80,6 +81,26 @@ export default class LeverPlatform extends BasePlatformAutomation {
       this.isRunning = true;
       this.log("🚀 Starting Lever automation");
       this.statusOverlay.addInfo("Starting Lever automation");
+
+      // ✅ FIX: Ensure user profile is available before starting
+      if (!this.userProfile && this.userId) {
+        try {
+          console.log("🔄 Attempting to fetch user profile during start...");
+          this.userProfile = await this.userService.getUserDetails();
+          console.log("✅ User profile fetched during start");
+          this.statusOverlay.addSuccess("User profile loaded");
+
+          // Update form handler with profile
+          if (this.formHandler && this.userProfile) {
+            this.formHandler.userData = this.userProfile;
+          }
+        } catch (error) {
+          console.error("❌ Failed to fetch user profile during start:", error);
+          this.statusOverlay.addWarning(
+            "Failed to load user profile - automation may have limited functionality"
+          );
+        }
+      }
 
       // Update config with parameters
       this.config = { ...this.config, ...params };
@@ -291,6 +312,9 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
       this.log("✅ Search data initialized:", this.searchData);
       this.statusOverlay.addSuccess("Search initialization complete");
+
+      // ✅ FIX: Start the search process after initialization
+      setTimeout(() => this.searchNext(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
       this.statusOverlay.addError(
@@ -302,6 +326,82 @@ export default class LeverPlatform extends BasePlatformAutomation {
   // ========================================
   // LEVER-SPECIFIC APPLICATION LOGIC
   // ========================================
+
+  async setSessionContext(sessionContext) {
+    try {
+      this.sessionContext = sessionContext;
+      this.hasSessionContext = true;
+
+      // Update basic properties
+      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
+      if (sessionContext.platform) this.platform = sessionContext.platform;
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+
+      // Set user profile with priority handling
+      if (sessionContext.userProfile) {
+        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
+          this.userProfile = sessionContext.userProfile;
+          console.log("👤 User profile loaded from session context");
+        } else {
+          // Merge profiles, preferring non-null values
+          this.userProfile = {
+            ...this.userProfile,
+            ...sessionContext.userProfile,
+          };
+          console.log("👤 User profile merged with session context");
+        }
+      }
+
+      // Fetch user profile if still missing
+      if (!this.userProfile && this.userId) {
+        try {
+          console.log("📡 Fetching user profile from user service...");
+          this.userProfile = await this.userService.getUserDetails();
+          console.log("✅ User profile fetched successfully");
+        } catch (error) {
+          console.error("❌ Failed to fetch user profile:", error);
+          this.statusOverlay?.addError(
+            "Failed to fetch user profile: " + error.message
+          );
+        }
+      }
+
+      // Update services with user context only if userId changed
+      if (
+        this.userId &&
+        (!this.userService || this.userService.userId !== this.userId)
+      ) {
+        this.applicationTracker = new ApplicationTrackerService({
+          userId: this.userId,
+        });
+        this.userService = new UserService({ userId: this.userId });
+        console.log("📋 Updated services with new userId:", this.userId);
+      }
+
+      // Store API host from session context
+      if (sessionContext.apiHost) {
+        this.sessionApiHost = sessionContext.apiHost;
+      }
+
+      // Update form handler if it exists
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      console.log("✅ Lever session context set successfully", {
+        hasUserProfile: !!this.userProfile,
+        userId: this.userId,
+        sessionId: this.sessionId,
+        profileName: this.userProfile?.name || this.userProfile?.firstName,
+        profileEmail: this.userProfile?.email,
+      });
+    } catch (error) {
+      console.error("❌ Error setting Lever session context:", error);
+      this.statusOverlay?.addError(
+        "❌ Error setting session context: " + error.message
+      );
+    }
+  }
 
   async startApplicationProcess() {
     try {

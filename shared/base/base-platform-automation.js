@@ -306,7 +306,7 @@ export default class BasePlatformAutomation extends BasePlatform {
           break;
 
         case "ERROR":
-          this.handleErrorMessage(data);
+          this.handleErrorMessage(message);
           break;
 
         case "KEEPALIVE_RESPONSE":
@@ -426,13 +426,14 @@ export default class BasePlatformAutomation extends BasePlatform {
   /**
    * Common error message handling
    */
-  handleErrorMessage(data) {
-    const errorMessage =
-      data && data.message
-        ? data.message
-        : "Unknown error from background script";
-    this.log("❌ Error from background script:", errorMessage);
-    this.statusOverlay.addError("Background error: " + errorMessage);
+  handleErrorMessage(errorMessage) {
+    const actualMessage =
+      errorMessage?.message ||
+      errorMessage?.data?.message ||
+      "Unknown error from background script";
+
+    this.log("❌ Error from background script:", actualMessage);
+    this.statusOverlay.addError("Background error: " + actualMessage);
   }
 
   /**
