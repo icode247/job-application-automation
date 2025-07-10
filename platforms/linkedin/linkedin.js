@@ -392,13 +392,36 @@ export default class LinkedInPlatform extends BasePlatform {
     );
   }
 
+  determineApplyType(applyButton) {
+    if (!applyButton) return null;
+
+    const buttonText = applyButton.textContent?.trim().toLowerCase() || "";
+    const buttonAriaLabel =
+      applyButton.getAttribute("aria-label")?.toLowerCase() || "";
+
+    // Check if it's Easy Apply
+    if (
+      buttonText.includes("easy apply") ||
+      buttonAriaLabel.includes("easy apply")
+    ) {
+      return "easy_apply";
+    }
+
+    // Check if it's external Apply
+    if (buttonText.includes("apply") || buttonAriaLabel.includes("apply")) {
+      return "external_apply";
+    }
+
+    return "unknown";
+  }
+
   async generateComprehensiveSearchUrl(preferences) {
     const baseUrl = "https://www.linkedin.com/jobs/search/?";
 
     const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
 
     const params = new URLSearchParams();
-    params.append("f_AL", "true"); // Keep the Easy Apply filter
+    // params.append("f_AL", "true"); // Keep the Easy Apply filter
 
     // Handle positions
     if (preferences.positions?.length) {
@@ -679,6 +702,38 @@ export default class LinkedInPlatform extends BasePlatform {
     );
   }
 
+  async saveExternalJob(jobDetails) {
+    try {
+      // Save external job for potential future processing
+      const externalJobData = {
+        jobId: jobDetails.jobId,
+        title: jobDetails.title,
+        company: jobDetails.company,
+        location: jobDetails.location,
+        jobUrl: window.location.href,
+        salary: jobDetails.salary || "Not specified",
+        workplace: jobDetails.workplace,
+        postedDate: jobDetails.postedDate,
+        applicants: jobDetails.applications,
+        platform: this.platform,
+        applyType: "external",
+        dateFound: new Date().toISOString(),
+      };
+
+      // You can extend this to save to your tracking system
+      this.log(
+        `📝 External job logged: ${jobDetails.title} at ${jobDetails.company}`
+      );
+      this.statusOverlay.addInfo(`External job logged: ${jobDetails.title}`);
+
+      return true;
+    } catch (error) {
+      console.error("Error saving external job:", error);
+      this.log(`❌ Error saving external job: ${error.message}`);
+      return false;
+    }
+  }
+
   // ===== CORE LINKEDIN AUTOMATION METHODS =====
   async processJobs({ jobsToApply }) {
     let processedCount = 0;
@@ -796,6 +851,61 @@ export default class LinkedInPlatform extends BasePlatform {
               skippedCount++;
               continue;
             }
+
+            const applyType = this.determineApplyType(applyButton);
+
+            if (applyType === "external_apply") {
+              // Log as external job and skip for now
+              this.log(
+                `External apply job found: ${jobDetails.title} - Logging as external job`
+              );
+              this.statusOverlay.addInfo(
+                `External apply job: ${jobDetails.title} - Skipped`
+              );
+
+              // You can add logic here to save external jobs to a separate tracking system
+              await this.saveExternalJob(jobDetails);
+              skippedCount++;
+              continue;
+            } else if (applyType === "easy_apply") {
+              // Log as Easy Apply job and continue with application flow
+              this.log(
+                `Easy Apply job found: ${jobDetails.title} - Proceeding with application`
+              );
+              this.statusOverlay.addInfo(
+                `Easy Apply job: ${jobDetails.title} - Applying...`
+              );
+
+              // Check if already applied using service
+              const alreadyApplied =
+                await this.appTracker.checkIfAlreadyApplied(jobId);
+              if (alreadyApplied) {
+                this.log(
+                  `Already applied to job ${jobId} (from database), skipping.`
+                );
+                skippedCount++;
+                continue;
+              }
+
+              // Continue with existing application flow...
+              this.updateProgress({
+                current: `Processing: ${jobDetails.title} (Page ${currentPage})`,
+              });
+
+              // Attempt to apply
+              const success = await this.applyToJob(applyButton, jobDetails);
+              // ... rest of application logic remains the same
+            } else {
+              // Unknown button type
+              this.log(`Unknown apply button type for job ${jobId}, skipping.`);
+              this.statusOverlay.addWarning(
+                `Unknown apply button type: ${jobDetails.title}`
+              );
+              skippedCount++;
+              continue;
+            }
+
+            // 5. ADD NEW METHOD TO SAVE EXTERNAL JOBS
 
             // We found a job we can actually apply to
             newApplicableJobsFound = true;
