@@ -421,7 +421,7 @@ export default class LinkedInPlatform extends BasePlatform {
     const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
 
     const params = new URLSearchParams();
-    // params.append("f_AL", "true"); // Keep the Easy Apply filter
+    params.append("f_AL", "true"); // Keep the Easy Apply filter
 
     // Handle positions
     if (preferences.positions?.length) {
