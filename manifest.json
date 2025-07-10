@@ -76,7 +76,10 @@
         "shared/utilities/form-utils.js",
         "shared/utilities/file-utils.js",
         "shared/base/base-platform-automation.js",
-        "shared/base/base-platform.js"
+        "shared/base/base-platform.js",
+        "platforms/breezy/breezy.js",
+        "platforms/breezy/breezy-form-handler.js",
+        "platforms/breezy/breezy-file-handler.js"
       ],
       "matches": [
         "<all_urls>"

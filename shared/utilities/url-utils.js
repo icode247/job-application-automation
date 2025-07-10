@@ -1,4 +1,5 @@
 // shared/utilities/url-utils.js
+//handleNoUnprocessedLinks
 export class UrlUtils {
   /**
    * Normalize URL for consistent comparison
@@ -39,6 +40,13 @@ export class UrlUtils {
           const urlParts = url.split("/");
           return urlParts[urlParts.length - 1] || `job-${Date.now()}`;
 
+        case "breezy":
+          // Breezy format: company.breezy.hr/p/[JOB_ID] or app.breezy.hr/jobs/[JOB_ID]
+          const breezyMatches = url.match(/\/p\/([^\/]+)|\/jobs\/([^\/]+)/);
+          return breezyMatches && (breezyMatches[1] || breezyMatches[2])
+            ? breezyMatches[1] || breezyMatches[2]
+            : `job-${Date.now()}`;
+
         default:
           return `job-${Date.now()}`;
       }
@@ -73,7 +81,27 @@ export class UrlUtils {
             );
           }
           break;
+        case "breezy":
+          // Pattern: https://[COMPANY].breezy.hr/p/... or https://app.breezy.hr/jobs/[COMPANY]/...
+          let breezyMatches = url.match(/\/\/(.+?)\.breezy\.hr\/p\//);
+          if (breezyMatches && breezyMatches[1]) {
+            return (
+              breezyMatches[1].charAt(0).toUpperCase() +
+              breezyMatches[1].slice(1).replace(/-/g, " ")
+            );
+          }
+
+          // Try app.breezy.hr format
+          breezyMatches = url.match(/\/\/app\.breezy\.hr\/jobs\/([^\/]+)/);
+          if (breezyMatches && breezyMatches[1]) {
+            return (
+              breezyMatches[1].charAt(0).toUpperCase() +
+              breezyMatches[1].slice(1).replace(/-/g, " ")
+            );
+          }
+          break;
       }
+
       return null;
     } catch (error) {
       return null;
@@ -89,6 +117,10 @@ export class UrlUtils {
         return /^https:\/\/jobs\.(eu\.)?lever\.co\/[^\/]+\/[^\/]+/.test(url);
       case "recruitee":
         return /recruitee\.com\/(o|career)\//.test(url);
+      case "breezy":
+        return /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)/.test(
+          url
+        );
       default:
         return false;
     }
@@ -103,6 +135,9 @@ export class UrlUtils {
         return /^https:\/\/jobs\.(eu\.)?lever\.co\/([^\/]*)\/([^\/]*)\/?(.*)?$/;
       case "recruitee":
         return /^https:\/\/.*\.recruitee\.com\/(o|career)\/([^\/]+)\/?.*$/;
+
+      case "breezy":
+        return /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/;
       default:
         return null;
     }
@@ -117,6 +152,8 @@ export class UrlUtils {
         return ["https://jobs.lever.co"];
       case "recruitee":
         return ["recruitee.com"];
+      case "breezy":
+        return ["breezy.hr", "app.breezy.hr"];
       default:
         return [];
     }

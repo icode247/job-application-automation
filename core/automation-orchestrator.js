@@ -1,4 +1,5 @@
 // core/automation-orchestrator.js
+//handleNoUnprocessedLinks
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
 
@@ -178,9 +179,29 @@ export default class AutomationOrchestrator {
         return this.buildRecruiteeUrl(preferences);
       case "lever":
         return this.buildLeverUrl(preferences);
+      case "breezy":
+        return this.buildBreezyUrl(preferences);
       default:
         return this.buildGenericSearchUrl(preferences);
     }
+  }
+
+  buildBreezyUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ")
+      : "software engineer";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` "${preferences.location[0]}"`
+        : "";
+    const remoteKeyword =
+      preferences.remoteOnly || preferences.workMode?.includes("Remote")
+        ? " remote"
+        : "";
+
+    return `https://www.google.com/search?q=site:breezy.hr+"${encodeURIComponent(
+      keywords
+    )}"${location}${remoteKeyword}`;
   }
 
   buildLinkedInUrl(preferences) {
@@ -458,7 +479,6 @@ export default class AutomationOrchestrator {
       keywords
     )}"${location}`;
   }
-
 
   buildLeverUrl(preferences) {
     const keywords = preferences.positions?.length

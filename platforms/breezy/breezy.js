@@ -40,6 +40,9 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
     this.fileHandler = null;
     this.formHandler = null;
+
+    // Add flags to prevent duplicate starts
+    this.searchProcessStarted = false;
   }
 
   // ========================================
@@ -132,6 +135,12 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   async start(params = {}) {
     try {
+      // Prevent duplicate starts
+      if (this.isRunning) {
+        this.log("⚠️ Automation already running, ignoring duplicate start");
+        return true;
+      }
+
       this.isRunning = true;
       this.log("▶️ Starting Breezy automation");
 
@@ -165,6 +174,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       return true;
     } catch (error) {
       this.reportError(error, { action: "start" });
+      this.isRunning = false; // Reset on error
       return false;
     }
   }
@@ -247,7 +257,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   getJobTaskMessageType() {
-    return "START_APPLICATION";
+    return "SEND_CV_TASK";
   }
 
   // ========================================
@@ -295,6 +305,18 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.handleApplicationStatus(data);
         break;
 
+      case "SUCCESS":
+        this.handleSuccessMessage(data);
+        break;
+
+      case "APPLICATION_STATUS_RESPONSE":
+        this.handleApplicationStatusResponse(data);
+        break;
+
+      case "JOB_TAB_STATUS":
+        this.handleJobTabStatus(data);
+        break;
+
       default:
         super.handlePlatformSpecificMessage(type, data);
     }
@@ -340,6 +362,74 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     }
   }
 
+  handleSuccessMessage(data) {
+    if (data && data.submittedLinks !== undefined) {
+      // This is search task data
+      this.processSearchTaskData(data);
+    } else if (data && data.profile !== undefined && !this.userProfile) {
+      // This is application task data
+      this.processSendCvTaskData(data);
+    }
+  }
+
+  processSearchTaskData(data) {
+    try {
+      this.log("📊 Processing Breezy search task data:", data);
+
+      if (!data) {
+        this.log("⚠️ No search task data provided");
+        return;
+      }
+
+      this.searchData = {
+        tabId: data.tabId,
+        limit: data.limit || 10,
+        current: data.current || 0,
+        domain: data.domain || this.getPlatformDomains(),
+        submittedLinks: data.submittedLinks
+          ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
+          : [],
+        searchLinkPattern: data.searchLinkPattern
+          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
+          : this.getSearchLinkPattern(),
+      };
+
+      this.log("✅ Breezy search data initialized:", this.searchData);
+      this.statusOverlay.addSuccess("Search initialization complete");
+
+      // Start the search process after initialization
+      setTimeout(() => this.searchNext(), 1000);
+    } catch (error) {
+      this.log("❌ Error processing search task data:", error);
+      this.statusOverlay.addError(
+        "Error processing search task data: " + error.message
+      );
+    }
+  }
+
+  processSendCvTaskData(data) {
+    try {
+      console.log("📊 Processing send CV task data:", {
+        hasData: !!data,
+        hasProfile: !!data?.profile,
+      });
+
+      if (data?.profile && !this.userProfile) {
+        this.userProfile = data.profile;
+        console.log("👤 User profile set from background response");
+      }
+
+      // Update form handler
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      this.statusOverlay.addSuccess("Apply initialization complete");
+    } catch (error) {
+      console.error("❌ Error processing send CV task data:", error);
+      this.statusOverlay.addError("Error processing CV data: " + error.message);
+    }
+  }
   handleApplicationTaskData(data) {
     try {
       this.log("📊 Processing Breezy application task data:", data);
@@ -419,12 +509,20 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   async startSearchProcess() {
     try {
+      // Prevent duplicate search process starts
+      if (this.searchProcessStarted) {
+        this.log("⚠️ Search process already started, ignoring duplicate");
+        return;
+      }
+
+      this.searchProcessStarted = true;
       this.statusOverlay.addInfo("Starting job search process");
       this.statusOverlay.updateStatus("searching");
 
       // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
+      this.searchProcessStarted = false; // Reset on error
       this.reportError(error, { phase: "search" });
     }
   }
@@ -480,13 +578,13 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     if (error.name === "SkipApplicationError") {
       this.statusOverlay.addWarning("Application skipped: " + error.message);
       this.safeSendPortMessage({
-        type: "APPLICATION_SKIPPED",
+        type: "SEND_CV_TASK_SKIP",
         data: error.message,
       });
     } else {
       this.statusOverlay.addError("Application error: " + error.message);
       this.safeSendPortMessage({
-        type: "APPLICATION_ERROR",
+        type: "SEND_CV_TASK_ERROR",
         data: this.errorToString(error),
       });
     }
@@ -497,7 +595,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     this.log("📡 Fetching Breezy application task data from background");
     this.statusOverlay.addInfo("Fetching application data...");
 
-    const success = this.safeSendPortMessage({ type: "GET_APPLICATION_TASK" });
+    const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
     if (!success) {
       throw new Error("Failed to request application task data");
     }
@@ -584,9 +682,9 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         '[data-ui="location"]',
       ]) || "Not specified";
 
-    // Send completion message
+    // Send completion message using Breezy-specific message type
     this.safeSendPortMessage({
-      type: "APPLICATION_COMPLETED",
+      type: "SEND_CV_TASK_DONE",
       data: {
         jobId,
         title: jobTitle,

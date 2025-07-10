@@ -6,6 +6,7 @@ export const PLATFORMS = {
   GLASSDOOR: "glassdoor",
   WORKDAY: "workday",
   LEVER: "lever",
+  BREEZY: "breezy",
 };
 
 export const AUTOMATION_STATUS = {

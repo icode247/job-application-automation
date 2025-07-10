@@ -1,3 +1,4 @@
+//loadPlatformModule
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -359,6 +360,7 @@ class ContentScriptManager {
     if (url.includes("lever.co")) return "lever";
     if (url.includes("greenhouse.io")) return "greenhouse";
     if (url.includes("workable.com")) return "workable";
+    if (url.includes("breezy.hr")) return "breezy";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
@@ -373,6 +375,8 @@ class ContentScriptManager {
         return "lever";
       if (url.includes("site:workable.com") || url.includes("workable.com"))
         return "workable";
+      if (url.includes("site:breezy.hr") || url.includes("breezy.hr"))
+        return "breezy";
     }
 
     return "unknown";
@@ -491,12 +495,12 @@ class ContentScriptManager {
           );
           return LeverPlatform;
 
-
         case "breezy":
           const { default: BreezyPlatform } = await import(
             "../platforms/breezy/breezy.js"
           );
           return BreezyPlatform;
+
         default:
           console.warn(`Platform ${platform} not supported`);
           return null;

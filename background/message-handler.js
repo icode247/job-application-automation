@@ -4,7 +4,8 @@ import WindowManager from "./window-manager.js";
 import LeverAutomationHandler from "./platforms/lever.js";
 import RecruiteeAutomationHandler from "./platforms/recruitee.js";
 import LinkedInAutomationHandler from "./platforms/linkedin.js";
-
+import BreezyAutomationHandler from "./platforms/breezy.js";
+//validateStartApplyingRequest
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -422,6 +423,9 @@ export default class MessageHandler {
       case "linkedin":
         handler = new LinkedInAutomationHandler(this);
         break;
+      case "breezy":
+        handler = new BreezyAutomationHandler(this);
+        break;
       default:
         console.error(`❌ Unsupported platform: ${platform}`);
         return null;
@@ -594,7 +598,7 @@ export default class MessageHandler {
       workable: ["https://apply.workable.com", "https://jobs.workable.com"],
       recruitee: ["https://recruitee.com"],
       greenhouse: ["https://boards.greenhouse.io"],
-      // Add more platforms as needed
+      breezy: ["breezy.hr", "app.breezy.hr"],
     };
 
     return domainMap[platform] || [];
@@ -608,7 +612,8 @@ export default class MessageHandler {
       recruitee: /^https:\/\/.*\.recruitee\.com\/o\/[^\/]+\/?.*$/,
       greenhouse:
         /^https:\/\/boards\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+\/?.*$/,
-      // Add more platforms as needed
+      breezy:
+        /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/,
     };
 
     return patternMap[platform] || null;
@@ -844,5 +849,3 @@ export default class MessageHandler {
     // Implementation depends on your frontend communication method
   }
 }
-
-

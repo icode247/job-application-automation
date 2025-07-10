@@ -1,7 +1,7 @@
 // shared/base/base-platform-automation.js
 import BasePlatform from "../../platforms/base-platform.js";
 import { StatusOverlay } from "../../services/index.js";
-
+//SEARCH_TASK_DONE
 export default class BasePlatformAutomation extends BasePlatform {
   constructor(config) {
     super(config);
@@ -649,36 +649,67 @@ export default class BasePlatformAutomation extends BasePlatform {
   /**
    * Handle case when no unprocessed links found
    */
-  async handleNoUnprocessedLinks() {
-    if (this.applicationState.isApplicationInProgress) {
-      this.log("Application became in progress, aborting navigation");
-      return;
-    }
-
-    this.statusOverlay.addInfo(
-      "No new job links found, trying to load more..."
-    );
-    const loadMoreBtn = this.findLoadMoreElement();
-
-    if (loadMoreBtn) {
+    async handleNoUnprocessedLinks() {
       if (this.applicationState.isApplicationInProgress) {
         this.log("Application became in progress, aborting navigation");
         return;
       }
 
-      this.statusOverlay.addInfo('Clicking "More results" button');
-      loadMoreBtn.click();
+      this.statusOverlay.addInfo(
+        "No new job links found, trying to load more..."
+      );
+      const loadMoreBtn = this.findLoadMoreElement();
 
-      setTimeout(() => {
-        if (!this.applicationState.isApplicationInProgress) {
-          this.searchNext();
+      if (loadMoreBtn) {
+        if (this.applicationState.isApplicationInProgress) {
+          this.log("Application became in progress, aborting navigation");
+          return;
         }
-      }, 3000);
-    } else {
-      this.statusOverlay.addSuccess("All jobs processed, search completed!");
-      this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+
+        this.statusOverlay.addInfo('Clicking "More results" button');
+        loadMoreBtn.click();
+
+        setTimeout(() => {
+          if (!this.applicationState.isApplicationInProgress) {
+            this.searchNext();
+          }
+        }, 3000);
+      } else {
+        this.statusOverlay.addSuccess("All jobs processed, search completed!");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+      }
     }
-  }
+
+//   async handleNoUnprocessedLinks() {
+//     if (this.applicationState.isApplicationInProgress) {
+//       this.log("Application became in progress, aborting navigation");
+//       return;
+//     }
+
+//     this.statusOverlay.addInfo(
+//       "No new job links found, trying to load more..."
+//     );
+//     const loadMoreBtn = this.findLoadMoreElement();
+
+//     if (loadMoreBtn) {
+//       if (this.applicationState.isApplicationInProgress) {
+//         this.log("Application became in progress, aborting navigation");
+//         return;
+//       }
+
+//       this.statusOverlay.addInfo('Clicking "More results" button');
+//       loadMoreBtn.click();
+
+//       setTimeout(() => {
+//         if (!this.applicationState.isApplicationInProgress) {
+//           this.searchNext();
+//         }
+//       }, 3000);
+//     } else {
+//       this.statusOverlay.addSuccess("All jobs processed, search completed!");
+//       this.safeSendPortMessage({ type: "SEARCH_TASK_DONE" });
+//     }
+//   }
 
   /**
    * Reset application state on error
