@@ -1,4 +1,5 @@
-// platforms/breezy/breezy.js
+// platforms/breezy/breezy.js - FIXED VERSION
+//📨 Received port message
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { BreezyFormHandler } from "./breezy-form-handler.js";
 import { BreezyFileHandler } from "./breezy-file-handler.js";
@@ -9,7 +10,6 @@ import {
   UserService,
 } from "../../services/index.js";
 
-//SUCCESS
 // Custom error types for Breezy
 class ApplicationError extends Error {
   constructor(message, details) {
@@ -41,9 +41,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
     this.fileHandler = null;
     this.formHandler = null;
-
-    // Add flags to prevent duplicate starts
-    this.searchProcessStarted = false;
   }
 
   // ========================================
@@ -228,6 +225,10 @@ export default class BreezyPlatform extends BasePlatformAutomation {
           // Just acknowledge keepalive
           break;
 
+        case "SUCCESS":
+          this.handleSuccessMessage(data);
+          break;
+
         default:
           this.log(`❓ Unhandled message type: ${type}`);
       }
@@ -288,8 +289,36 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   // BREEZY-SPECIFIC MESSAGE HANDLING
   // ========================================
 
+  // ✅ FIX: Handle SUCCESS messages from background script
+  handleSuccessMessage(data) {
+    console.log("📊 Processing SUCCESS message:", data);
+
+    // Determine message type based on data content
+    if (data && data.submittedLinks !== undefined) {
+      // This is search task data (has submittedLinks array)
+      this.handleSearchTaskData(data);
+    } else if (data && data.profile !== undefined) {
+      // This is application task data (has profile object)
+      this.handleApplicationTaskData(data);
+    } else if (!data || Object.keys(data).length === 0) {
+      // Empty response - automation session not ready yet
+      console.warn("⚠️ Received empty SUCCESS response from background script");
+      this.statusOverlay.addWarning("Automation session not ready, waiting...");
+
+      // Don't retry immediately, just wait for the next attempt
+      setTimeout(() => {
+        if (window.location.href.includes("google.com/search")) {
+          this.statusOverlay.addInfo("Retrying search initialization...");
+          this.startSearchProcess();
+        }
+      }, 3000);
+    } else {
+      // Generic success acknowledgment
+      this.statusOverlay.addInfo("Background operation completed successfully");
+    }
+  }
+
   handlePlatformSpecificMessage(type, data) {
-    console.log("handlePlatformSpecificMessage", type, data)
     switch (type) {
       case "SEARCH_TASK_DATA":
         this.handleSearchTaskData(data);
@@ -311,25 +340,19 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.handleSuccessMessage(data);
         break;
 
-      case "APPLICATION_STATUS_RESPONSE":
-        this.handleApplicationStatusResponse(data);
-        break;
-
-      case "JOB_TAB_STATUS":
-        this.handleJobTabStatus(data);
-        break;
-
       default:
         super.handlePlatformSpecificMessage(type, data);
     }
   }
 
+  // ✅ FIX: Simplified handleSearchTaskData without retry logic
   handleSearchTaskData(data) {
     try {
       this.log("📊 Processing Breezy search task data:", data);
 
       if (!data) {
         this.log("⚠️ No search task data provided");
+        this.statusOverlay.addWarning("No search task data available");
         return;
       }
 
@@ -364,74 +387,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     }
   }
 
-  handleSuccessMessage(data) {
-    if (data && data.submittedLinks !== undefined) {
-      // This is search task data
-      this.processSearchTaskData(data);
-    } else if (data && data.profile !== undefined && !this.userProfile) {
-      // This is application task data
-      this.processSendCvTaskData(data);
-    }
-  }
-
-  processSearchTaskData(data) {
-    try {
-      this.log("📊 Processing Breezy search task data:", data);
-
-      if (!data) {
-        this.log("⚠️ No search task data provided");
-        return;
-      }
-
-      this.searchData = {
-        tabId: data.tabId,
-        limit: data.limit || 10,
-        current: data.current || 0,
-        domain: data.domain || this.getPlatformDomains(),
-        submittedLinks: data.submittedLinks
-          ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
-          : [],
-        searchLinkPattern: data.searchLinkPattern
-          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
-          : this.getSearchLinkPattern(),
-      };
-
-      this.log("✅ Breezy search data initialized:", this.searchData);
-      this.statusOverlay.addSuccess("Search initialization complete");
-
-      // Start the search process after initialization
-      setTimeout(() => this.searchNext(), 1000);
-    } catch (error) {
-      this.log("❌ Error processing search task data:", error);
-      this.statusOverlay.addError(
-        "Error processing search task data: " + error.message
-      );
-    }
-  }
-
-  processSendCvTaskData(data) {
-    try {
-      console.log("📊 Processing send CV task data:", {
-        hasData: !!data,
-        hasProfile: !!data?.profile,
-      });
-
-      if (data?.profile && !this.userProfile) {
-        this.userProfile = data.profile;
-        console.log("👤 User profile set from background response");
-      }
-
-      // Update form handler
-      if (this.formHandler && this.userProfile) {
-        this.formHandler.userData = this.userProfile;
-      }
-
-      this.statusOverlay.addSuccess("Apply initialization complete");
-    } catch (error) {
-      console.error("❌ Error processing send CV task data:", error);
-      this.statusOverlay.addError("Error processing CV data: " + error.message);
-    }
-  }
   handleApplicationTaskData(data) {
     try {
       this.log("📊 Processing Breezy application task data:", data);
@@ -511,24 +466,20 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   async startSearchProcess() {
     try {
-      // Prevent duplicate search process starts
-      if (this.searchProcessStarted) {
-        this.log("⚠️ Search process already started, ignoring duplicate");
-        return;
-      }
-
-      this.searchProcessStarted = true;
       this.statusOverlay.addInfo("Starting job search process");
       this.statusOverlay.updateStatus("searching");
+
+      // ✅ FIX: Add a small delay to ensure automation session is ready
+      await this.wait(2000);
 
       // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
-      this.searchProcessStarted = false; // Reset on error
       this.reportError(error, { phase: "search" });
     }
   }
 
+  // ✅ FIX: Simplified fetchSearchTaskData without timeout retry
   async fetchSearchTaskData() {
     this.log("📡 Fetching Breezy search task data from background");
     this.statusOverlay.addInfo("Fetching search task data...");
@@ -729,7 +680,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       }
 
       // Handle file uploads (resume)
-      await this.fileHandler.handleResumeUpload(profile, form);
+      await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
       // Fill out form fields using AI-enhanced BreezyFormHandler
       await this.formHandler.fillFormWithProfile(form, profile);
@@ -841,184 +792,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   // ========================================
 
   cleanup() {
-    // Base class handles most cleanup
-    super.cleanup();
-
-    // Breezy-specific cleanup if needed
-    this.log("🧹 Breezy-specific cleanup completed");
-  }
-
-  // NEW ADDED METHODS_________
-
-  async handleGetSearchTask(port, data) {
-    const tabId = port.sender?.tab?.id;
-    const windowId = port.sender?.tab?.windowId;
-
-    console.log(
-      `🔍 GET_SEARCH_TASK request from Breezy tab ${tabId}, window ${windowId}`
-    );
-
-    let sessionData = null;
-    let automation = null;
-
-    // Find automation by window ID
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
-      if (auto.windowId === windowId) {
-        automation = auto;
-        console.log(`✅ Found Breezy automation session: ${sessionId}`);
-        break;
-      }
-    }
-
-    if (automation) {
-      const platformState = automation.platformState;
-
-      // Add safety check for searchLinkPattern
-      let searchLinkPatternString = "";
-      try {
-        if (platformState.searchData.searchLinkPattern) {
-          searchLinkPatternString =
-            platformState.searchData.searchLinkPattern.toString();
-        } else {
-          console.warn("⚠️ searchLinkPattern is null, using empty string");
-          searchLinkPatternString = "";
-        }
-      } catch (error) {
-        console.error(
-          "❌ Error converting searchLinkPattern to string:",
-          error
-        );
-        searchLinkPatternString = "";
-      }
-
-      sessionData = {
-        tabId: tabId,
-        limit: platformState.searchData.limit,
-        current: platformState.searchData.current,
-        domain: platformState.searchData.domain,
-        submittedLinks: platformState.submittedLinks || [],
-        searchLinkPattern: searchLinkPatternString,
-      };
-
-      // Update search tab ID
-      platformState.searchTabId = tabId;
-      console.log(`📊 Breezy session data prepared:`, sessionData);
-    } else {
-      console.warn(`⚠️ No Breezy automation found for window ${windowId}`);
-      console.log(
-        `Active automations:`,
-        Array.from(this.messageHandler.activeAutomations.keys())
-      );
-    }
-
-    // Send response
-    const sent = this.safePortSend(port, {
-      type: "SUCCESS",
-      data: sessionData || {},
-    });
-
-    if (!sent) {
-      console.error(
-        `❌ Failed to send Breezy search task data to port ${port.name}`
-      );
-    } else {
-      console.log(
-        `✅ Breezy search task data sent successfully to tab ${tabId}`
-      );
-    }
-  }
-
-  handleSuccessMessage(data) {
-    console.log("📊 Processing SUCCESS message:", data);
-
-    if (data && data.submittedLinks !== undefined) {
-      // This is search task data
-      this.processSearchTaskData(data);
-    } else if (data && data.profile !== undefined && !this.userProfile) {
-      // This is application task data
-      this.processSendCvTaskData(data);
-    } else if (!data || Object.keys(data).length === 0) {
-      // Handle empty response - automation session not found
-      console.warn("⚠️ Received empty response from background script");
-      this.statusOverlay.addWarning(
-        "Automation session not ready, retrying..."
-      );
-
-      // Retry after a delay
-      setTimeout(() => {
-        this.fetchSearchTaskData();
-      }, 2000);
-    }
-  }
-
-  async fetchSearchTaskData() {
-    this.log("📡 Fetching Breezy search task data from background");
-    this.statusOverlay.addInfo("Fetching search task data...");
-
-    const success = this.safeSendPortMessage({ type: "GET_SEARCH_TASK" });
-    if (!success) {
-      throw new Error("Failed to request search task data");
-    }
-
-    // Add timeout to prevent infinite waiting
-    this.searchTaskTimeout = setTimeout(() => {
-      console.warn("⚠️ Search task data request timed out, retrying...");
-      this.statusOverlay.addWarning("Request timed out, retrying...");
-      this.fetchSearchTaskData();
-    }, 10000); // 10 second timeout
-  }
-
-  processSearchTaskData(data) {
-    try {
-      // Clear timeout if it exists
-      if (this.searchTaskTimeout) {
-        clearTimeout(this.searchTaskTimeout);
-        this.searchTaskTimeout = null;
-      }
-
-      this.log("📊 Processing Breezy search task data:", data);
-
-      if (!data) {
-        this.log("⚠️ No search task data provided");
-        return;
-      }
-
-      this.searchData = {
-        tabId: data.tabId,
-        limit: data.limit || 10,
-        current: data.current || 0,
-        domain: data.domain || this.getPlatformDomains(),
-        submittedLinks: data.submittedLinks
-          ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
-          : [],
-        searchLinkPattern: data.searchLinkPattern
-          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
-          : this.getSearchLinkPattern(),
-      };
-
-      this.log("✅ Breezy search data initialized:", this.searchData);
-      this.statusOverlay.addSuccess("Search initialization complete");
-
-      // Start the search process after initialization
-      setTimeout(() => this.searchNext(), 1000);
-    } catch (error) {
-      this.log("❌ Error processing search task data:", error);
-      this.statusOverlay.addError(
-        "Error processing search task data: " + error.message
-      );
-    }
-  }
-
-  cleanup() {
-    // Clear search task timeout
-    if (this.searchTaskTimeout) {
-      clearTimeout(this.searchTaskTimeout);
-      this.searchTaskTimeout = null;
-    }
-
     // Base class handles most cleanup
     super.cleanup();
 

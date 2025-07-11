@@ -1,7 +1,8 @@
-// shared/base/base-platform-automation.js
+// shared/base/base-platform-automation.js - FIXED VERSION
+
 import BasePlatform from "../../platforms/base-platform.js";
 import { StatusOverlay } from "../../services/index.js";
-//SEARCH_TASK_DONE
+
 export default class BasePlatformAutomation extends BasePlatform {
   constructor(config) {
     super(config);
@@ -283,7 +284,7 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Common port message handling with platform-specific delegation
+   * ✅ FIXED: Common port message handling with platform-specific delegation
    */
   handlePortMessage(message) {
     try {
@@ -295,7 +296,7 @@ export default class BasePlatformAutomation extends BasePlatform {
         return;
       }
 
-      // Common message types
+      // Common message types handled by base class
       switch (type) {
         case "SEARCH_NEXT":
           this.handleSearchNext(data);
@@ -310,14 +311,16 @@ export default class BasePlatformAutomation extends BasePlatform {
           break;
 
         case "KEEPALIVE_RESPONSE":
+          // Just acknowledge keepalive
           break;
 
-        case "SUCCESS":
-          this.handleSuccessMessage(data);
-          break;
+        // ✅ REMOVED: SUCCESS case that was causing the issue
+        // case "SUCCESS":
+        //   this.handleSuccessMessage(data);  // This method doesn't exist in base class
+        //   break;
 
         default:
-          // Delegate to platform-specific handler
+          // ✅ FIX: All other messages (including SUCCESS) go to platform-specific handler
           this.handlePlatformSpecificMessage(type, data);
       }
     } catch (error) {
@@ -652,67 +655,36 @@ export default class BasePlatformAutomation extends BasePlatform {
   /**
    * Handle case when no unprocessed links found
    */
-    async handleNoUnprocessedLinks() {
+  async handleNoUnprocessedLinks() {
+    if (this.applicationState.isApplicationInProgress) {
+      this.log("Application became in progress, aborting navigation");
+      return;
+    }
+
+    this.statusOverlay.addInfo(
+      "No new job links found, trying to load more..."
+    );
+    const loadMoreBtn = this.findLoadMoreElement();
+
+    if (loadMoreBtn) {
       if (this.applicationState.isApplicationInProgress) {
         this.log("Application became in progress, aborting navigation");
         return;
       }
 
-      this.statusOverlay.addInfo(
-        "No new job links found, trying to load more..."
-      );
-      const loadMoreBtn = this.findLoadMoreElement();
+      this.statusOverlay.addInfo('Clicking "More results" button');
+      loadMoreBtn.click();
 
-      if (loadMoreBtn) {
-        if (this.applicationState.isApplicationInProgress) {
-          this.log("Application became in progress, aborting navigation");
-          return;
+      setTimeout(() => {
+        if (!this.applicationState.isApplicationInProgress) {
+          this.searchNext();
         }
-
-        this.statusOverlay.addInfo('Clicking "More results" button');
-        loadMoreBtn.click();
-
-        setTimeout(() => {
-          if (!this.applicationState.isApplicationInProgress) {
-            this.searchNext();
-          }
-        }, 3000);
-      } else {
-        this.statusOverlay.addSuccess("All jobs processed, search completed!");
-        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
-      }
+      }, 3000);
+    } else {
+      this.statusOverlay.addSuccess("All jobs processed, search completed!");
+      this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
     }
-
-//   async handleNoUnprocessedLinks() {
-//     if (this.applicationState.isApplicationInProgress) {
-//       this.log("Application became in progress, aborting navigation");
-//       return;
-//     }
-
-//     this.statusOverlay.addInfo(
-//       "No new job links found, trying to load more..."
-//     );
-//     const loadMoreBtn = this.findLoadMoreElement();
-
-//     if (loadMoreBtn) {
-//       if (this.applicationState.isApplicationInProgress) {
-//         this.log("Application became in progress, aborting navigation");
-//         return;
-//       }
-
-//       this.statusOverlay.addInfo('Clicking "More results" button');
-//       loadMoreBtn.click();
-
-//       setTimeout(() => {
-//         if (!this.applicationState.isApplicationInProgress) {
-//           this.searchNext();
-//         }
-//       }, 3000);
-//     } else {
-//       this.statusOverlay.addSuccess("All jobs processed, search completed!");
-//       this.safeSendPortMessage({ type: "SEARCH_TASK_DONE" });
-//     }
-//   }
+  }
 
   /**
    * Reset application state on error

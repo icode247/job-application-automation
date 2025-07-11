@@ -27,6 +27,7 @@ class ContentScriptManager {
       );
 
       const isAutomationWindow = await this.checkIfAutomationWindow();
+      console.log(isAutomationWindow)
 
       if (isAutomationWindow) {
         this.automationActive = true;
@@ -80,6 +81,7 @@ class ContentScriptManager {
 
   async checkIfAutomationWindow() {
     // Method 1: Check window flags set by background script
+    console.log(window.isAutomationWindow, window.automationSessionId)
     if (window.isAutomationWindow && window.automationSessionId) {
       console.log("🔍 Automation window detected via window flags");
       return true;
@@ -89,7 +91,7 @@ class ContentScriptManager {
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
-
+    console.log(sessionId, platform, userId)
     if (sessionId && platform) {
       console.log("🔍 Automation window detected via sessionStorage");
       window.automationSessionId = sessionId;
@@ -106,6 +108,7 @@ class ContentScriptManager {
         tabId: await this.getTabId(),
       });
 
+      console.log(response)
       if (response && response.isAutomationWindow) {
         console.log("🔍 Automation window detected via background script");
         window.isAutomationWindow = true;
