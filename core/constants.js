@@ -7,6 +7,7 @@ export const PLATFORMS = {
   WORKDAY: "workday",
   LEVER: "lever",
   BREEZY: "breezy",
+  ASHBY: "ashby",
 };
 
 export const AUTOMATION_STATUS = {

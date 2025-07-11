@@ -79,7 +79,10 @@
         "shared/base/base-platform.js",
         "platforms/breezy/breezy.js",
         "platforms/breezy/breezy-form-handler.js",
-        "platforms/breezy/breezy-file-handler.js"
+        "platforms/breezy/breezy-file-handler.js",
+        "platforms/ashby/ashby.js",
+        "platforms/ashby/ashby-form-handler.js",
+        "platforms/ashby/ashby-file-handler.js"
       ],
       "matches": [
         "<all_urls>"

@@ -1,5 +1,5 @@
 // shared/utilities/url-utils.js
-//handleNoUnprocessedLinks
+//getPlatformDomains
 export class UrlUtils {
   /**
    * Normalize URL for consistent comparison
@@ -47,6 +47,12 @@ export class UrlUtils {
             ? breezyMatches[1] || breezyMatches[2]
             : `job-${Date.now()}`;
 
+        case "ashby":
+          // Ashby format: jobs.ashbyhq.com/company/job-id or company.ashbyhq.com/job-id
+          const ashbyMatches = url.match(/\/([a-f0-9-]{8,})\/?$/);
+          return ashbyMatches && ashbyMatches[1]
+            ? ashbyMatches[1]
+            : `job-${Date.now()}`;
         default:
           return `job-${Date.now()}`;
       }
@@ -100,6 +106,26 @@ export class UrlUtils {
             );
           }
           break;
+
+        case "ashby":
+          // Pattern: https://jobs.ashbyhq.com/[COMPANY]/... or https://[COMPANY].ashbyhq.com/...
+          let ashbyMatches = url.match(/\/\/jobs\.ashbyhq\.com\/([^\/]+)/);
+          if (ashbyMatches && ashbyMatches[1]) {
+            return (
+              ashbyMatches[1].charAt(0).toUpperCase() +
+              ashbyMatches[1].slice(1).replace(/-/g, " ")
+            );
+          }
+
+          // Try company.ashbyhq.com format
+          ashbyMatches = url.match(/\/\/(.+?)\.ashbyhq\.com\//);
+          if (ashbyMatches && ashbyMatches[1] && ashbyMatches[1] !== "jobs") {
+            return (
+              ashbyMatches[1].charAt(0).toUpperCase() +
+              ashbyMatches[1].slice(1).replace(/-/g, " ")
+            );
+          }
+          break;
       }
 
       return null;
@@ -121,6 +147,10 @@ export class UrlUtils {
         return /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)/.test(
           url
         );
+      case "ashby":
+        return /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)/.test(
+          url
+        );
       default:
         return false;
     }
@@ -138,6 +168,9 @@ export class UrlUtils {
 
       case "breezy":
         return /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/;
+
+      case "ashby":
+        return /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)\/?.*$/;
       default:
         return null;
     }
@@ -154,6 +187,8 @@ export class UrlUtils {
         return ["recruitee.com"];
       case "breezy":
         return ["breezy.hr", "app.breezy.hr"];
+      case "ashby":
+        return ["ashbyhq.com", "jobs.ashbyhq.com"];
       default:
         return [];
     }

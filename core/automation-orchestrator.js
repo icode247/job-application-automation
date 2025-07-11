@@ -1,4 +1,5 @@
 // core/automation-orchestrator.js
+//buildStartingUrl
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
 
@@ -254,9 +255,29 @@ export default class AutomationOrchestrator {
         return this.buildLeverUrl(preferences);
       case "breezy":
         return this.buildBreezyUrl(preferences);
+      case "ashby":
+        return this.buildAshbyUrl(preferences);
       default:
         return this.buildGenericSearchUrl(preferences);
     }
+  }
+
+  buildAshbyUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ")
+      : "software engineer";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` "${preferences.location[0]}"`
+        : "";
+    const remoteKeyword =
+      preferences.remoteOnly || preferences.workMode?.includes("Remote")
+        ? " remote"
+        : "";
+
+    return `https://www.google.com/search?q=site:ashbyhq.com+"${encodeURIComponent(
+      keywords
+    )}"${location}${remoteKeyword}`;
   }
 
   buildBreezyUrl(preferences) {

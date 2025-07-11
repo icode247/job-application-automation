@@ -27,7 +27,7 @@ class ContentScriptManager {
       );
 
       const isAutomationWindow = await this.checkIfAutomationWindow();
-      console.log(isAutomationWindow)
+      console.log(isAutomationWindow);
 
       if (isAutomationWindow) {
         this.automationActive = true;
@@ -81,7 +81,7 @@ class ContentScriptManager {
 
   async checkIfAutomationWindow() {
     // Method 1: Check window flags set by background script
-    console.log(window.isAutomationWindow, window.automationSessionId)
+    console.log(window.isAutomationWindow, window.automationSessionId);
     if (window.isAutomationWindow && window.automationSessionId) {
       console.log("🔍 Automation window detected via window flags");
       return true;
@@ -91,7 +91,7 @@ class ContentScriptManager {
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
-    console.log(sessionId, platform, userId)
+    console.log(sessionId, platform, userId);
     if (sessionId && platform) {
       console.log("🔍 Automation window detected via sessionStorage");
       window.automationSessionId = sessionId;
@@ -108,7 +108,7 @@ class ContentScriptManager {
         tabId: await this.getTabId(),
       });
 
-      console.log(response)
+      console.log(response);
       if (response && response.isAutomationWindow) {
         console.log("🔍 Automation window detected via background script");
         window.isAutomationWindow = true;
@@ -364,6 +364,7 @@ class ContentScriptManager {
     if (url.includes("lever.co")) return "lever";
     if (url.includes("greenhouse.io")) return "greenhouse";
     if (url.includes("workable.com")) return "workable";
+    if (url.includes("ashbyhq.com")) return "ashby";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
@@ -383,6 +384,9 @@ class ContentScriptManager {
         return "lever";
       if (url.includes("site:workable.com") || url.includes("workable.com"))
         return "workable";
+
+      if (url.includes("site:ashbyhq.com") || url.includes("ashbyhq.com"))
+        return "ashby";
     }
 
     return "unknown";
@@ -512,6 +516,12 @@ class ContentScriptManager {
             "../platforms/breezy/breezy.js"
           );
           return BreezyPlatform;
+
+        case "ashby":
+          const { default: AshbyPlatform } = await import(
+            "../platforms/ashby/ashby.js"
+          );
+          return AshbyPlatform;
         default:
           console.warn(`Platform ${platform} not supported`);
           return null;

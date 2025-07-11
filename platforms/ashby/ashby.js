@@ -1,8 +1,7 @@
-// platforms/breezy/breezy.js - FIXED VERSION
-//apply
+// platforms/ashby/ashby.js
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
-import { BreezyFormHandler } from "./breezy-form-handler.js";
-import { BreezyFileHandler } from "./breezy-file-handler.js";
+import { AshbyFormHandler } from "./ashby-form-handler.js";
+import { AshbyFileHandler } from "./ashby-file-handler.js";
 import { UrlUtils, DomUtils } from "../../shared/utilities/index.js";
 import {
   AIService,
@@ -10,7 +9,7 @@ import {
   UserService,
 } from "../../services/index.js";
 
-// Custom error types for Breezy
+// Custom error types for Ashby
 class ApplicationError extends Error {
   constructor(message, details) {
     super(message);
@@ -26,13 +25,13 @@ class SkipApplicationError extends ApplicationError {
   }
 }
 
-export default class BreezyPlatform extends BasePlatformAutomation {
+export default class AshbyPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
-    this.platform = "breezy";
-    this.baseUrl = "https://breezy.hr";
+    this.platform = "ashby";
+    this.baseUrl = "https://ashbyhq.com";
 
-    // Initialize Breezy-specific services
+    // Initialize Ashby-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
       userId: this.userId,
@@ -41,6 +40,9 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
     this.fileHandler = null;
     this.formHandler = null;
+
+    // Add flags to prevent duplicate starts
+    this.searchProcessStarted = false;
   }
 
   // ========================================
@@ -48,15 +50,18 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   // ========================================
 
   getPlatformDomains() {
-    return ["breezy.hr", "app.breezy.hr"];
+    return ["ashbyhq.com", "jobs.ashbyhq.com"];
   }
 
   getSearchLinkPattern() {
-    return /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/;
+    return /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)\/?.*$/;
   }
 
   isValidJobPage(url) {
-    return url.includes("breezy.hr/p/") || url.includes("app.breezy.hr/jobs/");
+    return (
+      url.includes("ashbyhq.com") &&
+      (url.includes("/jobs/") || url.match(/\/[a-f0-9-]{8,}/))
+    );
   }
 
   async setSessionContext(sessionContext) {
@@ -116,7 +121,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Breezy session context set successfully", {
+      console.log("✅ Ashby session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -124,7 +129,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         profileEmail: this.userProfile?.email,
       });
     } catch (error) {
-      console.error("❌ Error setting Breezy session context:", error);
+      console.error("❌ Error setting Ashby session context:", error);
       this.statusOverlay?.addError(
         "❌ Error setting session context: " + error.message
       );
@@ -140,7 +145,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       }
 
       this.isRunning = true;
-      this.log("▶️ Starting Breezy automation");
+      this.log("▶️ Starting Ashby automation");
 
       // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
@@ -263,60 +268,31 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   // ========================================
-  // BREEZY-SPECIFIC INITIALIZATION
+  // ASHBY-SPECIFIC INITIALIZATION
   // ========================================
 
   async initialize() {
     await super.initialize(); // Handles all common initialization
 
-    // Initialize Breezy-specific handlers
-    this.fileHandler = new BreezyFileHandler({
+    // Initialize Ashby-specific handlers
+    this.fileHandler = new AshbyFileHandler({
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
     });
 
-    this.formHandler = new BreezyFormHandler({
+    this.formHandler = new AshbyFormHandler({
       logger: (message) => this.statusOverlay.addInfo(message),
       host: this.getApiHost(),
       userData: this.userProfile || {},
       jobDescription: "",
     });
 
-    this.statusOverlay.addSuccess("Breezy-specific components initialized");
+    this.statusOverlay.addSuccess("Ashby-specific components initialized");
   }
 
   // ========================================
-  // BREEZY-SPECIFIC MESSAGE HANDLING
+  // ASHBY-SPECIFIC MESSAGE HANDLING
   // ========================================
-
-  // ✅ FIX: Handle SUCCESS messages from background script
-  handleSuccessMessage(data) {
-    console.log("📊 Processing SUCCESS message:", data);
-
-    // Determine message type based on data content
-    if (data && data.submittedLinks !== undefined) {
-      // This is search task data (has submittedLinks array)
-      this.handleSearchTaskData(data);
-    } else if (data && data.profile !== undefined) {
-      // This is application task data (has profile object)
-      this.handleApplicationTaskData(data);
-    } else if (!data || Object.keys(data).length === 0) {
-      // Empty response - automation session not ready yet
-      console.warn("⚠️ Received empty SUCCESS response from background script");
-      this.statusOverlay.addWarning("Automation session not ready, waiting...");
-
-      // Don't retry immediately, just wait for the next attempt
-      setTimeout(() => {
-        if (window.location.href.includes("google.com/search")) {
-          this.statusOverlay.addInfo("Retrying search initialization...");
-          this.startSearchProcess();
-        }
-      }, 3000);
-    } else {
-      // Generic success acknowledgment
-      this.statusOverlay.addInfo("Background operation completed successfully");
-    }
-  }
 
   handlePlatformSpecificMessage(type, data) {
     switch (type) {
@@ -340,19 +316,25 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.handleSuccessMessage(data);
         break;
 
+      case "APPLICATION_STATUS_RESPONSE":
+        this.handleApplicationStatusResponse(data);
+        break;
+
+      case "JOB_TAB_STATUS":
+        this.handleJobTabStatus(data);
+        break;
+
       default:
         super.handlePlatformSpecificMessage(type, data);
     }
   }
 
-  // ✅ FIX: Simplified handleSearchTaskData without retry logic
   handleSearchTaskData(data) {
     try {
-      this.log("📊 Processing Breezy search task data:", data);
+      this.log("📊 Processing Ashby search task data:", data);
 
       if (!data) {
         this.log("⚠️ No search task data provided");
-        this.statusOverlay.addWarning("No search task data available");
         return;
       }
 
@@ -374,7 +356,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.log("👤 User profile loaded from search task data");
       }
 
-      this.log("✅ Breezy search data initialized:", this.searchData);
+      this.log("✅ Ashby search data initialized:", this.searchData);
       this.statusOverlay.addSuccess("Search initialization complete");
 
       // Start search process
@@ -387,9 +369,78 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     }
   }
 
+  handleSuccessMessage(data) {
+    if (data && data.submittedLinks !== undefined) {
+      // This is search task data
+      this.processSearchTaskData(data);
+    } else if (data && data.profile !== undefined && !this.userProfile) {
+      // This is application task data
+      this.processSendCvTaskData(data);
+    }
+  }
+
+  processSearchTaskData(data) {
+    try {
+      this.log("📊 Processing Ashby search task data:", data);
+
+      if (!data) {
+        this.log("⚠️ No search task data provided");
+        return;
+      }
+
+      this.searchData = {
+        tabId: data.tabId,
+        limit: data.limit || 10,
+        current: data.current || 0,
+        domain: data.domain || this.getPlatformDomains(),
+        submittedLinks: data.submittedLinks
+          ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
+          : [],
+        searchLinkPattern: data.searchLinkPattern
+          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
+          : this.getSearchLinkPattern(),
+      };
+
+      this.log("✅ Ashby search data initialized:", this.searchData);
+      this.statusOverlay.addSuccess("Search initialization complete");
+
+      // Start the search process after initialization
+      setTimeout(() => this.searchNext(), 1000);
+    } catch (error) {
+      this.log("❌ Error processing search task data:", error);
+      this.statusOverlay.addError(
+        "Error processing search task data: " + error.message
+      );
+    }
+  }
+
+  processSendCvTaskData(data) {
+    try {
+      console.log("📊 Processing send CV task data:", {
+        hasData: !!data,
+        hasProfile: !!data?.profile,
+      });
+
+      if (data?.profile && !this.userProfile) {
+        this.userProfile = data.profile;
+        console.log("👤 User profile set from background response");
+      }
+
+      // Update form handler
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      this.statusOverlay.addSuccess("Apply initialization complete");
+    } catch (error) {
+      console.error("❌ Error processing send CV task data:", error);
+      this.statusOverlay.addError("Error processing CV data: " + error.message);
+    }
+  }
+
   handleApplicationTaskData(data) {
     try {
-      this.log("📊 Processing Breezy application task data:", data);
+      this.log("📊 Processing Ashby application task data:", data);
 
       if (data?.profile && !this.userProfile) {
         this.userProfile = data.profile;
@@ -414,14 +465,14 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   handleApplicationStarting(data) {
-    this.log("🎯 Breezy application starting:", data);
+    this.log("🎯 Ashby application starting:", data);
     this.applicationState.isApplicationInProgress = true;
     this.applicationState.applicationStartTime = Date.now();
     this.statusOverlay.addInfo("Application starting...");
   }
 
   handleApplicationStatus(data) {
-    this.log("📊 Breezy application status:", data);
+    this.log("📊 Ashby application status:", data);
 
     if (data.inProgress && !this.applicationState.isApplicationInProgress) {
       this.applicationState.isApplicationInProgress = true;
@@ -439,7 +490,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   // ========================================
-  // BREEZY-SPECIFIC PAGE TYPE DETECTION
+  // ASHBY-SPECIFIC PAGE TYPE DETECTION
   // ========================================
 
   async detectPageTypeAndStart() {
@@ -451,8 +502,8 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
-      this.log("📋 Breezy job page detected");
-      this.statusOverlay.addInfo("Breezy job page detected");
+      this.log("📋 Ashby job page detected");
+      this.statusOverlay.addInfo("Ashby job page detected");
       await this.startApplicationProcess();
     } else {
       this.log("❓ Unknown page type, waiting for navigation");
@@ -461,27 +512,31 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   // ========================================
-  // BREEZY-SPECIFIC SEARCH LOGIC
+  // ASHBY-SPECIFIC SEARCH LOGIC
   // ========================================
 
   async startSearchProcess() {
     try {
+      // Prevent duplicate search process starts
+      if (this.searchProcessStarted) {
+        this.log("⚠️ Search process already started, ignoring duplicate");
+        return;
+      }
+
+      this.searchProcessStarted = true;
       this.statusOverlay.addInfo("Starting job search process");
       this.statusOverlay.updateStatus("searching");
-
-      // ✅ FIX: Add a small delay to ensure automation session is ready
-      await this.wait(2000);
 
       // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
+      this.searchProcessStarted = false; // Reset on error
       this.reportError(error, { phase: "search" });
     }
   }
 
-  // ✅ FIX: Simplified fetchSearchTaskData without timeout retry
   async fetchSearchTaskData() {
-    this.log("📡 Fetching Breezy search task data from background");
+    this.log("📡 Fetching Ashby search task data from background");
     this.statusOverlay.addInfo("Fetching search task data...");
 
     const success = this.safeSendPortMessage({ type: "GET_SEARCH_TASK" });
@@ -491,12 +546,12 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   // ========================================
-  // BREEZY-SPECIFIC APPLICATION LOGIC
+  // ASHBY-SPECIFIC APPLICATION LOGIC
   // ========================================
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting Breezy application process");
+      console.log("📝 Starting Ashby application process");
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
@@ -513,7 +568,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         console.error("❌ Failed to obtain user profile");
       } else {
         this.statusOverlay.addSuccess("User profile loaded successfully");
-        console.log("✅ User profile available for Breezy");
+        console.log("✅ User profile available for Ashby");
       }
 
       // Wait for page to fully load
@@ -545,7 +600,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   async fetchApplicationTaskData() {
-    this.log("📡 Fetching Breezy application task data from background");
+    this.log("📡 Fetching Ashby application task data from background");
     this.statusOverlay.addInfo("Fetching application data...");
 
     const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
@@ -555,12 +610,12 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   // ========================================
-  // BREEZY-SPECIFIC FORM HANDLING
+  // ASHBY-SPECIFIC FORM HANDLING
   // ========================================
 
   async apply() {
     try {
-      this.statusOverlay.addInfo("Starting to apply for Breezy job");
+      this.statusOverlay.addInfo("Starting to apply for Ashby job");
 
       // Check if page is valid
       if (this.hasPageErrors()) {
@@ -569,39 +624,27 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         );
       }
 
-      // Extract job ID from URL (Breezy-specific)
-      const jobId = UrlUtils.extractJobId(window.location.href, "breezy");
-      console.log("Extracted Breezy job ID:", jobId);
+      // Extract job ID from URL (Ashby-specific)
+      const jobId = UrlUtils.extractJobId(window.location.href, "ashby");
+      console.log("Extracted Ashby job ID:", jobId);
 
       // Wait for page to fully load
       await this.wait(3000);
 
-      // ✅ FIX: Only look for apply button if NOT already on application page
-      const currentUrl = window.location.href;
-      const isAlreadyOnApplicationPage =
-        currentUrl.includes("/apply") &&
-        (currentUrl.includes("/p/") || currentUrl.includes("/jobs/"));
-
-      if (!isAlreadyOnApplicationPage) {
-        // Check if we're on a job details page or application form page
-        const applyButton = document.querySelector(
-          'button[data-ui="submit-application"], button.btn-primary, a.apply-button, button.apply-button, a.apply, a.button.apply, a[href*="/apply"]:not([href*="linkedin"])'
-        );
-        if (applyButton) {
-          this.statusOverlay.addInfo("Found apply button, clicking it");
-          applyButton.click();
-          await this.wait(3000);
-        }
-      } else {
-        this.statusOverlay.addInfo(
-          "Already on application page, proceeding to form filling"
-        );
+      // Check if we're on a job details page or application form page
+      const applyButton = document.querySelector(
+        'button[type="submit"], button.submit-button, .apply-button, [data-testid="apply-button"]'
+      );
+      if (applyButton) {
+        this.statusOverlay.addInfo("Found apply button, clicking it");
+        applyButton.click();
+        await this.wait(3000);
       }
 
       // Find application form
       const form = this.findApplicationForm();
       if (!form) {
-        throw new SkipApplicationError("Cannot find Breezy application form");
+        throw new SkipApplicationError("Cannot find Ashby application form");
       }
 
       // Extract job description
@@ -623,7 +666,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       if (error instanceof SkipApplicationError) {
         throw error;
       } else {
-        console.error("Error in Breezy apply:", error);
+        console.error("Error in Ashby apply:", error);
         throw new ApplicationError(
           "Error during application process: " + this.errorToString(error)
         );
@@ -634,20 +677,20 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   async handleSuccessfulApplication(jobId) {
     // Get job details from page
     const jobTitle =
-      DomUtils.extractText(["h1"]) ||
+      DomUtils.extractText(["h1", ".job-title", "[data-testid='job-title']"]) ||
       document.title.split(" - ")[0] ||
-      "Job on Breezy";
+      "Job on Ashby";
     const companyName =
-      UrlUtils.extractCompanyFromUrl(window.location.href, "breezy") ||
-      "Company on Breezy";
+      UrlUtils.extractCompanyFromUrl(window.location.href, "ashby") ||
+      "Company on Ashby";
     const location =
       DomUtils.extractText([
         ".job-location",
         ".location",
-        '[data-ui="location"]',
+        "[data-testid='location']",
       ]) || "Not specified";
 
-    // Send completion message using Breezy-specific message type
+    // Send completion message using Ashby-specific message type
     this.safeSendPortMessage({
       type: "SEND_CV_TASK_DONE",
       data: {
@@ -667,20 +710,20 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
 
-    console.log("Breezy application completed successfully");
+    console.log("Ashby application completed successfully");
     this.statusOverlay.addSuccess("Application completed successfully");
     this.statusOverlay.updateStatus("success");
   }
 
   async processApplicationForm(form, profile, jobDescription) {
     this.statusOverlay.addInfo(
-      "Found Breezy application form, beginning to fill out"
+      "Found Ashby application form, beginning to fill out"
     );
 
     try {
       // Initialize/update form handler
       if (!this.formHandler) {
-        this.formHandler = new BreezyFormHandler({
+        this.formHandler = new AshbyFormHandler({
           logger: (message) => this.statusOverlay.addInfo(message),
           host: this.getApiHost(),
           userData: profile,
@@ -694,7 +737,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       // Handle file uploads (resume)
       await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
-      // Fill out form fields using AI-enhanced BreezyFormHandler
+      // Fill out form fields using AI-enhanced AshbyFormHandler
       await this.formHandler.fillFormWithProfile(form, profile);
 
       // Handle required checkboxes
@@ -703,7 +746,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       // Submit the form
       return await this.formHandler.submitForm(form);
     } catch (error) {
-      console.error("Error processing Breezy application form:", error);
+      console.error("Error processing Ashby application form:", error);
       this.statusOverlay.addError(
         "Error processing form: " + this.errorToString(error)
       );
@@ -712,34 +755,34 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   // ========================================
-  // BREEZY-SPECIFIC UTILITY METHODS
+  // ASHBY-SPECIFIC UTILITY METHODS
   // ========================================
 
   findApplicationForm() {
-    // Breezy-specific form selectors
-    const breezySelectors = [
+    // Ashby-specific form selectors
+    const ashbySelectors = [
       "form.application-form",
       "form#application-form",
+      'form[data-testid="application-form"]',
       'form[action*="apply"]',
-      'form[action*="positions"]',
       ".application-form form",
-      "#application form",
+      "form[role='form']",
     ];
 
-    return DomUtils.findForm(breezySelectors);
+    return DomUtils.findForm(ashbySelectors);
   }
 
   extractJobDescription() {
-    const breezyDescriptionSelectors = [
+    const ashbyDescriptionSelectors = [
       ".job-description",
       ".description",
-      ".position-description",
-      "#job-description",
+      ".job-posting-description",
+      "[data-testid='job-description']",
       ".job-details",
-      ".position",
+      ".content",
     ];
 
-    let description = DomUtils.extractText(breezyDescriptionSelectors);
+    let description = DomUtils.extractText(ashbyDescriptionSelectors);
 
     if (!description) {
       const mainContent = document.querySelector(
@@ -753,7 +796,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     if (!description) {
       const jobTitle = document.title || "";
       const companyName =
-        UrlUtils.extractCompanyFromUrl(window.location.href, "breezy") || "";
+        UrlUtils.extractCompanyFromUrl(window.location.href, "ashby") || "";
       description = `Job: ${jobTitle} at ${companyName}`;
     }
 
@@ -765,7 +808,8 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       document.body.innerText.includes("Cannot GET") ||
       document.body.innerText.includes("404 Not Found") ||
       document.body.innerText.includes("Job is no longer available") ||
-      document.body.innerText.includes("Position Closed")
+      document.body.innerText.includes("Position Closed") ||
+      document.body.innerText.includes("This job posting has expired")
     );
   }
 
@@ -783,7 +827,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       await this.delay(1000);
     }
 
-    throw new Error("Timeout waiting for valid Breezy page");
+    throw new Error("Timeout waiting for valid Ashby page");
   }
 
   errorToString(e) {
@@ -793,21 +837,21 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     return String(e);
   }
 
-  // Override URL normalization for Breezy-specific needs
+  // Override URL normalization for Ashby-specific needs
   platformSpecificUrlNormalization(url) {
-    // Remove /apply suffix for Breezy URLs
+    // Remove /apply suffix for Ashby URLs
     return url.replace(/\/apply$/, "");
   }
 
   // ========================================
-  // CLEANUP - Inherited from base class with Breezy-specific additions
+  // CLEANUP - Inherited from base class with Ashby-specific additions
   // ========================================
 
   cleanup() {
     // Base class handles most cleanup
     super.cleanup();
 
-    // Breezy-specific cleanup if needed
-    this.log("🧹 Breezy-specific cleanup completed");
+    // Ashby-specific cleanup if needed
+    this.log("🧹 Ashby-specific cleanup completed");
   }
 }
