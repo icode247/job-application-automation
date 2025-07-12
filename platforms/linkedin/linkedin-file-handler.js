@@ -1,7 +1,7 @@
-// services/file-handler-service.js
-import { AI_BASE_URL, API_HOST_URL } from "./constants.js";
+// platforms/linkedin/linkedin-file-handler.js
+import { AI_BASE_URL, API_HOST_URL } from "../../services/constants.js";
 
-export default class FileHandlerService {
+export default class LinkedInFileHandler {
   constructor(config) {
     this.AI_BASE_URL = AI_BASE_URL;
     this.API_HOST_URL = API_HOST_URL;
@@ -20,7 +20,7 @@ export default class FileHandlerService {
       let fileUrls = this.getFileUrls(userDetails, fileType);
 
       if (Array.isArray(fileUrls) && Array.isArray(fileUrls[0])) {
-        fileUrls = fileUrls[0]; 
+        fileUrls = fileUrls[0];
       }
 
       if (!fileUrls || fileUrls.length === 0) {
@@ -89,7 +89,6 @@ export default class FileHandlerService {
           throw new Error(`Parse Resume Failed: ${parseResponse.status}`);
         }
 
-      
         const { text: parsedResumeText } = await parseResponse.json();
 
         // Step 2: Optimize Resume
@@ -147,7 +146,6 @@ export default class FileHandlerService {
 
         // The response is already the PDF content, not JSON
         const blob = await generateResponse.blob();
-        console.log("PDF successfully generated");
         const fileName = `${userDetails.name.toLowerCase()} resume.pdf`;
 
         const file = new File([blob], fileName, {
@@ -329,34 +327,97 @@ export default class FileHandlerService {
 
   async handleTailoredCoverLetter(fileInput, userDetails, jobDescription) {
     try {
+      // Show status message
+      if (this.statusManager) {
+        this.statusManager.show(
+          "Generating cover letter, Please wait while we create your personalized cover letter",
+          "info"
+        );
+      }
+
+      // Generate the cover letter PDF
       const response = await fetch(
-        `${this.apiHost}/api/generate-tailored-cover-letter`,
+        `${this.AI_BASE_URL}/generate-cover-letter-pdf`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            userId: userDetails.id,
+            fullName: userDetails.firstName,
+            skills: userDetails.skills,
+            education: userDetails.education,
             jobDescription: jobDescription,
-            userProfile: userDetails,
+            tone: "Professional",
+            fullPositions: userDetails.fullPositions,
           }),
         }
       );
 
       if (!response.ok) {
-        throw new Error("Failed to generate tailored cover letter");
+        throw new Error(
+          `Failed to generate tailored cover letter: ${response.status}`
+        );
       }
 
-      const data = await response.json();
-      return await this.uploadFileFromUrl(fileInput, data.coverLetterUrl);
+      // The response is the PDF blob directly
+      const blob = await response.blob();
+      const fileName = `${userDetails.firstName.toLowerCase()}_cover_letter.pdf`;
+
+      // Create File object from the generated PDF
+      const file = new File([blob], fileName, {
+        type: "application/pdf",
+        lastModified: Date.now(),
+      });
+
+      if (file.size === 0) {
+        throw new Error("Generated cover letter PDF is empty");
+      }
+
+      // Create DataTransfer to simulate file selection
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+
+      // Set files on input
+      fileInput.files = dataTransfer.files;
+
+      // Trigger events to notify the page that a file has been selected
+      await this.dispatchFileEvents(fileInput);
+
+      // Wait for upload to complete
+      await this.waitForUploadProcess(fileInput);
+
+      if (this.statusManager) {
+        this.statusManager.show(
+          "Cover letter generated and uploaded successfully",
+          "success"
+        );
+      }
+
+      console.log(
+        `Successfully generated and uploaded cover letter: ${fileName}`
+      );
+      return true;
     } catch (error) {
       console.error("Error generating tailored cover letter:", error);
-      // Fallback to regular cover letter
+
+      if (this.statusManager) {
+        this.statusManager.show(
+          "Failed to generate cover letter, using fallback",
+          "warning"
+        );
+      }
+
+      // Fallback to regular cover letter if available
       const coverLetterUrls = this.getFileUrls(userDetails, "coverLetter");
       if (coverLetterUrls.length > 0) {
         return await this.uploadFileFromUrl(fileInput, coverLetterUrls[0]);
       }
+
+      if (this.statusManager) {
+        this.statusManager.show("No cover letter available", "error");
+      }
+
       return false;
     }
   }

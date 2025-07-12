@@ -45,6 +45,7 @@
     {
       "resources": [
         "platforms/linkedin/linkedin.js",
+        "platforms/linkedin/linkedin-file-handler.js",
         "platforms/indeed/indeed.js",
         "platforms/recruitee/recruitee.js",
         "platforms/glassdoor/glassdoor.js",
@@ -58,7 +59,6 @@
         "services/application-tracker-service.js",
         "services/user-service.js",
         "services/status-notification-service.js",
-        "services/file-handler-service.js",
         "services/state-manager-service.js",
         "services/constants.js",
         "services/index.js",

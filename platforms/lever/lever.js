@@ -9,7 +9,6 @@ import {
   UserService,
 } from "../../services/index.js";
 
-//setSessionContext
 export default class LeverPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);

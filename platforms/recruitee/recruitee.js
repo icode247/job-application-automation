@@ -1,4 +1,4 @@
-// platforms/recruitee/recruitee.js - REFACTORED VERSION
+// platforms/recruitee/recruitee.js
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { RecruiteeFormHandler } from "./recruitee-form-handler.js";
 import { RecruiteeFileHandler } from "./recruitee-file-handler.js";
@@ -9,7 +9,6 @@ import {
   UserService,
 } from "../../services/index.js";
 
-//isValidJobPage
 // Custom error types for Recruitee
 class ApplicationError extends Error {
   constructor(message, details) {

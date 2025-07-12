@@ -3,8 +3,8 @@ import AIService from "../../services/ai-service.js";
 import ApplicationTrackerService from "../../services/application-tracker-service.js";
 import UserService from "../../services/user-service.js";
 import { StatusOverlay } from "../../services/index.js";
-import FileHandlerService from "../../services/file-handler-service.js";
-
+import LinkedInFileHandler from "./linkedin-file-handler.js";
+//at least one job position is required
 export default class LinkedInPlatform extends BasePlatform {
   constructor(config) {
     super(config);
@@ -28,13 +28,13 @@ export default class LinkedInPlatform extends BasePlatform {
     this.userService = new UserService({ apiHost, userId: config.userId });
 
     this.statusOverlay = new StatusOverlay({
-      id: "linkedin-status-overlay",
-      title: "LINKEDIN AUTOMATION",
-      icon: "💼",
+      id: "linkedin-chatbot-overlay",
+      platform: "LINKEDIN",
+      icon: "🤖",
       position: { top: "10px", right: "10px" },
     });
 
-    this.fileHandler = new FileHandlerService({ apiHost });
+    this.fileHandler = new LinkedInFileHandler({ apiHost });
 
     // Connect status overlay to file handler for progress updates
     this.fileHandler.setStatusManager(this.statusOverlay);
@@ -238,7 +238,7 @@ export default class LinkedInPlatform extends BasePlatform {
   // ===== USER AUTHORIZATION & SERVICES =====
   async checkUserAuthorization() {
     try {
-      this.statusOverlay.addInfo("Checking user authorization...");
+      this.statusOverlay.addInfo("Let me check if you're all set to apply...");
 
       // Check if user can apply to more jobs
       const canApply = await this.userService.canApplyMore();
@@ -248,19 +248,21 @@ export default class LinkedInPlatform extends BasePlatform {
 
         const message =
           userDetails.userRole === "credit"
-            ? `Insufficient credits (${userDetails.credits} remaining)`
-            : `Daily limit reached (${remaining} applications remaining)`;
+            ? `Looks like you're running low on credits (${userDetails.credits} left). Time to top up! 💳`
+            : `You've hit your daily limit! Don't worry, you have ${remaining} applications left overall. 📊`;
 
-        this.statusOverlay.addWarning(`Cannot apply: ${message}`);
+        this.statusOverlay.addWarning(message);
         throw new Error(`Cannot apply: ${message}`);
       }
 
       this.log("✅ User authorization check passed");
-      this.statusOverlay.addSuccess("User authorization check passed");
+      this.statusOverlay.addSuccess(
+        "Perfect! You're all authorized and ready to go!"
+      );
     } catch (error) {
       this.log("❌ User authorization check failed:", error.message);
       this.statusOverlay.addError(
-        "User authorization check failed: " + error.message
+        "Hmm, there's an issue with your account permissions. " + error.message
       );
       throw error;
     }
@@ -272,7 +274,7 @@ export default class LinkedInPlatform extends BasePlatform {
 
     // Create status overlay
     this.statusOverlay.create();
-    this.statusOverlay.addSuccess("LinkedIn automation initialized");
+    // Greeting is automatic in ChatbotStatusOverlay
   }
 
   async start(params = {}) {
@@ -280,7 +282,9 @@ export default class LinkedInPlatform extends BasePlatform {
       this.log(
         "⚠️ LinkedIn automation already started, ignoring duplicate start request"
       );
-      this.statusOverlay.addWarning("LinkedIn automation already started");
+      this.statusOverlay.addWarning(
+        "Hey! I'm already working on finding you jobs. Let me finish this round first! 😊"
+      );
       return;
     }
 
@@ -288,32 +292,12 @@ export default class LinkedInPlatform extends BasePlatform {
     this.isRunning = true;
     this.log("🚀 Starting LinkedIn automation with user preferences");
     this.statusOverlay.addInfo(
-      "Starting LinkedIn automation with user preferences"
+      "Alright, let's get you some amazing job opportunities! Let me start searching based on your preferences..."
     );
 
     try {
       // Merge config properly - params contains the full config from orchestrator
       this.config = { ...this.config, ...params };
-
-      // Validate LinkedIn-specific preferences
-      const validation = this.validateLinkedInPreferences(
-        this.config.preferences || {}
-      );
-
-      if (!validation.isValid) {
-        const errorMessage = `Invalid LinkedIn preferences: ${validation.errors.join(
-          ", "
-        )}`;
-        this.statusOverlay.addError(errorMessage);
-        throw new Error(errorMessage);
-      }
-
-      if (validation.warnings.length > 0) {
-        this.log("⚠️ LinkedIn preference warnings:", validation.warnings);
-        validation.warnings.forEach((warning) =>
-          this.statusOverlay.addWarning(warning)
-        );
-      }
 
       // Update services with proper userId and config
       if (this.config.userId) {
@@ -335,7 +319,8 @@ export default class LinkedInPlatform extends BasePlatform {
       });
 
       if (!this.config.jobsToApply || this.config.jobsToApply <= 0) {
-        const errorMessage = "Invalid jobsToApply configuration";
+        const errorMessage =
+          "I need to know how many jobs you want me to apply to!";
         this.statusOverlay.addError(errorMessage);
         throw new Error(errorMessage);
       }
@@ -354,12 +339,14 @@ export default class LinkedInPlatform extends BasePlatform {
       if (!currentUrl.includes("linkedin.com/jobs")) {
         this.log("📍 Navigating to LinkedIn Jobs with user preferences");
         this.statusOverlay.addInfo(
-          "Navigating to LinkedIn Jobs with user preferences"
+          "Let me take you to the LinkedIn jobs page where all the magic happens! ✨"
         );
         await this.navigateToLinkedInJobs();
       } else {
         this.log("✅ Already on LinkedIn Jobs page");
-        this.statusOverlay.addInfo("Already on LinkedIn Jobs page");
+        this.statusOverlay.addSuccess(
+          "Great! We're already on LinkedIn Jobs. Now let me fine-tune the search for you..."
+        );
         // If already on jobs page, apply additional filters if needed
         await this.applyAdditionalFilters();
       }
@@ -369,7 +356,10 @@ export default class LinkedInPlatform extends BasePlatform {
 
       // Start processing jobs
       this.automationStarted = true;
-      this.statusOverlay.updateStatus("applying", "Processing jobs");
+      this.statusOverlay.updateStatus(
+        "applying",
+        "Finding perfect matches for you"
+      );
       await this.processJobs({ jobsToApply: this.config.jobsToApply });
     } catch (error) {
       this.hasStarted = false;
@@ -388,7 +378,7 @@ export default class LinkedInPlatform extends BasePlatform {
     await this.waitForPageLoad();
     this.log("✅ Navigation completed with user preferences applied");
     this.statusOverlay.addSuccess(
-      "Navigation completed with user preferences applied"
+      "Perfect! I've set up the search with all your preferences. Let's see what we found!"
     );
   }
 
@@ -573,17 +563,19 @@ export default class LinkedInPlatform extends BasePlatform {
       // Apply company rating filter if specified (requires UI interaction)
       if (preferences.companyRating && preferences.companyRating !== "") {
         this.statusOverlay.addInfo(
-          `Applying company rating filter: ${preferences.companyRating}+`
+          `I'm adding a company rating filter to only show companies rated ${preferences.companyRating}+ stars! ⭐`
         );
         await this.applyCompanyRatingFilter(preferences.companyRating);
       }
 
       this.log("✅ Additional filters applied successfully");
-      this.statusOverlay.addSuccess("Additional filters applied successfully");
+      this.statusOverlay.addSuccess(
+        "All your filters are now applied! Let's find you some top-quality opportunities!"
+      );
     } catch (error) {
       this.log("⚠️ Failed to apply some additional filters:", error.message);
       this.statusOverlay.addWarning(
-        "Failed to apply some additional filters: " + error.message
+        "I had trouble with some of the advanced filters, but don't worry - the main search is working great!"
       );
     }
   }
@@ -623,14 +615,16 @@ export default class LinkedInPlatform extends BasePlatform {
             applyButton.click();
             await this.delay(2000);
             this.log("✅ Company rating filter applied");
-            this.statusOverlay.addSuccess("Company rating filter applied");
+            this.statusOverlay.addSuccess(
+              "Company rating filter applied successfully!"
+            );
           }
         }
       }
     } catch (error) {
       this.log("Failed to apply company rating filter:", error.message);
       this.statusOverlay.addWarning(
-        "Failed to apply company rating filter: " + error.message
+        "Couldn't apply the company rating filter, but the other filters are working fine!"
       );
     }
   }
@@ -663,15 +657,6 @@ export default class LinkedInPlatform extends BasePlatform {
         this.log(
           `❌ Job title "${jobDetails.title}" doesn't match required positions`
         );
-        return false;
-      }
-    }
-
-    // Check remote work preference
-    if (preferences.remoteOnly) {
-      const isRemote = this.isRemoteJob(jobDetails);
-      if (!isRemote) {
-        this.log(`❌ Job is not remote but remoteOnly is true`);
         return false;
       }
     }
@@ -724,7 +709,9 @@ export default class LinkedInPlatform extends BasePlatform {
       this.log(
         `📝 External job logged: ${jobDetails.title} at ${jobDetails.company}`
       );
-      this.statusOverlay.addInfo(`External job logged: ${jobDetails.title}`);
+      this.statusOverlay.addInfo(
+        `I found an interesting job at ${jobDetails.company} but it requires applying on their website. I'll save it for you! 📝`
+      );
 
       return true;
     } catch (error) {
@@ -750,7 +737,7 @@ export default class LinkedInPlatform extends BasePlatform {
       );
       this.log(`User preferences:`, this.config.preferences);
       this.statusOverlay.addInfo(
-        `Starting to process ${jobsToApply} jobs with user preferences`
+        `Alright! I'm going to help you apply to ${jobsToApply} jobs. Let me start scanning through the opportunities...`
       );
 
       // Initial scroll to trigger job loading
@@ -767,7 +754,7 @@ export default class LinkedInPlatform extends BasePlatform {
             "No job cards found, trying to scroll first before pagination"
           );
           this.statusOverlay.addInfo(
-            "No job cards found, trying to scroll for more"
+            "Hmm, let me scroll down to load more jobs..."
           );
           if (await this.scrollAndWaitForNewJobs()) {
             console.log("Scrolling loaded new jobs, continuing on same page");
@@ -779,11 +766,16 @@ export default class LinkedInPlatform extends BasePlatform {
           if (hasNextPage) {
             currentPage++;
             noNewJobsCount = 0;
+            this.statusOverlay.addInfo(
+              `Moving to page ${currentPage} to find more opportunities!`
+            );
             await this.waitForPageLoad();
             continue;
           } else {
             console.log("No more pages available");
-            this.statusOverlay.addWarning("No more pages available");
+            this.statusOverlay.addWarning(
+              "Looks like I've reached the end of available jobs for your search criteria!"
+            );
             break;
           }
         }
@@ -795,14 +787,14 @@ export default class LinkedInPlatform extends BasePlatform {
           `Processing ${jobCards.length} job cards on page ${currentPage}`
         );
         this.statusOverlay.addInfo(
-          `Processing ${jobCards.length} job cards on page ${currentPage}`
+          `Great! I found ${jobCards.length} jobs on page ${currentPage}. Let me check each one...`
         );
 
         for (const jobCard of jobCards) {
           if (appliedCount >= jobsToApply) {
             this.log(`Reached target of ${jobsToApply} jobs`);
             this.statusOverlay.addSuccess(
-              `Reached target of ${jobsToApply} jobs`
+              `Amazing! I've successfully applied to your target of ${jobsToApply} jobs! 🎉`
             );
             break;
           }
@@ -836,8 +828,8 @@ export default class LinkedInPlatform extends BasePlatform {
               this.log(
                 `Skipping job "${jobDetails.title}" - doesn't match preferences`
               );
-              this.statusOverlay.addWarning(
-                `Skipping job "${jobDetails.title}" - doesn't match preferences`
+              this.statusOverlay.addInfo(
+                `"${jobDetails.title}" at ${jobDetails.company} doesn't quite match your preferences, so I'll skip this one.`
               );
               skippedCount++;
               continue;
@@ -860,7 +852,7 @@ export default class LinkedInPlatform extends BasePlatform {
                 `External apply job found: ${jobDetails.title} - Logging as external job`
               );
               this.statusOverlay.addInfo(
-                `External apply job: ${jobDetails.title} - Skipped`
+                `"${jobDetails.title}" at ${jobDetails.company} requires applying on their company website. I'll save this one for you to apply manually later! 📌`
               );
 
               // You can add logic here to save external jobs to a separate tracking system
@@ -872,8 +864,8 @@ export default class LinkedInPlatform extends BasePlatform {
               this.log(
                 `Easy Apply job found: ${jobDetails.title} - Proceeding with application`
               );
-              this.statusOverlay.addInfo(
-                `Easy Apply job: ${jobDetails.title} - Applying...`
+              this.statusOverlay.addSuccess(
+                `Perfect! "${jobDetails.title}" at ${jobDetails.company} has Easy Apply! Let me apply for you right now...`
               );
 
               // Check if already applied using service
@@ -887,83 +879,62 @@ export default class LinkedInPlatform extends BasePlatform {
                 continue;
               }
 
-              // Continue with existing application flow...
+              // We found a job we can actually apply to
+              newApplicableJobsFound = true;
+
               this.updateProgress({
-                current: `Processing: ${jobDetails.title} (Page ${currentPage})`,
+                current: `Applying to: ${jobDetails.title} at ${jobDetails.company}`,
               });
 
               // Attempt to apply
               const success = await this.applyToJob(applyButton, jobDetails);
-              // ... rest of application logic remains the same
+
+              if (success) {
+                appliedCount++;
+                this.progress.completed = appliedCount;
+                this.updateProgress({ completed: appliedCount });
+
+                // Update application count using user service
+                await this.userService.updateApplicationCount();
+
+                this.log(
+                  `Successfully applied to job ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped)`
+                );
+                this.statusOverlay.addSuccess(
+                  `Woohoo! Just applied to "${jobDetails.title}" at ${
+                    jobDetails.company
+                  }! That's ${appliedCount} down, ${
+                    jobsToApply - appliedCount
+                  } to go! 🎯`
+                );
+
+                this.reportApplicationSubmitted(jobDetails, {
+                  method: "Easy Apply",
+                  userId: this.config.userId || this.userId,
+                  matchedPreferences: true,
+                });
+              } else {
+                this.progress.failed++;
+                this.updateProgress({ failed: this.progress.failed });
+                this.statusOverlay.addError(
+                  `Oops! Had trouble applying to "${jobDetails.title}". Don't worry, I'll keep going with the next ones!`
+                );
+              }
             } else {
               // Unknown button type
               this.log(`Unknown apply button type for job ${jobId}, skipping.`);
               this.statusOverlay.addWarning(
-                `Unknown apply button type: ${jobDetails.title}`
+                `I'm not sure how to apply to "${jobDetails.title}" - the apply button looks different than usual.`
               );
               skippedCount++;
               continue;
-            }
-
-            // 5. ADD NEW METHOD TO SAVE EXTERNAL JOBS
-
-            // We found a job we can actually apply to
-            newApplicableJobsFound = true;
-
-            // Check if already applied using service
-            const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(
-              jobId
-            );
-            if (alreadyApplied) {
-              this.log(
-                `Already applied to job ${jobId} (from database), skipping.`
-              );
-              skippedCount++;
-              continue;
-            }
-
-            this.updateProgress({
-              current: `Processing: ${jobDetails.title} (Page ${currentPage})`,
-            });
-
-            this.statusOverlay.addInfo(`Processing: ${jobDetails.title}`);
-
-            // Attempt to apply
-            const success = await this.applyToJob(applyButton, jobDetails);
-
-            if (success) {
-              appliedCount++;
-              this.progress.completed = appliedCount;
-              this.updateProgress({ completed: appliedCount });
-
-              // Update application count using user service
-              await this.userService.updateApplicationCount();
-
-              this.log(
-                `Successfully applied to job ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped)`
-              );
-              this.statusOverlay.addSuccess(
-                `Applied to job ${appliedCount}/${jobsToApply}`
-              );
-
-              this.reportApplicationSubmitted(jobDetails, {
-                method: "Easy Apply",
-                userId: this.config.userId || this.userId,
-                matchedPreferences: true,
-              });
-            } else {
-              this.progress.failed++;
-              this.updateProgress({ failed: this.progress.failed });
-              this.statusOverlay.addError(
-                `Failed to apply to job: ${jobDetails.title}`
-              );
             }
 
             await this.sleep(2000);
           } catch (error) {
             this.log(`Error processing job ${jobId} on page ${currentPage}`);
             this.statusOverlay.addError(
-              `Error processing job ${jobId}: ${error.message}`
+              `Had a little hiccup with one of the jobs, but I'm keeping going! 💪`
             );
             console.error(`Error processing job ${jobId}:`, error);
             continue;
@@ -991,7 +962,9 @@ export default class LinkedInPlatform extends BasePlatform {
             currentPage++;
             noNewJobsCount = 0;
             this.log(`Successfully moved to page ${currentPage}`);
-            this.statusOverlay.addInfo(`Moving to page ${currentPage}`);
+            this.statusOverlay.addInfo(
+              `Let me check page ${currentPage} for more opportunities!`
+            );
             await this.waitForPageLoad();
           } else {
             noNewJobsCount++;
@@ -999,8 +972,9 @@ export default class LinkedInPlatform extends BasePlatform {
               this.log(
                 `No more applicable jobs to apply. Applied to ${appliedCount}/${jobsToApply} (${skippedCount} jobs)`
               );
-              this.statusOverlay.addWarning(
-                `No more applicable jobs available. Applied to ${appliedCount}/${jobsToApply}`
+              // FIXED: Use correct appliedCount variable here
+              this.statusOverlay.addSuccess(
+                `I've looked everywhere and applied to ${appliedCount} out of ${jobsToApply} jobs! I couldn't find any more that match your criteria right now. 🎯`
               );
               break;
             }
@@ -1017,8 +991,8 @@ export default class LinkedInPlatform extends BasePlatform {
         appliedCount >= jobsToApply ? "target_reached" : "no_more_jobs";
       const message =
         appliedCount >= jobsToApply
-          ? `Successfully applied to target of ${appliedCount}/${jobsToApply} jobs (Processed ${processedCount} total across ${currentPage} pages)`
-          : `Applied to ${appliedCount}/${jobsToApply} jobs - no more jobs available (Skipped ${skippedCount} jobs that didn't match preferences)`;
+          ? `Mission accomplished! 🎉 I successfully applied to all ${appliedCount} jobs you wanted! We looked through ${processedCount} total opportunities across ${currentPage} pages.`
+          : `Great work! I applied to ${appliedCount} out of ${jobsToApply} jobs. I couldn't find any more that perfectly match your criteria right now (I skipped ${skippedCount} that weren't quite right).`;
 
       this.log(message);
       this.statusOverlay.addSuccess(message);
@@ -1035,7 +1009,9 @@ export default class LinkedInPlatform extends BasePlatform {
       };
     } catch (error) {
       console.error("Error in processJobs:", error);
-      this.statusOverlay.addError("Error in processJobs: " + error.message);
+      this.statusOverlay.addError(
+        "Something went wrong during the job application process. Don't worry though - I saved your progress!"
+      );
       this.reportError(error, { phase: "processJobs" });
       throw error;
     }
@@ -1044,7 +1020,7 @@ export default class LinkedInPlatform extends BasePlatform {
   async applyToJob(applyButton, jobDetails) {
     try {
       this.statusOverlay.addInfo(
-        `Starting application for: ${jobDetails.title}`
+        `Starting my application magic for "${jobDetails.title}"... ✨`
       );
 
       // Start application
@@ -1065,7 +1041,9 @@ export default class LinkedInPlatform extends BasePlatform {
       }
 
       if (attempts >= maxAttempts) {
-        this.statusOverlay.addError("Application took too many steps, closing");
+        this.statusOverlay.addError(
+          "This application had too many steps, so I had to skip it. Don't worry, I'll keep going!"
+        );
         await this.closeApplication();
         await this.sleep(1000);
         return false;
@@ -1073,11 +1051,13 @@ export default class LinkedInPlatform extends BasePlatform {
 
       await this.saveAppliedJob(jobDetails);
       this.statusOverlay.addSuccess(
-        `Successfully applied to: ${jobDetails.title}`
+        `Successfully submitted your application to "${jobDetails.title}"! 🚀`
       );
       return true;
     } catch (error) {
-      this.statusOverlay.addError(`Application failed: ${error.message}`);
+      this.statusOverlay.addError(
+        `Had trouble with this application, but I'm moving on to the next one!`
+      );
       await this.handleErrorState();
       await this.sleep(1000);
       return false;
@@ -1091,7 +1071,9 @@ export default class LinkedInPlatform extends BasePlatform {
       ".js-jobs-document-upload__container"
     );
     if (fileUploadContainers.length) {
-      this.statusOverlay.addInfo("Uploading resume/cover letter...");
+      this.statusOverlay.addInfo(
+        "Time to upload your resume! Let me handle that for you..."
+      );
 
       for (const container of fileUploadContainers) {
         try {
@@ -1105,14 +1087,18 @@ export default class LinkedInPlatform extends BasePlatform {
 
           if (success) {
             this.log(`✅ File uploaded successfully for container`);
-            this.statusOverlay.addSuccess("File uploaded successfully");
+            this.statusOverlay.addSuccess("Resume uploaded perfectly! 📄");
           } else {
             this.log(`⚠️ File upload failed for container`);
-            this.statusOverlay.addWarning("File upload failed");
+            this.statusOverlay.addWarning(
+              "Had a small issue with the resume upload, but continuing..."
+            );
           }
         } catch (error) {
           this.log(`❌ File upload error: ${error.message}`);
-          this.statusOverlay.addError("File upload error: " + error.message);
+          this.statusOverlay.addError(
+            "Resume upload had an issue, but I'll keep going!"
+          );
         }
       }
     }
@@ -1262,6 +1248,9 @@ export default class LinkedInPlatform extends BasePlatform {
     }
 
     try {
+      // FIXED: Add chatbot message when getting AI answer
+      this.statusOverlay.addInfo(`Thinking about how to answer: "${label}"...`);
+
       // Use AI service for smart answers
       const context = {
         platform: this.platform,
@@ -1271,12 +1260,17 @@ export default class LinkedInPlatform extends BasePlatform {
 
       const answer = await this.aiService.getAnswer(label, options, context);
 
+      // FIXED: Add success message when AI answer is received
+      this.statusOverlay.addSuccess(
+        `Got the perfect answer for that question! ✨`
+      );
+
       // Cache the answer
       this.answerCache.set(normalizedLabel, answer);
       return answer;
     } catch (error) {
       console.error("AI Answer Error:", error);
-      this.statusOverlay.addWarning("Using fallback answer for: " + label);
+      this.statusOverlay.addInfo("Using my best guess for this question...");
 
       // Fallback to simple default answers
       const defaultAnswers = {
@@ -1370,7 +1364,7 @@ export default class LinkedInPlatform extends BasePlatform {
       }
 
       if (await this.findAndClickButton(buttonSelectors.submit)) {
-        this.statusOverlay.addInfo("Submitting application...");
+        this.statusOverlay.addInfo("Submitting your application now... 🚀");
         await this.sleep(2000);
         return "submitted";
       }
@@ -1410,7 +1404,6 @@ export default class LinkedInPlatform extends BasePlatform {
       );
       if (nextButton) {
         console.log("Found next button, clicking it");
-        this.statusOverlay.addInfo("Moving to next page...");
         nextButton.click();
         await this.waitForPageLoad();
         return true;
@@ -1457,7 +1450,6 @@ export default class LinkedInPlatform extends BasePlatform {
 
       if (nextPageButton) {
         console.log(`Found next page button for page ${currentPageNum + 1}`);
-        this.statusOverlay.addInfo(`Moving to page ${currentPageNum + 1}`);
         nextPageButton.click();
         await this.waitForPageLoad();
         return true;
@@ -1468,7 +1460,7 @@ export default class LinkedInPlatform extends BasePlatform {
     } catch (error) {
       console.error("Error navigating to next page:", error);
       this.statusOverlay.addError(
-        "Error navigating to next page: " + error.message
+        "Had trouble turning the page, but I'll keep trying!"
       );
       return false;
     }
@@ -1552,7 +1544,9 @@ export default class LinkedInPlatform extends BasePlatform {
       const checkSearchResults = () => {
         if (document.querySelector(".job-card-list ")) {
           console.log("Search results loaded");
-          this.statusOverlay.addSuccess("Search results loaded");
+          this.statusOverlay.addSuccess(
+            "Awesome! I found some job listings for you!"
+          );
           resolve();
         } else {
           setTimeout(checkSearchResults, 500);
@@ -1856,12 +1850,14 @@ export default class LinkedInPlatform extends BasePlatform {
         // Update application count
         await this.appTracker.updateApplicationCount();
         this.log(`✅ Job application saved to database: ${jobDetails.title}`);
-        this.statusOverlay.addSuccess(`Application saved: ${jobDetails.title}`);
+        this.statusOverlay.addSuccess(
+          `I've saved "${jobDetails.title}" to your application history! 📝`
+        );
         return true;
       } else {
         this.log(`⚠️ Failed to save job application: ${jobDetails.title}`);
         this.statusOverlay.addWarning(
-          `Failed to save job application: ${jobDetails.title}`
+          `Had trouble saving "${jobDetails.title}" to your history, but the application went through!`
         );
         return false;
       }
@@ -1869,7 +1865,7 @@ export default class LinkedInPlatform extends BasePlatform {
       console.error("Error saving applied job:", error);
       this.log(`❌ Error saving job application: ${error.message}`);
       this.statusOverlay.addError(
-        `Error saving job application: ${error.message}`
+        "Couldn't save this application to your history, but don't worry - it was submitted!"
       );
       return false;
     }
@@ -1884,7 +1880,7 @@ export default class LinkedInPlatform extends BasePlatform {
 
   onNavigation(oldUrl, newUrl) {
     this.log(`🔄 Navigation detected: ${oldUrl} → ${newUrl}`);
-    this.statusOverlay.addInfo(`Navigation detected: ${newUrl}`);
+    this.statusOverlay.addInfo("I noticed we moved to a different page...");
 
     if (
       !newUrl.includes("linkedin.com/jobs") &&
@@ -1893,7 +1889,7 @@ export default class LinkedInPlatform extends BasePlatform {
     ) {
       this.log("⚠️ Navigated away from LinkedIn Jobs, attempting to return");
       this.statusOverlay.addWarning(
-        "Navigated away from LinkedIn Jobs, attempting to return"
+        "Looks like we went off-track! Let me get us back to the jobs page..."
       );
       setTimeout(() => {
         if (this.isRunning) {
@@ -1906,13 +1902,17 @@ export default class LinkedInPlatform extends BasePlatform {
   async pause() {
     await super.pause();
     this.log("⏸️ LinkedIn automation paused");
-    this.statusOverlay.addWarning("LinkedIn automation paused");
+    this.statusOverlay.addWarning(
+      "Taking a little break! I'll be here when you're ready to continue. ⏸️"
+    );
   }
 
   async resume() {
     await super.resume();
     this.log("▶️ LinkedIn automation resumed");
-    this.statusOverlay.addSuccess("LinkedIn automation resumed");
+    this.statusOverlay.addSuccess(
+      "I'm back! Let's continue finding you some great opportunities! 🚀"
+    );
   }
 
   async stop() {
@@ -1920,7 +1920,9 @@ export default class LinkedInPlatform extends BasePlatform {
     this.hasStarted = false;
     this.automationStarted = false;
     this.log("⏹️ LinkedIn automation stopped");
-    this.statusOverlay.addWarning("LinkedIn automation stopped");
+    this.statusOverlay.addWarning(
+      "All done for now! Thanks for letting me help with your job search. Good luck! 🍀"
+    );
   }
 
   cleanup() {

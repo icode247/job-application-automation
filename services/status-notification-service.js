@@ -1,28 +1,39 @@
 /**
- * StatusOverlay - A reusable status notification overlay system
- * Provides visual feedback with status indicators and message logging
+ * ChatbotStatusOverlay - An interactive chatbot-style status notification system
+ * Provides conversational feedback with a modern chat interface
+ * BRANDED VERSION with custom color scheme
  */
-export default class StatusOverlay {
+//icon
+class ChatbotStatusOverlay {
   constructor(options = {}) {
     this.options = {
-      id: options.id || "status-overlay",
-      title: options.title || "AUTOMATION",
+      id: options.id || "chatbot-status-overlay",
+      title: options.title || "Job Assistant",
+      botName: options.botName || "FastApply Bot",
+      platform: options.platform || "AUTOMATION",
       icon: options.icon || "🤖",
-      position: options.position || { top: "10px", right: "10px" },
-      width: options.width || "320px",
-      maxHeight: options.maxHeight || "300px",
+      position: options.position || { top: "20px", right: "20px" },
+      width: options.width || "380px",
+      maxHeight: options.maxHeight || "500px",
       maxMessages: options.maxMessages || 50,
       autoHide: options.autoHide || false,
-      autoHideDelay: options.autoHideDelay || 5000,
+      autoHideDelay: options.autoHideDelay || 8000,
+      enableSound: options.enableSound || false,
       ...options,
     };
 
     // State
     this.container = null;
-    this.statusIndicator = null;
-    this.logContainer = null;
+    this.chatContainer = null;
+    this.statusBar = null;
     this.isVisible = true;
+    this.isMinimized = false;
     this.messageCount = 0;
+    this.currentStatus = "ready";
+    this.typingTimeout = null;
+
+    // Create styles first
+    this.injectStyles();
 
     // Initialize if not set to manual
     if (!options.manual) {
@@ -31,7 +42,226 @@ export default class StatusOverlay {
   }
 
   /**
-   * Create the status overlay
+   * Inject required CSS styles with BRAND COLORS
+   */
+  injectStyles() {
+    if (document.getElementById("chatbot-overlay-styles")) return;
+
+    const styles = document.createElement("style");
+    styles.id = "chatbot-overlay-styles";
+    styles.textContent = `
+      @keyframes chatbotSlideIn {
+        from { 
+          opacity: 0; 
+          transform: translateX(100%) scale(0.8); 
+        }
+        to { 
+          opacity: 1; 
+          transform: translateX(0) scale(1); 
+        }
+      }
+
+      @keyframes chatbotSlideOut {
+        from { 
+          opacity: 1; 
+          transform: translateX(0) scale(1); 
+        }
+        to { 
+          opacity: 0; 
+          transform: translateX(100%) scale(0.8); 
+        }
+      }
+
+      @keyframes messageFadeIn {
+        from { 
+          opacity: 0; 
+          transform: translateY(10px); 
+        }
+        to { 
+          opacity: 1; 
+          transform: translateY(0); 
+        }
+      }
+
+      @keyframes typingDots {
+        0%, 20% { opacity: 0.4; }
+        50% { opacity: 1; }
+        100% { opacity: 0.4; }
+      }
+
+      @keyframes statusPulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+
+      .chatbot-overlay-container {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        line-height: 1.4;
+        user-select: none;
+      }
+
+      .chatbot-overlay-container * {
+        box-sizing: border-box;
+      }
+
+      .chatbot-message-bubble {
+        max-width: 85%;
+        margin: 8px 0;
+        animation: messageFadeIn 0.3s ease-out;
+      }
+
+      .chatbot-message-content {
+        padding: 10px 14px;
+        border-radius: 18px;
+        font-size: 13px;
+        line-height: 1.3;
+        position: relative;
+        word-wrap: break-word;
+      }
+
+      .chatbot-message-bot .chatbot-message-content {
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        color: white;
+        margin-left: 40px;
+        border-bottom-left-radius: 4px;
+        box-shadow: 0 2px 12px rgba(14, 165, 233, 0.3);
+      }
+
+      .chatbot-message-system .chatbot-message-content {
+        background: #f0f9ff;
+        color: #075985;
+        margin: 4px 20px;
+        border-radius: 12px;
+        text-align: center;
+        font-size: 12px;
+        padding: 6px 12px;
+        border: 1px solid #bae6fd;
+      }
+
+      .chatbot-bot-avatar {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        color: white;
+        border: 2px solid white;
+        box-shadow: 0 2px 8px rgba(14, 165, 233, 0.4);
+      }
+
+      .chatbot-message-timestamp {
+        font-size: 11px;
+        color: rgba(255,255,255,0.8);
+        margin-top: 4px;
+        margin-left: 40px;
+      }
+
+      .chatbot-message-system .chatbot-message-timestamp {
+        margin-left: 0;
+        text-align: center;
+        color: #075985;
+      }
+
+      .chatbot-typing-indicator {
+        display: flex;
+        align-items: center;
+        padding: 10px 14px;
+        background: #f0f9ff;
+        border-radius: 18px;
+        border-bottom-left-radius: 4px;
+        margin-left: 40px;
+        max-width: 80px;
+        margin-bottom: 8px;
+        border: 1px solid #e0f2fe;
+      }
+
+      .chatbot-typing-dots {
+        display: flex;
+        gap: 3px;
+      }
+
+      .chatbot-typing-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #0ea5e9;
+        animation: typingDots 1.4s infinite;
+      }
+
+      .chatbot-typing-dot:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+
+      .chatbot-typing-dot:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+
+      .chatbot-status-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .chatbot-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #38bdf8;
+        animation: statusPulse 2s infinite;
+      }
+
+      .chatbot-status-error .chatbot-status-dot { background: #ef4444; }
+      .chatbot-status-warning .chatbot-status-dot { background: #f59e0b; }
+      .chatbot-status-info .chatbot-status-dot { background: #0ea5e9; }
+      .chatbot-status-applying .chatbot-status-dot { background: #7dd3fc; }
+      .chatbot-status-success .chatbot-status-dot { background: #22c55e; }
+
+      .chatbot-minimize-btn {
+        background: none;
+        border: none;
+        color: rgba(255,255,255,0.8);
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        transition: background 0.2s;
+      }
+
+      .chatbot-minimize-btn:hover {
+        background: rgba(255,255,255,0.2);
+        color: white;
+      }
+
+      .chatbot-header-actions {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+      }
+
+      .chatbot-platform-badge {
+        background: rgba(255,255,255,0.25);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        border: 1px solid rgba(255,255,255,0.3);
+      }
+    `;
+    document.head.appendChild(styles);
+  }
+
+  /**
+   * Create the chatbot overlay
    */
   create() {
     this.destroy(); // Remove existing overlay if any
@@ -39,118 +269,305 @@ export default class StatusOverlay {
     // Create main container
     this.container = document.createElement("div");
     this.container.id = this.options.id;
+    this.container.className = "chatbot-overlay-container";
     this.container.style.cssText = `
       position: fixed;
       top: ${this.options.position.top};
       right: ${this.options.position.right};
       width: ${this.options.width};
       max-height: ${this.options.maxHeight};
-      overflow-y: auto;
-      background: rgba(0,0,0,0.85);
-      color: white;
-      padding: 15px;
-      font-family: 'Segoe UI', Arial, sans-serif;
-      font-size: 13px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 8px 30px rgba(14, 165, 233, 0.15), 0 0 0 1px rgba(14, 165, 233, 0.1);
       z-index: 9999999;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-      border-left: 4px solid #4a90e2;
-      transition: all 0.3s ease;
-      ${!this.isVisible ? "opacity: 0; transform: translateX(100%);" : ""}
+      overflow: hidden;
+      animation: chatbotSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+      ${!this.isVisible ? "display: none;" : ""}
     `;
 
     // Create header
     const header = this.createHeader();
     this.container.appendChild(header);
 
-    // Create log container
-    this.logContainer = document.createElement("div");
-    this.logContainer.style.cssText = `
-      margin-top: 10px;
-      max-height: 220px;
+    // Create chat container
+    this.chatContainer = document.createElement("div");
+    this.chatContainer.style.cssText = `
+      max-height: 400px;
       overflow-y: auto;
-      font-size: 12px;
-      line-height: 1.4;
+      padding: 16px;
+      background: linear-gradient(180deg, #f0f9ff 0%, #fafbfc 100%);
+      position: relative;
     `;
 
-    this.container.appendChild(this.logContainer);
+    this.container.appendChild(this.chatContainer);
     document.body.appendChild(this.container);
 
+    // Initial greeting
+    this.addGreeting();
     this.updateStatus("ready");
+
     return this;
   }
 
   /**
-   * Create the header section
+   * Create the header section with BRAND COLORS
    */
   createHeader() {
     const header = document.createElement("div");
     header.style.cssText = `
+      background: linear-gradient(135deg,rgb(9, 12, 13) 0%,rgb(23, 66, 88) 50%, #0369a1 100%);
+      color: white;
+      padding: 16px 20px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 10px;
-      padding-bottom: 8px;
+      cursor: pointer;
       border-bottom: 1px solid rgba(255,255,255,0.2);
     `;
 
-    // Logo section
-    const logoDiv = document.createElement("div");
-    logoDiv.style.cssText = `
+    // Left side - Bot info
+    const botInfo = document.createElement("div");
+    botInfo.style.cssText = `
       display: flex;
       align-items: center;
-      font-weight: bold;
-      font-size: 15px;
+      gap: 12px;
     `;
 
-    const logoIcon = document.createElement("span");
-    logoIcon.textContent = this.options.icon;
-    logoIcon.style.cssText = `
-      margin-right: 6px;
-      font-size: 18px;
+    const avatar = document.createElement("div");
+    avatar.style.cssText = `
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      border: 2px solid rgba(255,255,255,0.4);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    `;
+    avatar.textContent = this.options.icon;
+
+    const textInfo = document.createElement("div");
+
+    const botName = document.createElement("div");
+    botName.style.cssText = `
+      font-weight: 600;
+      font-size: 16px;
+      margin-bottom: 2px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    `;
+    botName.textContent = this.options.botName;
+
+    this.statusBar = document.createElement("div");
+    this.statusBar.className = "chatbot-status-indicator";
+    this.statusBar.innerHTML = `
+      <span class="chatbot-status-dot"></span>
+      <span>Ready to help</span>
     `;
 
-    const logoText = document.createElement("span");
-    logoText.textContent = this.options.title;
+    textInfo.appendChild(botName);
+    textInfo.appendChild(this.statusBar);
 
-    logoDiv.appendChild(logoIcon);
-    logoDiv.appendChild(logoText);
+    botInfo.appendChild(avatar);
+    botInfo.appendChild(textInfo);
 
-    // Status indicator
-    this.statusIndicator = document.createElement("span");
-    this.statusIndicator.textContent = "Initializing...";
-    this.statusIndicator.style.cssText = `
-      font-size: 12px;
-      padding: 3px 8px;
-      background: rgba(74, 144, 226, 0.2);
-      border-radius: 12px;
-      color: #4a90e2;
-      cursor: pointer;
-    `;
+    // Right side - Actions
+    const actions = document.createElement("div");
+    actions.className = "chatbot-header-actions";
 
-    // Add click handler to toggle visibility
-    this.statusIndicator.addEventListener("click", () => this.toggle());
+    const platformBadge = document.createElement("span");
+    platformBadge.className = "chatbot-platform-badge";
+    platformBadge.textContent = this.options.platform;
 
-    header.appendChild(logoDiv);
-    header.appendChild(this.statusIndicator);
+    const minimizeBtn = document.createElement("button");
+    minimizeBtn.className = "chatbot-minimize-btn";
+    minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
+    minimizeBtn.title = this.isMinimized ? "Expand" : "Minimize";
+
+    actions.appendChild(platformBadge);
+    actions.appendChild(minimizeBtn);
+
+    header.appendChild(botInfo);
+    header.appendChild(actions);
+
+    // Add click handlers
+    minimizeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleMinimize();
+    });
+
+    header.addEventListener("click", () => {
+      if (this.isMinimized) {
+        this.toggleMinimize();
+      }
+    });
 
     return header;
   }
 
   /**
-   * Update the status indicator
+   * Add initial greeting message
+   */
+  addGreeting() {
+    const greetings = [
+      `Hi! I'm ${this.options.botName}, your automation assistant.`,
+      "I'll keep you updated on the job application process.",
+      "Let's find you some great opportunities! 🚀",
+    ];
+
+    // Add greeting with delay for natural feel
+    setTimeout(() => {
+      this.addBotMessage(greetings[0]);
+      setTimeout(() => {
+        this.addBotMessage(greetings[1]);
+        setTimeout(() => {
+          this.addBotMessage(greetings[2]);
+        }, 1200);
+      }, 800);
+    }, 500);
+  }
+
+  /**
+   * Add a bot message
+   */
+  addBotMessage(message, type = "info") {
+    if (!this.chatContainer || this.isMinimized) return this;
+
+    this.showTypingIndicator();
+
+    setTimeout(() => {
+      this.hideTypingIndicator();
+      this._createMessage(message, "bot", type);
+      this._scrollToBottom();
+      this.messageCount++;
+      this._enforceMessageLimit();
+    }, 800 + Math.random() * 400); // Realistic typing delay
+
+    return this;
+  }
+
+  /**
+   * Add system message (like status updates)
+   */
+  addSystemMessage(message) {
+    if (!this.chatContainer || this.isMinimized) return this;
+
+    this._createMessage(message, "system");
+    this._scrollToBottom();
+    this.messageCount++;
+    this._enforceMessageLimit();
+
+    return this;
+  }
+
+  /**
+   * Show typing indicator
+   */
+  showTypingIndicator() {
+    this.hideTypingIndicator(); // Remove existing
+
+    const indicator = document.createElement("div");
+    indicator.className = "chatbot-typing-indicator";
+    indicator.id = "chatbot-typing";
+
+    const dots = document.createElement("div");
+    dots.className = "chatbot-typing-dots";
+    dots.innerHTML = `
+      <div class="chatbot-typing-dot"></div>
+      <div class="chatbot-typing-dot"></div>
+      <div class="chatbot-typing-dot"></div>
+    `;
+
+    indicator.appendChild(dots);
+    this.chatContainer.appendChild(indicator);
+    this._scrollToBottom();
+  }
+
+  /**
+   * Hide typing indicator
+   */
+  hideTypingIndicator() {
+    const existing = document.getElementById("chatbot-typing");
+    if (existing) {
+      existing.remove();
+    }
+  }
+
+  /**
+   * Create message element
+   */
+  _createMessage(message, sender, type = "info") {
+    const messageElement = document.createElement("div");
+    messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
+
+    if (sender === "bot") {
+      // Add bot avatar
+      const avatar = document.createElement("div");
+      avatar.className = "chatbot-bot-avatar";
+      avatar.textContent = this.options.icon;
+      messageElement.appendChild(avatar);
+    }
+
+    const content = document.createElement("div");
+    content.className = "chatbot-message-content";
+    content.textContent = message;
+
+    // Add emoji based on message type
+    const emoji = this._getEmojiForType(type);
+    if (emoji && sender === "bot") {
+      content.textContent = `${emoji} ${message}`;
+    }
+
+    messageElement.appendChild(content);
+
+    // Add timestamp
+    const timestamp = document.createElement("div");
+    timestamp.className = "chatbot-message-timestamp";
+    timestamp.textContent = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    messageElement.appendChild(timestamp);
+
+    this.chatContainer.appendChild(messageElement);
+  }
+
+  /**
+   * Get emoji for message type
+   */
+  _getEmojiForType(type) {
+    const emojis = {
+      success: "✅",
+      error: "❌",
+      warning: "⚠️",
+      info: "ℹ️",
+      applying: "🔄",
+      searching: "🔍",
+      completed: "🎉",
+    };
+    return emojis[type] || "";
+  }
+
+  /**
+   * Update status in header
    */
   updateStatus(status, details = "") {
-    if (!this.statusIndicator) return this;
+    if (!this.statusBar) return this;
 
-    const statusConfig = this.getStatusConfig(status);
-    const displayText = details
-      ? `${statusConfig.text}: ${details}`
-      : statusConfig.text;
+    this.currentStatus = status;
+    const statusConfig = this._getStatusConfig(status);
 
-    this.statusIndicator.textContent = displayText;
-    this.statusIndicator.style.color = statusConfig.color;
-    this.statusIndicator.style.background = statusConfig.bgColor;
+    const dot = this.statusBar.querySelector(".chatbot-status-dot");
+    const text = this.statusBar.querySelector("span:last-child");
+
+    if (dot) {
+      this.statusBar.className = `chatbot-status-indicator chatbot-status-${status}`;
+    }
+
+    if (text) {
+      text.textContent = details || statusConfig.text;
+    }
 
     return this;
   }
@@ -158,223 +575,154 @@ export default class StatusOverlay {
   /**
    * Get status configuration
    */
-  getStatusConfig(status) {
+  _getStatusConfig(status) {
     const configs = {
-      ready: {
-        text: "Ready",
-        color: "#4caf50",
-        bgColor: "rgba(76, 175, 80, 0.2)",
-      },
-      searching: {
-        text: "Searching",
-        color: "#ff9800",
-        bgColor: "rgba(255, 152, 0, 0.2)",
-      },
-      applying: {
-        text: "Applying",
-        color: "#4a90e2",
-        bgColor: "rgba(74, 144, 226, 0.2)",
-      },
-      success: {
-        text: "Success",
-        color: "#4caf50",
-        bgColor: "rgba(76, 175, 80, 0.2)",
-      },
-      error: {
-        text: "Error",
-        color: "#f44336",
-        bgColor: "rgba(244, 67, 54, 0.2)",
-      },
-      warning: {
-        text: "Warning",
-        color: "#ff9800",
-        bgColor: "rgba(255, 152, 0, 0.2)",
-      },
-      info: {
-        text: "Info",
-        color: "#2196f3",
-        bgColor: "rgba(33, 150, 243, 0.2)",
-      },
+      ready: { text: "Ready to help" },
+      searching: { text: "Searching for jobs..." },
+      applying: { text: "Applying to jobs..." },
+      success: { text: "Application successful!" },
+      error: { text: "Encountered an issue" },
+      warning: { text: "Attention needed" },
+      info: { text: "Processing..." },
+      completed: { text: "All done!" },
     };
 
-    return (
-      configs[status] || {
-        text: status.charAt(0).toUpperCase() + status.slice(1),
-        color: "#4a90e2",
-        bgColor: "rgba(74, 144, 226, 0.2)",
-      }
-    );
+    return configs[status] || { text: status };
   }
 
   /**
-   * Add a message to the log
-   */
-  addMessage(message, type = "info") {
-    if (!this.logContainer) return this;
-
-    const timestamp = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-
-    const messageElement = document.createElement("div");
-    messageElement.style.cssText = `
-      padding: 4px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.08);
-      animation: fadeIn 0.3s ease-in;
-      ${this.getMessageTypeStyles(type)}
-    `;
-
-    const timeSpan = document.createElement("span");
-    timeSpan.textContent = timestamp;
-    timeSpan.style.cssText = `
-      color: rgba(255,255,255,0.5);
-      margin-right: 8px;
-      font-size: 11px;
-    `;
-
-    const messageSpan = document.createElement("span");
-    messageSpan.textContent = message;
-
-    messageElement.appendChild(timeSpan);
-    messageElement.appendChild(messageSpan);
-    this.logContainer.appendChild(messageElement);
-
-    // Auto-scroll to bottom
-    this.logContainer.scrollTop = this.logContainer.scrollHeight;
-
-    // Keep only the last N messages
-    this.messageCount++;
-    while (this.logContainer.children.length > this.options.maxMessages) {
-      this.logContainer.removeChild(this.logContainer.firstChild);
-    }
-
-    // Auto-hide if enabled
-    if (this.options.autoHide && type !== "error") {
-      setTimeout(() => {
-        if (this.messageCount > 0) {
-          this.hide();
-        }
-      }, this.options.autoHideDelay);
-    }
-
-    // Show overlay if hidden and it's an important message
-    if (!this.isVisible && (type === "error" || type === "warning")) {
-      this.show();
-    }
-
-    return this;
-  }
-
-  /**
-   * Get message type styles
-   */
-  getMessageTypeStyles(type) {
-    const styles = {
-      error: "color: #ff6b6b;",
-      warning: "color: #ffb74d;",
-      success: "color: #81c784;",
-      info: "color: #64b5f6;",
-      default: "",
-    };
-
-    return styles[type] || styles.default;
-  }
-
-  /**
-   * Add an error message
+   * Convenience methods for different message types
    */
   addError(error) {
     const message =
-      typeof error === "string" ? error : error.message || "Unknown error";
-    this.addMessage("ERROR: " + message, "error");
-    this.updateStatus("error");
+      typeof error === "string"
+        ? error
+        : error.message || "Something went wrong";
+    this.addBotMessage(`Oops! ${message}`, "error");
+    this.updateStatus("error", "Issue detected");
+    this._playNotificationSound();
     return this;
   }
 
-  /**
-   * Add a success message
-   */
   addSuccess(message) {
-    this.addMessage(message, "success");
+    this.addBotMessage(`Great! ${message}`, "success");
     this.updateStatus("success");
     return this;
   }
 
-  /**
-   * Add a warning message
-   */
   addWarning(message) {
-    this.addMessage(message, "warning");
+    this.addBotMessage(`Heads up: ${message}`, "warning");
     this.updateStatus("warning");
     return this;
   }
 
-  /**
-   * Add an info message
-   */
   addInfo(message) {
-    this.addMessage(message, "info");
+    this.addBotMessage(message, "info");
     return this;
   }
 
   /**
-   * Show the overlay
+   * Toggle minimize state
+   */
+  toggleMinimize() {
+    this.isMinimized = !this.isMinimized;
+
+    const minimizeBtn = this.container.querySelector(".chatbot-minimize-btn");
+    if (minimizeBtn) {
+      minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
+      minimizeBtn.title = this.isMinimized ? "Expand" : "Minimize";
+    }
+
+    if (this.chatContainer) {
+      this.chatContainer.style.display = this.isMinimized ? "none" : "block";
+    }
+
+    return this;
+  }
+
+  /**
+   * Show/hide the entire overlay
    */
   show() {
     if (!this.container) return this;
-
     this.isVisible = true;
-    this.container.style.opacity = "1";
-    this.container.style.transform = "translateX(0)";
+    this.container.style.display = "block";
+    this.container.style.animation =
+      "chatbotSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)";
     return this;
   }
 
-  /**
-   * Hide the overlay
-   */
   hide() {
     if (!this.container) return this;
-
     this.isVisible = false;
-    this.container.style.opacity = "0";
-    this.container.style.transform = "translateX(100%)";
+    this.container.style.animation = "chatbotSlideOut 0.3s ease-in-out";
+    setTimeout(() => {
+      if (this.container) {
+        this.container.style.display = "none";
+      }
+    }, 300);
     return this;
   }
 
-  /**
-   * Toggle overlay visibility
-   */
   toggle() {
     return this.isVisible ? this.hide() : this.show();
   }
 
   /**
-   * Clear all messages
+   * Clear all messages except greeting
    */
   clear() {
-    if (this.logContainer) {
-      this.logContainer.innerHTML = "";
+    if (this.chatContainer) {
+      this.chatContainer.innerHTML = "";
       this.messageCount = 0;
+      this.addGreeting();
     }
     return this;
   }
 
   /**
-   * Update the title
+   * Internal helper methods
    */
-  setTitle(title) {
-    this.options.title = title;
-    const logoText = this.container?.querySelector("span:last-child");
-    if (logoText) {
-      logoText.textContent = title;
+  _scrollToBottom() {
+    if (this.chatContainer) {
+      setTimeout(() => {
+        this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+      }, 100);
     }
-    return this;
+  }
+
+  _enforceMessageLimit() {
+    if (this.messageCount > this.options.maxMessages) {
+      const messages = this.chatContainer.querySelectorAll(
+        ".chatbot-message-bubble"
+      );
+      const toRemove = Math.min(10, messages.length - this.options.maxMessages);
+
+      for (let i = 0; i < toRemove; i++) {
+        if (messages[i]) {
+          messages[i].remove();
+          this.messageCount--;
+        }
+      }
+    }
+  }
+
+  _playNotificationSound() {
+    if (this.options.enableSound) {
+      try {
+        const audio = new Audio(
+          "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+XwwmwhBCdz0/LRfC0FP4R00g=="
+        );
+        audio.volume = 0.3;
+        audio.play().catch(() => {}); // Ignore errors
+      } catch (e) {
+        // Silent fail
+      }
+    }
   }
 
   /**
-   * Move overlay to a new position
+   * Update position
    */
   setPosition(position) {
     if (!this.container) return this;
@@ -390,6 +738,22 @@ export default class StatusOverlay {
   }
 
   /**
+   * Update the title/bot name
+   */
+  setTitle(title) {
+    this.options.title = title;
+    this.options.botName = title;
+
+    const botNameElement = this.container?.querySelector(
+      "div:first-child div:last-child div:first-child"
+    );
+    if (botNameElement) {
+      botNameElement.textContent = title;
+    }
+    return this;
+  }
+
+  /**
    * Destroy the overlay
    */
   destroy() {
@@ -399,37 +763,20 @@ export default class StatusOverlay {
     }
 
     this.container = null;
-    this.statusIndicator = null;
-    this.logContainer = null;
+    this.chatContainer = null;
+    this.statusBar = null;
     this.messageCount = 0;
 
     return this;
   }
 
   /**
-   * Check if overlay exists and is visible
+   * Check if overlay exists
    */
   exists() {
     return !!this.container && document.body.contains(this.container);
   }
-
-  /**
-   * Add CSS animation keyframes if not already added
-   */
-  static addAnimationStyles() {
-    if (document.getElementById("status-overlay-animations")) return;
-
-    const style = document.createElement("style");
-    style.id = "status-overlay-animations";
-    style.textContent = `
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(-5px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-    `;
-    document.head.appendChild(style);
-  }
 }
 
-// Add animations when class is loaded
-StatusOverlay.addAnimationStyles();
+// Export as StatusOverlay for backward compatibility
+export default ChatbotStatusOverlay;

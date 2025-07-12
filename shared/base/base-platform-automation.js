@@ -76,7 +76,7 @@ export default class BasePlatformAutomation extends BasePlatform {
     // Create status overlay
     this.statusOverlay = new StatusOverlay({
       id: `${this.platform}-status-overlay`,
-      title: `${this.platform.toUpperCase()} AUTOMATION`,
+      platform: `${this.platform.toUpperCase()} AUTOMATION`,
       icon: "🤖",
       position: { top: "10px", right: "10px" },
     });
