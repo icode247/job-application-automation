@@ -1,5 +1,6 @@
 // platforms/lever/lever-file-handler.js
-//File uploads completed with some issues
+//uploadFileFromUrl
+
 export default class LeverFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;

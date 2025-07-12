@@ -1,5 +1,8 @@
-// platforms/ashby/ashby-form-handler.js
+// platforms/ashby/ashby-form-handler.js'
+//Attempting to submit form
+//No submit button found
 import { AIService } from "../../services/index.js";
+import { DomUtils } from "../../shared/utilities/index.js";
 
 export class AshbyFormHandler {
   constructor(options = {}) {
@@ -12,71 +15,23 @@ export class AshbyFormHandler {
   }
 
   /**
-   * Get all form fields from an Ashby application form
+   * Enhanced form finding for Ashby application pages
    */
-  getAllFormFields(form) {
-    try {
-      this.logger("Finding all form fields in Ashby form");
+  static findApplicationForm() {
+    // Ashby-specific form selectors for application tab
+    const ashbyApplicationSelectors = [
+      "form.application-form",
+      "form#application-form",
+      'form[data-testid="application-form"]',
+      'form[action*="apply"]',
+      ".application-form form",
+      'form[role="form"]',
+      "#form form",
+      '[aria-controls="form"] form',
+      ".ashby-job-posting-application form",
+    ];
 
-      const fields = [];
-
-      // Ashby-specific selectors
-      const formElements = form.querySelectorAll(
-        'input:not([type="hidden"]), select, textarea, ' +
-          '[role="radio"], [role="checkbox"], ' +
-          'fieldset[role="radiogroup"], ' +
-          "div.form-group, " +
-          'div[role="group"], ' +
-          "div.checkbox-group, " +
-          "div.radio-group"
-      );
-
-      this.logger(`Found ${formElements.length} form elements`);
-
-      for (const element of formElements) {
-        if (!this.isElementVisible(element)) continue;
-
-        const fieldInfo = {
-          element,
-          label: this.getFieldLabel(element),
-          type: this.getFieldType(element),
-          required: this.isFieldRequired(element),
-        };
-
-        // For radio groups, get the full fieldset when possible
-        if (fieldInfo.type === "radio" && element.tagName !== "FIELDSET") {
-          const radioGroup = element.closest('fieldset[role="radiogroup"]');
-          if (radioGroup) {
-            fieldInfo.element = radioGroup;
-          }
-        }
-
-        if (fieldInfo.label) {
-          fields.push(fieldInfo);
-        }
-      }
-
-      // Deduplicate fields - particularly important for radio groups
-      const uniqueFields = [];
-      const seenLabels = new Set();
-
-      for (const field of fields) {
-        if (field.type === "radio") {
-          if (!seenLabels.has(field.label)) {
-            seenLabels.add(field.label);
-            uniqueFields.push(field);
-          }
-        } else {
-          uniqueFields.push(field);
-        }
-      }
-
-      this.logger(`Processed ${uniqueFields.length} unique form fields`);
-      return uniqueFields;
-    } catch (error) {
-      this.logger(`Error getting form fields: ${error.message}`);
-      return [];
-    }
+    return DomUtils.findForm(ashbyApplicationSelectors);
   }
 
   /**
@@ -412,58 +367,6 @@ export class AshbyFormHandler {
       } else {
         return "I prefer not to answer";
       }
-    }
-  }
-
-  /**
-   * Fill a form field with the appropriate value
-   */
-  async fillField(element, value) {
-    try {
-      if (!element || value === undefined || value === null) {
-        return false;
-      }
-
-      const fieldType = this.getFieldType(element);
-      this.logger(`Filling ${fieldType} field with value: ${value}`);
-
-      switch (fieldType) {
-        case "text":
-        case "email":
-        case "tel":
-        case "url":
-        case "number":
-        case "password":
-          return await this.fillInputField(element, value);
-
-        case "textarea":
-          return await this.fillTextareaField(element, value);
-
-        case "select":
-          return await this.fillSelectField(element, value);
-
-        case "phone":
-          return await this.fillPhoneField(element, value);
-
-        case "checkbox":
-          return await this.fillCheckboxField(element, value);
-
-        case "radio":
-          return await this.fillRadioField(element, value);
-
-        case "date":
-          return await this.fillDateField(element, value);
-
-        case "file":
-          return false; // File uploads handled separately
-
-        default:
-          this.logger(`Unsupported field type: ${fieldType}`);
-          return false;
-      }
-    } catch (error) {
-      this.logger(`Error filling field: ${error.message}`);
-      return false;
     }
   }
 
@@ -1024,6 +927,7 @@ export class AshbyFormHandler {
       this.logger("Attempting to submit form");
 
       const submitButton = this.findSubmitButton(form);
+      console.log();
       if (!submitButton) {
         this.logger("No submit button found");
         return false;
@@ -1052,56 +956,6 @@ export class AshbyFormHandler {
       this.logger(`Error submitting form: ${error.message}`);
       return false;
     }
-  }
-
-  /**
-   * Find submit button
-   */
-  findSubmitButton(form) {
-    const submitSelectors = [
-      'button[type="submit"]',
-      'input[type="submit"]',
-      "button.submit-button",
-      "button.submit",
-      "button.apply-button",
-      "button.apply",
-      "button.btn-primary",
-      "button.btn-success",
-      ".btn.btn-primary",
-      ".btn.btn-success",
-      'button[data-testid="submit-application"]',
-      ".application-submit",
-    ];
-
-    for (const selector of submitSelectors) {
-      const buttons = form.querySelectorAll(selector);
-      if (buttons.length) {
-        for (const btn of buttons) {
-          if (this.isElementVisible(btn) && !btn.disabled) {
-            return btn;
-          }
-        }
-      }
-    }
-
-    // Look for buttons with submit-like text
-    const allButtons = form.querySelectorAll('button, input[type="button"]');
-    for (const btn of allButtons) {
-      if (!this.isElementVisible(btn) || btn.disabled) continue;
-
-      const text = btn.textContent.toLowerCase();
-      if (
-        text.includes("submit") ||
-        text.includes("apply") ||
-        text.includes("send") ||
-        text.includes("continue") ||
-        text === "next"
-      ) {
-        return btn;
-      }
-    }
-
-    return null;
   }
 
   /**
@@ -1137,5 +991,302 @@ export class AshbyFormHandler {
 
   wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Get all form fields from an Ashby application form
+   */
+  getAllFormFields(form) {
+    try {
+      this.logger("Finding all form fields in Ashby form");
+
+      const fields = [];
+
+      // Ashby-specific field entry selector
+      const fieldEntries = form.querySelectorAll(
+        "._fieldEntry_hkyf8_29, .ashby-application-form-field-entry"
+      );
+
+      this.logger(`Found ${fieldEntries.length} Ashby field entries`);
+
+      for (const fieldEntry of fieldEntries) {
+        if (!this.isElementVisible(fieldEntry)) continue;
+
+        // Get the label from Ashby's structure
+        const label = fieldEntry.querySelector(
+          "._heading_101oc_53, .ashby-application-form-question-title"
+        );
+        if (!label) continue;
+
+        const labelText = this.cleanLabelText(label.textContent);
+        if (!labelText) continue;
+
+        // Determine field type and get element
+        const fieldInfo = this.getAshbyFieldInfo(fieldEntry, labelText);
+        if (fieldInfo) {
+          fields.push(fieldInfo);
+        }
+      }
+
+      this.logger(`Processed ${fields.length} Ashby form fields`);
+      return fields;
+    } catch (error) {
+      this.logger(`Error getting Ashby form fields: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get field information for Ashby-specific field structure
+   */
+  getAshbyFieldInfo(fieldEntry, labelText) {
+    try {
+      // Check for file upload field
+      const fileInput = fieldEntry.querySelector('input[type="file"]');
+      if (fileInput) {
+        return {
+          element: fieldEntry, // Use the container for file uploads
+          label: labelText,
+          type: "file",
+          required: this.isAshbyFieldRequired(fieldEntry),
+          ashbyType: "file-upload",
+        };
+      }
+
+      // Check for Yes/No button group
+      const yesNoContainer = fieldEntry.querySelector(
+        "._container_y2cw4_29, ._yesno_hkyf8_143"
+      );
+      if (yesNoContainer) {
+        return {
+          element: yesNoContainer,
+          label: labelText,
+          type: "yesno",
+          required: this.isAshbyFieldRequired(fieldEntry),
+          ashbyType: "yes-no-buttons",
+        };
+      }
+
+      // Check for regular input fields
+      const input = fieldEntry.querySelector(
+        'input[type="text"], input[type="email"], textarea'
+      );
+      if (input) {
+        return {
+          element: input,
+          label: labelText,
+          type:
+            input.tagName.toLowerCase() === "textarea"
+              ? "textarea"
+              : input.type,
+          required: this.isAshbyFieldRequired(fieldEntry),
+          ashbyType: "standard-input",
+        };
+      }
+
+      return null;
+    } catch (error) {
+      this.logger(`Error getting Ashby field info: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Check if Ashby field is required
+   */
+  isAshbyFieldRequired(fieldEntry) {
+    // Check for required class on label
+    const label = fieldEntry.querySelector(
+      "._heading_101oc_53, .ashby-application-form-question-title"
+    );
+    if (
+      label &&
+      (label.classList.contains("_required_101oc_92") ||
+        label.textContent.includes("*"))
+    ) {
+      return true;
+    }
+
+    // Check for required attribute on input
+    const input = fieldEntry.querySelector("input, textarea");
+    if (
+      input &&
+      (input.required || input.getAttribute("aria-required") === "true")
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Fill a form field with the appropriate value - Ashby specific
+   */
+  async fillField(element, value) {
+    try {
+      if (!element || value === undefined || value === null) {
+        return false;
+      }
+
+      // Handle based on Ashby field type
+      const fieldEntry =
+        element.closest("._fieldEntry_hkyf8_29") ||
+        element.closest(".ashby-application-form-field-entry");
+      if (!fieldEntry) {
+        return await this.fillStandardField(element, value);
+      }
+
+      // Check if this is a file upload field
+      if (
+        element.querySelector &&
+        element.querySelector('input[type="file"]')
+      ) {
+        this.logger(`Skipping file upload field - handled separately`);
+        return true; // File uploads are handled by the file handler
+      }
+
+      // Check if this is a Yes/No button group
+      if (
+        element.classList.contains("_container_y2cw4_29") ||
+        element.querySelector("._option_y2cw4_33")
+      ) {
+        return await this.fillAshbyYesNoField(element, value);
+      }
+
+      // Handle standard input/textarea
+      const input =
+        element.tagName === "INPUT" || element.tagName === "TEXTAREA"
+          ? element
+          : fieldEntry.querySelector("input, textarea");
+
+      if (input) {
+        return await this.fillAshbyInputField(input, value);
+      }
+
+      return false;
+    } catch (error) {
+      this.logger(`Error filling Ashby field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Fill Ashby Yes/No button field
+   */
+  async fillAshbyYesNoField(container, value) {
+    try {
+      this.logger(`Filling Ashby Yes/No field with value: ${value}`);
+
+      const valueStr = String(value).toLowerCase();
+      const shouldSelectYes =
+        valueStr === "yes" ||
+        valueStr === "true" ||
+        valueStr.includes("yes") ||
+        valueStr.includes("authorized");
+
+      // Find Yes and No buttons
+      const buttons = container.querySelectorAll("._option_y2cw4_33, button");
+      let yesButton = null;
+      let noButton = null;
+
+      for (const button of buttons) {
+        const buttonText = button.textContent.trim().toLowerCase();
+        if (buttonText === "yes") {
+          yesButton = button;
+        } else if (buttonText === "no") {
+          noButton = button;
+        }
+      }
+
+      if (!yesButton || !noButton) {
+        this.logger(`Could not find Yes/No buttons in container`);
+        return false;
+      }
+
+      const targetButton = shouldSelectYes ? yesButton : noButton;
+      this.logger(`Clicking ${shouldSelectYes ? "Yes" : "No"} button`);
+
+      this.scrollToElement(targetButton);
+      targetButton.click();
+      await this.wait(300);
+
+      return true;
+    } catch (error) {
+      this.logger(`Error filling Ashby Yes/No field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Fill Ashby input field (text, email, textarea)
+   */
+  async fillAshbyInputField(input, value) {
+    try {
+      this.scrollToElement(input);
+      input.focus();
+      await this.wait(100);
+
+      // Clear existing value
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await this.wait(50);
+
+      // Set new value
+      input.value = String(value);
+
+      // Trigger Ashby-specific events
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      await this.wait(200);
+      this.logger(`Successfully filled Ashby input: ${input.name || input.id}`);
+      return true;
+    } catch (error) {
+      this.logger(`Error filling Ashby input field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Find submit button in Ashby form
+   */
+  findSubmitButton(form) {
+    const selectors = [
+      'button[type="submit"]',
+      'input[type="submit"]',
+      '._button_8wvgw_29[type="submit"]',
+      '.ashby-application-form button[type="submit"]',
+      ".ashby-application-form-submit",
+      ".ashby-application-form-submit-button",
+      "button._primary_8wvgw_86",
+    ];
+
+    for (const selector of selectors) {
+      const button =
+        form?.querySelector(selector) || document.querySelector(selector);
+      if (button && this.isElementVisible(button) && !button.disabled) {
+        return button;
+      }
+    }
+
+    const allButtons =
+      form?.querySelectorAll("button, ._button_8wvgw_29") ||
+      document.querySelectorAll("button, ._button_8wvgw_29");
+    for (const btn of allButtons) {
+      if (!this.isElementVisible(btn) || btn.disabled) continue;
+
+      const text = btn.textContent.toLowerCase();
+      if (
+        text.includes("submit") ||
+        text.includes("apply") ||
+        text.includes("send application") ||
+        text.includes("complete application")
+      ) {
+        return btn;
+      }
+    }
+
+    return null;
   }
 }

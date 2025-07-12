@@ -1,4 +1,5 @@
 // platforms/ashby/ashby-file-handler.js
+// handleFileUploads
 export class AshbyFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
@@ -16,6 +17,9 @@ export class AshbyFileHandler {
   /**
    * Handle all file uploads in the form with duplicate prevention
    */
+  /**
+   * Handle all file uploads in the form with enhanced debugging
+   */
   async handleFileUploads(form, userDetails, jobDescription) {
     try {
       if (!form) {
@@ -28,6 +32,15 @@ export class AshbyFileHandler {
         return false;
       }
 
+      console.log("👤 User details structure:", {
+        hasResumeUrl: !!userDetails.resumeUrl,
+        hasResumeUrls: !!userDetails.resumeUrls,
+        resumeUrlsType: typeof userDetails.resumeUrls,
+        resumeUrlsLength: userDetails.resumeUrls?.length,
+        hasCoverLetterUrl: !!userDetails.coverLetterUrl,
+        userName: userDetails.name || userDetails.firstName,
+      });
+
       // Find all file input fields
       const fileInputs = form.querySelectorAll('input[type="file"]');
 
@@ -35,6 +48,8 @@ export class AshbyFileHandler {
         this.showStatus("No file input fields found", "info");
         return true;
       }
+
+      console.log(`📁 Found ${fileInputs.length} file input(s)`);
 
       let uploadCount = 0;
       let successCount = 0;
@@ -46,7 +61,10 @@ export class AshbyFileHandler {
           continue;
         }
 
-        if (!this.isFileInputAccessible(fileInput)) continue;
+        if (!this.isFileInputAccessible(fileInput)) {
+          console.log(`⏭️ Skipping inaccessible input: ${inputId}`);
+          continue;
+        }
 
         uploadCount++;
         this.processedInputs.add(inputId);
@@ -71,6 +89,7 @@ export class AshbyFileHandler {
             );
           }
         } catch (error) {
+          console.error(`❌ File upload ${uploadCount} failed:`, error);
           this.showStatus(
             `File upload ${uploadCount} failed: ${error.message}`,
             "warning"
@@ -89,6 +108,7 @@ export class AshbyFileHandler {
 
       return successCount > 0;
     } catch (error) {
+      console.error("❌ File upload process failed:", error);
       this.showStatus("File upload process failed: " + error.message, "error");
       return false;
     }
@@ -109,15 +129,34 @@ export class AshbyFileHandler {
   }
 
   /**
-   * Handle a single file upload field
+   * Handle a single file upload field - Ashby specific
    */
   async handleSingleFileUpload(fileInput, userDetails, jobDescription) {
     try {
+      console.log("🔍 Processing Ashby file upload field:", {
+        inputId: fileInput.id,
+        inputName: fileInput.name,
+        isHidden: fileInput.style.display === "none",
+      });
+
       const fileType = this.determineFileType(fileInput);
-      const fileUrls = this.getFileUrls(userDetails, fileType);
+      let fileUrls = this.getFileUrls(userDetails, fileType);
+
+      console.log("📋 File URLs retrieved:", {
+        fileType,
+        urlCount: fileUrls.length,
+        firstUrl: fileUrls[0]?.substring(0, 100) + "..." || "No URLs",
+      });
 
       if (!fileUrls || fileUrls.length === 0) {
         this.showStatus(`No ${fileType} files available`, "warning");
+        return false;
+      }
+
+      // Ensure we have valid URLs (not nested arrays)
+      if (typeof fileUrls[0] !== "string") {
+        console.error("❌ File URLs are not strings:", fileUrls);
+        this.showStatus(`Invalid file URL format for ${fileType}`, "error");
         return false;
       }
 
@@ -139,11 +178,11 @@ export class AshbyFileHandler {
         return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
       }
     } catch (error) {
+      console.error("❌ Error in handleSingleFileUpload:", error);
       this.showStatus("Single file upload failed: " + error.message, "error");
       return false;
     }
   }
-
   /**
    * Handle resume upload with AI optimization
    */
@@ -397,7 +436,106 @@ export class AshbyFileHandler {
   }
 
   /**
-   * Upload blob to file input
+   * Wait for Ashby upload process to complete
+   */
+  async waitForAshbyUploadProcess(fileInput, container, timeout = 30000) {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      let checkCount = 0;
+
+      const checkUpload = () => {
+        checkCount++;
+        const elapsed = Date.now() - startTime;
+
+        console.log(
+          `🔍 Checking Ashby upload progress (attempt ${checkCount})`
+        );
+
+        // Check if files are set on the input
+        if (fileInput.files && fileInput.files.length > 0) {
+          console.log("✅ Files are set on input:", fileInput.files[0].name);
+
+          // Look for success indicators in Ashby's structure
+          if (container) {
+            // Check if upload button text changed
+            const uploadButton = container.querySelector("button");
+            if (uploadButton) {
+              const buttonText = uploadButton.textContent.toLowerCase();
+              console.log("📝 Upload button text:", buttonText);
+
+              if (
+                buttonText.includes("uploaded") ||
+                buttonText.includes("selected") ||
+                buttonText.includes(fileInput.files[0].name.toLowerCase())
+              ) {
+                console.log("✅ Upload button shows success state");
+                resolve(true);
+                return;
+              }
+            }
+
+            // Check for filename display
+            const fileNameDisplay = container.querySelector(
+              '[class*="fileName"], [class*="file-name"], .uploaded-file'
+            );
+            if (fileNameDisplay && fileNameDisplay.textContent.trim()) {
+              console.log(
+                "✅ File name displayed:",
+                fileNameDisplay.textContent
+              );
+              resolve(true);
+              return;
+            }
+
+            // Check for any success indicators
+            const successElements = container.querySelectorAll(
+              '[class*="success"], [class*="uploaded"], [class*="complete"]'
+            );
+            if (successElements.length > 0) {
+              console.log("✅ Found success indicators");
+              resolve(true);
+              return;
+            }
+          }
+
+          // If we have files but no visual confirmation after reasonable time, assume success
+          if (elapsed > 10000) {
+            console.log(
+              "✅ Assuming upload success after 10 seconds with files present"
+            );
+            resolve(true);
+            return;
+          }
+        }
+
+        // Check for error indicators
+        if (container) {
+          const errorElements = container.querySelectorAll(
+            '[class*="error"], [class*="failed"]'
+          );
+          if (errorElements.length > 0) {
+            console.log("❌ Found error indicators");
+            resolve(false);
+            return;
+          }
+        }
+
+        if (elapsed > timeout) {
+          console.log("⏰ Upload timeout reached");
+          // If files are present, assume partial success
+          resolve(fileInput.files && fileInput.files.length > 0);
+          return;
+        }
+
+        setTimeout(checkUpload, 1000);
+      };
+
+      checkUpload();
+    });
+  }
+
+  /**
+   * Upload blob to Ashby file input (handles hidden inputs)
    */
   async uploadBlob(fileInput, blob, originalFileName) {
     try {
@@ -412,25 +550,87 @@ export class AshbyFileHandler {
         lastModified: Date.now(),
       });
 
+      console.log("📎 Uploading to Ashby file input:", {
+        fileName: cleanFileName,
+        fileSize: file.size,
+        inputId: fileInput.id,
+        isHidden: fileInput.style.display === "none",
+      });
+
+      // Find the file input container
+      const container =
+        fileInput.closest("._container_6k3nb_71") ||
+        fileInput.closest("._fieldEntry_hkyf8_29") ||
+        fileInput.parentElement;
+
+      // Create DataTransfer and set files on the hidden input
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(file);
-
       fileInput.files = dataTransfer.files;
 
+      console.log(
+        "✅ File set on hidden input, files length:",
+        fileInput.files.length
+      );
+
+      // Dispatch events on the hidden file input
       await this.dispatchFileEvents(fileInput);
 
-      const uploadSuccess = await this.waitForUploadProcess(fileInput);
+      // For Ashby, we need to simulate the file being selected through their custom UI
+      // Try to trigger their custom file handler
+      if (container) {
+        // Look for the custom upload button
+        const uploadButton = container.querySelector(
+          '._button_6k3nb_107, button[class*="button"]'
+        );
+
+        if (
+          uploadButton &&
+          uploadButton.textContent.toLowerCase().includes("upload")
+        ) {
+          console.log(
+            "🔘 Found Ashby upload button, simulating file selection"
+          );
+
+          // Create a custom event to simulate file selection
+          const changeEvent = new Event("change", { bubbles: true });
+          Object.defineProperty(changeEvent, "target", {
+            writable: false,
+            value: fileInput,
+          });
+
+          // Dispatch on the container to trigger Ashby's handlers
+          container.dispatchEvent(changeEvent);
+          await this.wait(500);
+        }
+
+        // Also try triggering drop event in case Ashby listens for that
+        const dropEvent = new DragEvent("drop", {
+          bubbles: true,
+          dataTransfer: dataTransfer,
+        });
+        container.dispatchEvent(dropEvent);
+        await this.wait(200);
+      }
+
+      // Wait for Ashby's upload processing
+      const uploadSuccess = await this.waitForAshbyUploadProcess(
+        fileInput,
+        container
+      );
 
       if (uploadSuccess) {
-        console.log(`✅ Successfully uploaded: ${cleanFileName}`);
+        console.log(`✅ Successfully uploaded to Ashby: ${cleanFileName}`);
+        this.showStatus(`File uploaded: ${cleanFileName}`, "success");
       } else {
-        console.warn(`⚠️ Upload may have failed: ${cleanFileName}`);
+        console.warn(`⚠️ Ashby upload may have failed: ${cleanFileName}`);
+        this.showStatus(`Upload may have failed: ${cleanFileName}`, "warning");
       }
 
       return uploadSuccess;
     } catch (error) {
-      console.error("❌ Error uploading blob:", error);
-      this.showStatus("Blob upload failed: " + error.message, "error");
+      console.error("❌ Error uploading to Ashby:", error);
+      this.showStatus("Ashby upload failed: " + error.message, "error");
       return false;
     }
   }
@@ -581,41 +781,52 @@ export class AshbyFileHandler {
   }
 
   /**
-   * Dispatch file events on input element
+   * Enhanced dispatch file events for Ashby
    */
   async dispatchFileEvents(fileInput) {
     try {
+      console.log("🎯 Dispatching Ashby file events");
+
+      // Standard file events
       const changeEvent = new Event("change", { bubbles: true });
       fileInput.dispatchEvent(changeEvent);
 
       const inputEvent = new Event("input", { bubbles: true });
       fileInput.dispatchEvent(inputEvent);
 
-      const blurEvent = new Event("blur", { bubbles: true });
-      fileInput.dispatchEvent(blurEvent);
+      // Focus/blur cycle
+      try {
+        fileInput.focus();
+        await this.wait(50);
+        fileInput.blur();
+      } catch (e) {
+        // Hidden inputs can't be focused, that's ok
+      }
 
-      fileInput.focus();
-      await this.wait(50);
-      fileInput.blur();
+      // Additional events that Ashby might listen for
+      const loadEvent = new Event("load", { bubbles: true });
+      fileInput.dispatchEvent(loadEvent);
 
       await this.wait(100);
+      console.log("✅ Ashby file events dispatched");
     } catch (error) {
-      console.error("❌ Error dispatching file events:", error);
+      console.error("❌ Error dispatching Ashby file events:", error);
     }
   }
 
   /**
-   * Check if file input is accessible
+   * Check if file input is accessible (handles Ashby hidden inputs)
    */
   isFileInputAccessible(fileInput) {
     if (!fileInput) return false;
 
-    // For Ashby's file inputs
-    if (
-      fileInput.classList.contains("file-input") ||
-      fileInput.closest(".file-upload")
-    ) {
-      return !fileInput.disabled && fileInput.offsetParent !== null;
+    // For Ashby, the file input is hidden but still functional
+    if (fileInput.style.display === "none" && fileInput.type === "file") {
+      // Check if the container is visible
+      const container =
+        fileInput.closest("._container_6k3nb_71") ||
+        fileInput.closest("._fieldEntry_hkyf8_29");
+      return container && this.isElementVisible(container);
     }
 
     return this.isElementVisible(fileInput);
@@ -720,21 +931,60 @@ export class AshbyFileHandler {
   }
 
   /**
-   * Get file URLs from user details
+   * Get file URLs from user details with enhanced debugging
    */
   getFileUrls(userDetails, fileType) {
+    let urls = [];
+
     switch (fileType) {
       case "resume":
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        if (userDetails.resumeUrl) {
+          urls = [userDetails.resumeUrl];
+        } else if (userDetails.resumeUrls) {
+          urls = userDetails.resumeUrls;
+        }
+        break;
+
       case "coverLetter":
-        return userDetails.coverLetterUrl ? [userDetails.coverLetterUrl] : [];
+        if (userDetails.coverLetterUrl) {
+          urls = [userDetails.coverLetterUrl];
+        }
+        break;
+
       default:
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        if (userDetails.resumeUrl) {
+          urls = [userDetails.resumeUrl];
+        } else if (userDetails.resumeUrls) {
+          urls = userDetails.resumeUrls;
+        }
+        break;
     }
+
+    // Flatten nested arrays - handle case where resumeUrls contains arrays
+    const flattenUrls = (arr) => {
+      if (!Array.isArray(arr)) return [];
+
+      const result = [];
+      for (const item of arr) {
+        if (Array.isArray(item)) {
+          result.push(...flattenUrls(item)); // Recursively flatten
+        } else if (typeof item === "string" && item.trim()) {
+          result.push(item.trim());
+        }
+      }
+      return result;
+    };
+
+    const flatUrls = flattenUrls(urls);
+
+    console.log("📎 File URLs processed:", {
+      fileType,
+      originalUrls: urls,
+      flattenedUrls: flatUrls,
+      count: flatUrls.length,
+    });
+
+    return flatUrls;
   }
 
   /**

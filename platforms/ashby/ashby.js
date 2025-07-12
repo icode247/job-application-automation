@@ -1,4 +1,5 @@
 // platforms/ashby/ashby.js
+//No submit button found
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { AshbyFormHandler } from "./ashby-form-handler.js";
 import { AshbyFileHandler } from "./ashby-file-handler.js";
@@ -259,8 +260,11 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     );
   }
 
+  /**
+   * Check if we're on the application page
+   */
   isApplicationPage(url) {
-    return this.isValidJobPage(url);
+    return url.includes("/application") || super.isApplicationPage(url);
   }
 
   getJobTaskMessageType() {
@@ -612,6 +616,85 @@ export default class AshbyPlatform extends BasePlatformAutomation {
   // ========================================
   // ASHBY-SPECIFIC FORM HANDLING
   // ========================================
+  /**
+   * Wait for URL to change and contain expected path
+   */
+  async waitForUrlChange(originalUrl, expectedPath, timeout = 10000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      await this.wait(500);
+
+      const currentUrl = window.location.href;
+
+      // Check if URL changed and contains expected path
+      if (currentUrl !== originalUrl && currentUrl.includes(expectedPath)) {
+        console.log(`✅ URL changed to: ${currentUrl}`);
+        return true;
+      }
+    }
+
+    console.warn(
+      `⚠️ URL did not change to contain '${expectedPath}' within ${timeout}ms`
+    );
+    return false;
+  }
+
+  /**
+   * Navigate to the Application tab
+   */
+  async navigateToApplicationTab() {
+    try {
+      this.statusOverlay.addInfo("Looking for Application tab...");
+
+      // Find the Application tab using multiple selectors
+      const applicationTab =
+        document.querySelector("#job-application-form") ||
+        document.querySelector('a[href*="/application"]') ||
+        document
+          .querySelector(".ashby-job-posting-right-pane-application-tab")
+          ?.closest("a") ||
+        Array.from(document.querySelectorAll('a[role="tab"]')).find((tab) =>
+          tab.textContent.toLowerCase().includes("application")
+        );
+
+      if (!applicationTab) {
+        this.statusOverlay.addWarning("Application tab not found");
+        return false;
+      }
+
+      this.statusOverlay.addInfo("Found Application tab, clicking...");
+
+      // Get current URL to detect navigation
+      const currentUrl = window.location.href;
+
+      // Click the Application tab
+      applicationTab.click();
+
+      // Wait for navigation to complete
+      const navigationSuccess = await this.waitForUrlChange(
+        currentUrl,
+        "/application",
+        10000
+      );
+
+      if (!navigationSuccess) {
+        this.statusOverlay.addWarning(
+          "URL did not change to application page, continuing anyway..."
+        );
+        // Give it a bit more time and continue
+        await this.wait(2000);
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Error navigating to Application tab:", error);
+      this.statusOverlay.addError(
+        "Error navigating to Application tab: " + error.message
+      );
+      return false;
+    }
+  }
 
   async apply() {
     try {
@@ -631,24 +714,28 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       // Wait for page to fully load
       await this.wait(3000);
 
-      // Check if we're on a job details page or application form page
-      const applyButton = document.querySelector(
-        'button[type="submit"], button.submit-button, .apply-button, [data-testid="apply-button"]'
-      );
-      if (applyButton) {
-        this.statusOverlay.addInfo("Found apply button, clicking it");
-        applyButton.click();
-        await this.wait(3000);
+      // Extract job description from Overview tab (current page)
+      const jobDescription = this.extractJobDescription();
+      this.statusOverlay.addInfo("Job description extracted from Overview tab");
+
+      // Navigate to Application tab
+      const applicationTabNavigated = await this.navigateToApplicationTab();
+      if (!applicationTabNavigated) {
+        throw new SkipApplicationError(
+          "Cannot find or navigate to Application tab"
+        );
       }
+
+      this.statusOverlay.addInfo("Successfully navigated to Application tab");
+
+      // Wait for application page to load
+      await this.wait(2000);
 
       // Find application form
       const form = this.findApplicationForm();
       if (!form) {
         throw new SkipApplicationError("Cannot find Ashby application form");
       }
-
-      // Extract job description
-      const jobDescription = this.extractJobDescription();
 
       // Process the form
       const result = await this.processApplicationForm(
@@ -758,41 +845,99 @@ export default class AshbyPlatform extends BasePlatformAutomation {
   // ASHBY-SPECIFIC UTILITY METHODS
   // ========================================
 
+  /**
+ * Check if element is visible - Ashby specific
+ */
+isElementVisible(element) {
+    if (!element) return false;
+  
+    try {
+      const style = window.getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        element.offsetParent !== null
+      );
+    } catch (error) {
+      return true; // Default to true on error
+    }
+  }
+
+  /**
+   * Find Ashby application form
+   */
   findApplicationForm() {
     // Ashby-specific form selectors
     const ashbySelectors = [
-      "form.application-form",
-      "form#application-form",
-      'form[data-testid="application-form"]',
-      'form[action*="apply"]',
-      ".application-form form",
-      "form[role='form']",
+      "._jobPostingForm_oj0x8_399",
+      ".ashby-application-form-container",
+      ".ashby-application-form",
+      'form[class*="ashby"]',
+      'div[class*="jobPostingForm"]',
     ];
 
-    return DomUtils.findForm(ashbySelectors);
+    // Try Ashby-specific selectors first
+    for (const selector of ashbySelectors) {
+      const formContainer = document.querySelector(selector);
+      if (formContainer && this.isElementVisible(formContainer)) {
+        return formContainer;
+      }
+    }
+
+    // Fallback to generic form detection
+    return DomUtils.findForm([]);
   }
 
+  /**
+   * Enhanced job description extraction from Overview tab
+   */
   extractJobDescription() {
+    // Ashby-specific description selectors for Overview tab
     const ashbyDescriptionSelectors = [
+      ".ashby-job-posting-overview",
       ".job-description",
       ".description",
       ".job-posting-description",
-      "[data-testid='job-description']",
+      '[data-testid="job-description"]',
       ".job-details",
       ".content",
+      ".ashby-job-posting-content",
+      // More specific Ashby selectors
+      ".ashby-job-posting-overview-section",
+      ".overview-content",
     ];
 
     let description = DomUtils.extractText(ashbyDescriptionSelectors);
 
+    // If no description found with specific selectors, try broader approach
+    if (!description) {
+      // Look for the overview tab content specifically
+      const overviewTab =
+        document.querySelector("#overview") ||
+        document
+          .querySelector('[aria-controls="overview"]')
+          ?.getAttribute("aria-controls");
+
+      if (overviewTab) {
+        const overviewContent = document.getElementById(overviewTab);
+        if (overviewContent) {
+          description = overviewContent.textContent.trim();
+        }
+      }
+    }
+
+    // Fallback to main content area
     if (!description) {
       const mainContent = document.querySelector(
-        "main, #content, .content, .job-content"
+        "main, #content, .content, .job-content, .ashby-job-posting"
       );
       if (mainContent) {
         description = mainContent.textContent.trim();
       }
     }
 
+    // Final fallback using job title and company
     if (!description) {
       const jobTitle = document.title || "";
       const companyName =
@@ -800,6 +945,9 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       description = `Job: ${jobTitle} at ${companyName}`;
     }
 
+    console.log(
+      `📋 Extracted job description (${description.length} characters)`
+    );
     return description;
   }
 
