@@ -1,5 +1,5 @@
 // core/automation-orchestrator.js
-//buildIndeedUrl
+//buildStartingUrl
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
 
@@ -257,9 +257,30 @@ export default class AutomationOrchestrator {
         return this.buildBreezyUrl(preferences);
       case "ashby":
         return this.buildAshbyUrl(preferences);
+
+      case "workable":
+        return this.buildWorkableUrl(preferences);
       default:
         return this.buildGenericSearchUrl(preferences);
     }
+  }
+
+  buildWorkableUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ")
+      : "software engineer";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` "${preferences.location[0]}"`
+        : "";
+    const remoteKeyword =
+      preferences.remoteOnly || preferences.workMode?.includes("Remote")
+        ? " remote"
+        : "";
+
+    return `https://www.google.com/search?q=site:workable.com+"${encodeURIComponent(
+      keywords
+    )}"${location}${remoteKeyword}`;
   }
 
   buildAshbyUrl(preferences) {

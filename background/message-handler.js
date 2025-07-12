@@ -9,6 +9,7 @@ import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
 import AshbyAutomationHandler from "./platforms/ashby.js";
 import IndeedAutomationHandler from "./platforms/indeed.js";
 import GlassdoorAutomationHandler from "./platforms/glassdoor.js";
+import WorkableAutomationHandler from "./platforms/workable.js";
 
 //getPlatformLinkPattern
 export default class MessageHandler {
@@ -185,7 +186,7 @@ export default class MessageHandler {
         apiHost = "http://localhost:3000",
       } = request;
 
-      const platformHandler = this.initializePlatformHandler(platform);
+      const platformHandler = this.getPlatformDomains(platform);
       if (!platformHandler) {
         sendResponse({
           status: "error",
@@ -406,7 +407,7 @@ export default class MessageHandler {
     };
   }
 
-  initializePlatformHandler(platform) {
+  getPlatformDomains(platform) {
     if (this.platformHandlers.has(platform)) {
       return this.platformHandlers.get(platform);
     }

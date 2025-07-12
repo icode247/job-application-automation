@@ -365,6 +365,7 @@ class ContentScriptManager {
     if (url.includes("greenhouse.io")) return "greenhouse";
     if (url.includes("workable.com")) return "workable";
     if (url.includes("ashbyhq.com")) return "ashby";
+    if (url.includes("workable.com")) return "workable";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
@@ -510,6 +511,12 @@ class ContentScriptManager {
             "../platforms/lever/lever.js"
           );
           return LeverPlatform;
+
+        case "workable":
+          const { default: WorkablePlatform } = await import(
+            "../platforms/workable/workable.js"
+          );
+          return WorkablePlatform;
 
         case "breezy":
           const { default: BreezyPlatform } = await import(

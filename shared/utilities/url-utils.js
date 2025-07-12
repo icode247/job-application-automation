@@ -1,5 +1,4 @@
 // shared/utilities/url-utils.js
-//getPlatformDomains
 export class UrlUtils {
   /**
    * Normalize URL for consistent comparison
@@ -67,6 +66,13 @@ export class UrlUtils {
           return glassdoorMatches &&
             (glassdoorMatches[2] || glassdoorMatches[3])
             ? glassdoorMatches[2] || glassdoorMatches[3]
+            : `job-${Date.now()}`;
+
+        case "workable":
+          // Workable format: company.workable.com/j/[JOB_ID] or company.workable.com/jobs/[JOB_ID]
+          const workableMatches = url.match(/\/(j|jobs)\/([^\/\?]+)/);
+          return workableMatches && workableMatches[2]
+            ? workableMatches[2]
             : `job-${Date.now()}`;
         default:
           return `job-${Date.now()}`;
