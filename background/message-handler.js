@@ -7,7 +7,10 @@ import LinkedInAutomationHandler from "./platforms/linkedin.js";
 import BreezyAutomationHandler from "./platforms/breezy.js";
 import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
 import AshbyAutomationHandler from "./platforms/ashby.js";
-//validateStartApplyingRequest
+import IndeedAutomationHandler from "./platforms/indeed.js";
+import GlassdoorAutomationHandler from "./platforms/glassdoor.js";
+
+//getPlatformLinkPattern
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -436,6 +439,13 @@ export default class MessageHandler {
       case "ashby":
         handler = new AshbyAutomationHandler(this);
         break;
+
+      case "indeed":
+        handler = new IndeedAutomationHandler(this);
+        break;
+      case "glassdoor":
+        handler = new GlassdoorAutomationHandler(this);
+        break;
       default:
         console.error(`❌ Unsupported platform: ${platform}`);
         return null;
@@ -611,6 +621,8 @@ export default class MessageHandler {
       breezy: ["breezy.hr", "app.breezy.hr"],
       ziprecruiter: ["https://www.ziprecruiter.com"],
       ashby: ["ashbyhq.com", "jobs.ashbyhq.com"],
+      indeed: ["https://www.indeed.com", "https://smartapply.indeed.com"],
+      glassdoor: ["https://www.glassdoor.com"],
     };
 
     return domainMap[platform] || [];
@@ -631,6 +643,9 @@ export default class MessageHandler {
         /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/,
       ashby:
         /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)\/?.*$/,
+      indeed: /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply).*$/,
+      glassdoor:
+        /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply).*$/,
     };
 
     return patternMap[platform] || null;

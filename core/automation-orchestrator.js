@@ -1,5 +1,5 @@
 // core/automation-orchestrator.js
-//buildStartingUrl
+//buildIndeedUrl
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
 

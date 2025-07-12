@@ -713,35 +713,6 @@ export default class IndeedPlatform extends BasePlatformAutomation {
     return alreadyAppliedTexts.some((text) => pageText.includes(text));
   }
 
-  async handleAlreadyApplied() {
-    const jobId = UrlUtils.extractJobId(window.location.href, "indeed");
-    const jobDetails = await this.extractIndeedJobDescription();
-
-    this.safeSendPortMessage({
-      type: "applicationCompleted",
-      data: {
-        jobId: jobId,
-        title: jobDetails.title || "Job on Indeed",
-        company: jobDetails.company || "Company on Indeed",
-        location: jobDetails.location || "Not specified",
-        jobUrl: window.location.href,
-        platform: "indeed",
-      },
-    });
-
-    this.applicationState.isApplicationInProgress = false;
-    this.statusOverlay.addSuccess("Application completed successfully");
-  }
-
-  handleApplicationError(error) {
-    this.statusOverlay.addError("Application error: " + error.message);
-    this.safeSendPortMessage({
-      type: "applicationError",
-      data: this.errorToString(error),
-    });
-    this.applicationState.isApplicationInProgress = false;
-  }
-
   validateHandlers() {
     const issues = [];
 
@@ -880,5 +851,193 @@ export default class IndeedPlatform extends BasePlatformAutomation {
     this.processedJobCards.clear();
     this.cachedJobDescription = null;
     this.log("🧹 Indeed-specific cleanup completed");
+  }
+
+  async setSessionContext(sessionContext) {
+    try {
+      this.sessionContext = sessionContext;
+      this.hasSessionContext = true;
+
+      // Update basic properties
+      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
+      if (sessionContext.platform) this.platform = sessionContext.platform;
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+
+      // Set user profile with priority handling
+      if (sessionContext.userProfile) {
+        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
+          this.userProfile = sessionContext.userProfile;
+          console.log("👤 User profile loaded from session context");
+        } else {
+          // Merge profiles, preferring non-null values
+          this.userProfile = {
+            ...this.userProfile,
+            ...sessionContext.userProfile,
+          };
+          console.log("👤 User profile merged with session context");
+        }
+      }
+
+      // Fetch user profile if still missing
+      if (!this.userProfile && this.userId) {
+        try {
+          console.log("📡 Fetching user profile from user service...");
+          this.userProfile = await this.userService.getUserDetails();
+          console.log("✅ User profile fetched successfully");
+        } catch (error) {
+          console.error("❌ Failed to fetch user profile:", error);
+          this.statusOverlay?.addError(
+            "Failed to fetch user profile: " + error.message
+          );
+        }
+      }
+
+      // Update services with user context only if userId changed
+      if (
+        this.userId &&
+        (!this.userService || this.userService.userId !== this.userId)
+      ) {
+        this.applicationTracker = new ApplicationTrackerService({
+          userId: this.userId,
+        });
+        this.userService = new UserService({ userId: this.userId });
+        console.log("📋 Updated services with new userId:", this.userId);
+      }
+
+      // Store API host from session context
+      if (sessionContext.apiHost) {
+        this.sessionApiHost = sessionContext.apiHost;
+      }
+
+      // Update form handler if it exists
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      console.log("✅ Indeed session context set successfully", {
+        hasUserProfile: !!this.userProfile,
+        userId: this.userId,
+        sessionId: this.sessionId,
+        profileName: this.userProfile?.name || this.userProfile?.firstName,
+        profileEmail: this.userProfile?.email,
+      });
+    } catch (error) {
+      console.error("❌ Error setting Indeed session context:", error);
+      this.statusOverlay?.addError(
+        "❌ Error setting session context: " + error.message
+      );
+    }
+  }
+
+  isIndeedJobListingPage(url) {
+    return (
+      /^https:\/\/(www\.)?indeed\.com\/viewjob/.test(url) &&
+      !url.includes("indeed.com/apply")
+    );
+  }
+
+  isIndeedApplicationPage(url) {
+    return (
+      /^https:\/\/smartapply\.indeed\.com\/beta\/indeedapply\/form/.test(url) ||
+      url.includes("indeed.com/apply")
+    );
+  }
+
+  async handleJobListingPage() {
+    this.statusOverlay.addInfo(
+      "Indeed job listing page detected - clicking Apply button"
+    );
+
+    this.cachedJobDescription = await this.extractIndeedJobDescription();
+
+    const applyButton = this.findIndeedApplyButton();
+    if (!applyButton) {
+      throw new Error("Cannot find Apply button on Indeed job listing page");
+    }
+
+    console.log("🖱️ Clicking Apply button");
+    applyButton.click();
+
+    await this.waitForIndeedApplicationPage();
+    this.statusOverlay.addSuccess("Application page loaded successfully");
+  }
+
+  findIndeedApplyButton() {
+    const applySelectors = [
+      'a[href*="/apply"]',
+      ".indeed-apply-button",
+      ".indeedApplyButton",
+      "a[data-jk]",
+      ".jobsearch-SerpJobCard .result .indeedApplyButton",
+      ".jobsearch-IndeedApplyButton-buttonWrapper a",
+    ];
+
+    for (const selector of applySelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
+        if (
+          DomUtils.isElementVisible(element) &&
+          (element.href?.includes("/apply") ||
+            element.textContent.toLowerCase().includes("apply"))
+        ) {
+          return element;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async waitForIndeedApplicationPage(timeout = 10000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      if (this.isIndeedApplicationPage(window.location.href)) {
+        const form = this.findIndeedApplicationForm();
+        if (form) {
+          return true;
+        }
+      }
+      await this.wait(500);
+    }
+
+    throw new Error("Timeout waiting for Indeed application page to load");
+  }
+
+  async handleAlreadyApplied() {
+    const jobId = UrlUtils.extractJobId(window.location.href, "indeed");
+    const jobDetails = await this.extractIndeedJobDescription();
+
+    this.safeSendPortMessage({
+      type: "SEND_CV_TASK_DONE",
+      data: {
+        jobId: jobId,
+        title: jobDetails.title || "Job on Indeed",
+        company: jobDetails.company || "Company on Indeed",
+        location: jobDetails.location || "Not specified",
+        jobUrl: window.location.href,
+        platform: "indeed",
+      },
+    });
+
+    this.applicationState.isApplicationInProgress = false;
+    this.statusOverlay.addSuccess("Application completed successfully");
+  }
+
+  handleApplicationError(error) {
+    if (error.name === "SendCvSkipError") {
+      this.statusOverlay.addWarning("Application skipped: " + error.message);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: error.message,
+      });
+    } else {
+      this.statusOverlay.addError("Application error: " + error.message);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_ERROR",
+        data: this.errorToString(error),
+      });
+    }
+    this.applicationState.isApplicationInProgress = false;
   }
 }

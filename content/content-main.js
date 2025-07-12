@@ -1,4 +1,4 @@
-//loadPlatformModule
+//detectPlatformFromUrl
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;

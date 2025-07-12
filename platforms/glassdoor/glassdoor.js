@@ -875,15 +875,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     this.statusOverlay.addSuccess("Application completed successfully");
   }
 
-  handleApplicationError(error) {
-    this.statusOverlay.addError("Application error: " + error.message);
-    this.safeSendPortMessage({
-      type: "applicationError",
-      data: this.errorToString(error),
-    });
-    this.applicationState.isApplicationInProgress = false;
-  }
-
   validateHandlers() {
     const issues = [];
 
@@ -1029,5 +1020,189 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     }
 
     this.log("🧹 Glassdoor-specific cleanup completed");
+  }
+
+  async setSessionContext(sessionContext) {
+    try {
+      this.sessionContext = sessionContext;
+      this.hasSessionContext = true;
+
+      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
+      if (sessionContext.platform) this.platform = sessionContext.platform;
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+
+      if (sessionContext.userProfile) {
+        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
+          this.userProfile = sessionContext.userProfile;
+          console.log("👤 User profile loaded from session context");
+        } else {
+          this.userProfile = {
+            ...this.userProfile,
+            ...sessionContext.userProfile,
+          };
+          console.log("👤 User profile merged with session context");
+        }
+      }
+
+      if (!this.userProfile && this.userId) {
+        try {
+          console.log("📡 Fetching user profile from user service...");
+          this.userProfile = await this.userService.getUserDetails();
+          console.log("✅ User profile fetched successfully");
+        } catch (error) {
+          console.error("❌ Failed to fetch user profile:", error);
+          this.statusOverlay?.addError(
+            "Failed to fetch user profile: " + error.message
+          );
+        }
+      }
+
+      if (
+        this.userId &&
+        (!this.userService || this.userService.userId !== this.userId)
+      ) {
+        this.applicationTracker = new ApplicationTrackerService({
+          userId: this.userId,
+        });
+        this.userService = new UserService({ userId: this.userId });
+        console.log("📋 Updated services with new userId:", this.userId);
+      }
+
+      if (sessionContext.apiHost) {
+        this.sessionApiHost = sessionContext.apiHost;
+      }
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      console.log("✅ Glassdoor session context set successfully", {
+        hasUserProfile: !!this.userProfile,
+        userId: this.userId,
+        sessionId: this.sessionId,
+        profileName: this.userProfile?.name || this.userProfile?.firstName,
+        profileEmail: this.userProfile?.email,
+      });
+    } catch (error) {
+      console.error("❌ Error setting Glassdoor session context:", error);
+      this.statusOverlay?.addError(
+        "❌ Error setting session context: " + error.message
+      );
+    }
+  }
+
+  isGlassdoorJobListingPage(url) {
+    return (
+      /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner)/.test(url) &&
+      !url.includes("/jobs.htm") &&
+      !url.includes("/apply")
+    );
+  }
+
+  async handleJobListingPage() {
+    this.statusOverlay.addInfo(
+      "Glassdoor job listing page detected - clicking Apply button"
+    );
+
+    this.cachedJobDescription = await this.extractGlassdoorJobDescription();
+
+    const applyButton = this.findGlassdoorApplyButton();
+    if (!applyButton) {
+      throw new Error("Cannot find Apply button on Glassdoor job listing page");
+    }
+
+    console.log("🖱️ Clicking Apply button");
+    applyButton.click();
+
+    // Wait for the application page to load
+    await this.waitForGlassdoorApplicationPage();
+    this.statusOverlay.addSuccess("Application page loaded successfully");
+  }
+
+  findGlassdoorApplyButton() {
+    const applySelectors = [
+      'button[data-test="easyApply"]',
+      ".EasyApplyButton_content__1cGPo",
+      "button.applyButton",
+      "a.applyButton",
+      'button[data-test="apply-button"]',
+      '.jobsOverlayModal button[data-test="apply"]',
+    ];
+
+    for (const selector of applySelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
+        if (
+          DomUtils.isElementVisible(element) &&
+          element.textContent.toLowerCase().includes("apply")
+        ) {
+          return element;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async waitForGlassdoorApplicationPage(timeout = 10000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      if (this.isGlassdoorApplicationPage(window.location.href)) {
+        const form = this.findGlassdoorApplicationForm();
+        if (form) {
+          return true;
+        }
+      }
+      const modal = document.querySelector(
+        ".jobsOverlayModal, .modal-content form"
+      );
+      if (modal) {
+        return true;
+      }
+      await this.wait(500);
+    }
+
+    throw new Error("Timeout waiting for Glassdoor application page to load");
+  }
+
+  async handleAlreadyApplied() {
+    const jobId = UrlUtils.extractJobId(window.location.href, "glassdoor");
+    const jobDetails = await this.extractGlassdoorJobDescription();
+
+    this.safeSendPortMessage({
+      type: "SEND_CV_TASK_DONE",
+      data: {
+        jobId: jobId,
+        title: jobDetails.title || "Job on Glassdoor",
+        company: jobDetails.company || "Company on Glassdoor",
+        location: jobDetails.location || "Not specified",
+        jobUrl: window.location.href,
+        platform: "glassdoor",
+      },
+    });
+
+    this.applicationState.isApplicationInProgress = false;
+    this.statusOverlay.addSuccess("Application completed successfully");
+  }
+
+  handleApplicationError(error) {
+    if (error.name === "SendCvSkipError") {
+      this.statusOverlay.addWarning("Application skipped: " + error.message);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: error.message,
+      });
+    } else {
+      this.statusOverlay.addError("Application error: " + error.message);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_ERROR",
+        data: this.errorToString(error),
+      });
+    }
+    this.applicationState.isApplicationInProgress = false;
+  }
+
+  getJobTaskMessageType() {
+    return "SEND_CV_TASK";
   }
 }

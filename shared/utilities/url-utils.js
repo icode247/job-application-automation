@@ -53,6 +53,21 @@ export class UrlUtils {
           return ashbyMatches && ashbyMatches[1]
             ? ashbyMatches[1]
             : `job-${Date.now()}`;
+
+        case "indeed":
+          const indeedMatches = url.match(/[?&]jk=([^&]+)|\/view\/([^?&\/]+)/);
+          return indeedMatches && (indeedMatches[1] || indeedMatches[2])
+            ? indeedMatches[1] || indeedMatches[2]
+            : `job-${Date.now()}`;
+
+        case "glassdoor":
+          const glassdoorMatches = url.match(
+            /\/(job|partner|Job)\/[^\/]*-([^\/\?]+)|jobListingId=([^&]+)/
+          );
+          return glassdoorMatches &&
+            (glassdoorMatches[2] || glassdoorMatches[3])
+            ? glassdoorMatches[2] || glassdoorMatches[3]
+            : `job-${Date.now()}`;
         default:
           return `job-${Date.now()}`;
       }
@@ -126,6 +141,18 @@ export class UrlUtils {
             );
           }
           break;
+
+        case "indeed":
+          const indeedCompanyMatch = url.match(/[?&]l=([^&]+)/);
+          if (indeedCompanyMatch && indeedCompanyMatch[1]) {
+            return decodeURIComponent(
+              indeedCompanyMatch[1].replace(/\+/g, " ")
+            );
+          }
+          break;
+
+        case "glassdoor":
+          break;
       }
 
       return null;
@@ -151,6 +178,15 @@ export class UrlUtils {
         return /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)/.test(
           url
         );
+
+      case "indeed":
+        return /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply)/.test(
+          url
+        );
+      case "glassdoor":
+        return /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply)/.test(
+          url
+        );
       default:
         return false;
     }
@@ -171,6 +207,10 @@ export class UrlUtils {
 
       case "ashby":
         return /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)\/?.*$/;
+      case "indeed":
+        return /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply).*$/;
+      case "glassdoor":
+        return /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply).*$/;
       default:
         return null;
     }
@@ -189,6 +229,10 @@ export class UrlUtils {
         return ["breezy.hr", "app.breezy.hr"];
       case "ashby":
         return ["ashbyhq.com", "jobs.ashbyhq.com"];
+      case "indeed":
+        return ["https://www.indeed.com", "https://smartapply.indeed.com"];
+      case "glassdoor":
+        return ["https://www.glassdoor.com"];
       default:
         return [];
     }
