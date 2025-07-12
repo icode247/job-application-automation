@@ -82,7 +82,12 @@
         "platforms/breezy/breezy-file-handler.js",
         "platforms/ashby/ashby.js",
         "platforms/ashby/ashby-form-handler.js",
-        "platforms/ashby/ashby-file-handler.js"
+        "platforms/ashby/ashby-file-handler.js",
+        "platforms/workable/workable.js",
+        "platforms/workable/workable-form-handler.js",
+        "platforms/workable/workable-file-handler.js",
+        "platforms/wellfound/wellfound.js",
+        "platforms/wellfound/wellfound-automation.js"
       ],
       "matches": [
         "<all_urls>"

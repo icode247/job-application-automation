@@ -8,6 +8,7 @@ export const PLATFORMS = {
   LEVER: "lever",
   BREEZY: "breezy",
   ASHBY: "ashby",
+  WELLFOUND: "wellfound",
 };
 
 export const AUTOMATION_STATUS = {
