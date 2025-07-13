@@ -593,29 +593,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
     }
 
     // Submit the form
-    const submitButton = FormUtils.findSubmitButton(form);
-    if (!submitButton) {
-      throw new Error("Cannot find submit button");
-    }
-
-    return await this.submitForm(submitButton);
-  }
-
-  async submitForm(submitButton) {
-    this.statusOverlay.addInfo("Submitting application...");
-
-    DomUtils.scrollToElement(submitButton);
-    await this.wait(600);
-
-    try {
-      submitButton.click();
-      this.statusOverlay.addSuccess("Clicked submit button");
-    } catch (e) {
-      this.statusOverlay.addError(
-        "Failed to click submit button: " + e.message
-      );
-    }
-    return true;
+    return await this.formHandler.submitForm(form);
   }
 
   // ========================================

@@ -12,6 +12,50 @@ export default class LeverFormHandler {
   }
 
   /**
+   * Get label for individual radio/checkbox options
+   */
+  getFieldLabelForOption(element) {
+    try {
+      // Method 1: Check for Lever's application-answer-alternative
+      const leverOption = element.parentElement?.querySelector(
+        ".application-answer-alternative"
+      );
+      if (leverOption) {
+        return leverOption.textContent.trim();
+      }
+
+      // Method 2: Parent label
+      const parentLabel = element.closest("label");
+      if (parentLabel) {
+        const clone = parentLabel.cloneNode(true);
+        // Remove input elements from clone to get just label text
+        clone.querySelectorAll("input").forEach((el) => el.remove());
+        return this.cleanLabelText(clone.textContent);
+      }
+
+      // Method 3: Following sibling text
+      let sibling = element.nextSibling;
+      while (sibling) {
+        if (sibling.nodeType === Node.TEXT_NODE && sibling.textContent.trim()) {
+          return this.cleanLabelText(sibling.textContent);
+        }
+        if (sibling.nodeType === Node.ELEMENT_NODE) {
+          const text = sibling.textContent.trim();
+          if (text) {
+            return this.cleanLabelText(text);
+          }
+        }
+        sibling = sibling.nextSibling;
+      }
+
+      return "";
+    } catch (error) {
+      this.logger(`Error getting option label: ${error.message}`);
+      return "";
+    }
+  }
+
+  /**
    * Get all form fields from a Lever application form
    */
   getAllFormFields(form) {
@@ -64,7 +108,25 @@ export default class LeverFormHandler {
    */
   getFieldLabel(element) {
     try {
-      // Method 1: Check for Lever's label structure
+      // Method 1: Check for Lever's application-label structure
+      const leverContainer = element.closest(".application-question");
+      if (leverContainer) {
+        // First try direct application-label
+        const directLabel = leverContainer.querySelector(".application-label");
+        if (directLabel && !directLabel.querySelector(".text")) {
+          return this.cleanLabelText(directLabel.textContent);
+        }
+
+        // Then try application-label with nested text div
+        const nestedTextLabel = leverContainer.querySelector(
+          ".application-label .text"
+        );
+        if (nestedTextLabel) {
+          return this.cleanLabelText(nestedTextLabel.textContent);
+        }
+      }
+
+      // Method 2: Check for Lever's label structure (legacy)
       const leverLabel = element
         .closest(".lever-form-field")
         ?.querySelector("label");
@@ -72,7 +134,7 @@ export default class LeverFormHandler {
         return this.cleanLabelText(leverLabel.textContent);
       }
 
-      // Method 2: Check for data-qa attributes
+      // Method 3: Check for data-qa attributes
       const dataQaContainer = element.closest('[data-qa*="field"]');
       if (dataQaContainer) {
         const label = dataQaContainer.querySelector(
@@ -83,7 +145,7 @@ export default class LeverFormHandler {
         }
       }
 
-      // Method 3: Standard HTML label association
+      // Method 4: Standard HTML label association
       if (element.id) {
         const label = document.querySelector(`label[for="${element.id}"]`);
         if (label) {
@@ -91,7 +153,7 @@ export default class LeverFormHandler {
         }
       }
 
-      // Method 4: Parent label
+      // Method 5: Parent label
       const parentLabel = element.closest("label");
       if (parentLabel) {
         const clone = parentLabel.cloneNode(true);
@@ -102,7 +164,7 @@ export default class LeverFormHandler {
         return this.cleanLabelText(clone.textContent);
       }
 
-      // Method 5: Preceding label or text
+      // Method 6: Preceding label or text in container
       const container =
         element.closest(".form-group, .field-group, .lever-form-field") ||
         element.parentElement;
@@ -113,17 +175,17 @@ export default class LeverFormHandler {
         }
       }
 
-      // Method 6: Aria-label
+      // Method 7: Aria-label
       if (element.getAttribute("aria-label")) {
         return this.cleanLabelText(element.getAttribute("aria-label"));
       }
 
-      // Method 7: Placeholder as fallback
+      // Method 8: Placeholder as fallback
       if (element.placeholder) {
         return this.cleanLabelText(element.placeholder);
       }
 
-      // Method 8: Name attribute
+      // Method 9: Name attribute
       if (element.name) {
         return this.cleanLabelText(
           element.name.replace(/([A-Z])/g, " $1").replace(/_/g, " ")
@@ -163,6 +225,10 @@ export default class LeverFormHandler {
 
     if (tagName === "input") {
       const type = element.type.toLowerCase();
+      
+      // Check for location autocomplete field
+      if (this.isLocationField(element)) return "location";
+      
       if (type === "file") return "file";
       if (type === "checkbox") return "checkbox";
       if (type === "radio") return "radio";
@@ -175,6 +241,20 @@ export default class LeverFormHandler {
     }
 
     return "unknown";
+  }
+
+  /**
+   * Check if element is a location autocomplete field
+   */
+  isLocationField(element) {
+    // Check for Lever location input characteristics
+    return (
+      element.classList.contains("location-input") ||
+      element.getAttribute("data-qa") === "location-input" ||
+      element.id === "location-input" ||
+      (element.name === "location" && 
+       element.parentElement?.querySelector('input[name="selectedLocation"]'))
+    );
   }
 
   /**
@@ -346,30 +426,55 @@ export default class LeverFormHandler {
   getFieldOptions(element) {
     const options = [];
 
-    if (element.tagName.toLowerCase() === "select") {
-      const optionElements = element.querySelectorAll("option");
-      optionElements.forEach((option) => {
-        const text = option.textContent.trim();
-        if (text && !text.toLowerCase().includes("select") && text !== "---") {
-          options.push(text);
-        }
-      });
-    } else if (element.type === "radio") {
-      const name = element.name;
-      if (name) {
-        const radioButtons = document.querySelectorAll(
-          `input[type="radio"][name="${name}"]`
-        );
-        radioButtons.forEach((radio) => {
-          const label = this.getFieldLabel(radio);
-          if (label) {
-            options.push(label);
+    try {
+      if (element.tagName.toLowerCase() === "select") {
+        const optionElements = element.querySelectorAll("option");
+        optionElements.forEach((option) => {
+          const text = option.textContent.trim();
+          if (
+            text &&
+            !text.toLowerCase().includes("select") &&
+            text !== "---" &&
+            option.value !== ""
+          ) {
+            options.push(text);
           }
         });
+      } else if (element.type === "radio" || element.type === "checkbox") {
+        const name = element.name;
+        if (name) {
+          // Find all elements with the same name
+          const relatedElements = document.querySelectorAll(
+            `input[name="${name}"]`
+          );
+
+          relatedElements.forEach((relatedElement) => {
+            // Method 1: Look for Lever's application-answer-alternative
+            const leverOption = relatedElement.parentElement?.querySelector(
+              ".application-answer-alternative"
+            );
+            if (leverOption) {
+              const text = leverOption.textContent.trim();
+              if (text) {
+                options.push(text);
+              }
+              return;
+            }
+
+            // Method 2: Traditional label approach
+            const label = this.getFieldLabelForOption(relatedElement);
+            if (label) {
+              options.push(label);
+            }
+          });
+        }
       }
+    } catch (error) {
+      this.logger(`Error getting field options: ${error.message}`);
     }
 
-    return options;
+    // Remove duplicates
+    return [...new Set(options)];
   }
 
   /**
@@ -386,6 +491,9 @@ export default class LeverFormHandler {
       );
 
       switch (fieldType) {
+        case "location":
+          return await this.fillLocationField(element, value);
+
         case "text":
         case "email":
         case "tel":
@@ -415,6 +523,341 @@ export default class LeverFormHandler {
       }
     } catch (error) {
       this.logger(`Error filling field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Fill location autocomplete field
+   */
+  async fillLocationField(element, value) {
+    try {
+      this.logger(`Filling location field with: ${value}`);
+      
+      // Scroll to and focus the input
+      this.scrollToElement(element);
+      element.focus();
+      await this.wait(500);
+
+      // Find the dropdown container
+      const container = element.closest(".application-question") || element.parentElement;
+      const dropdownContainer = container?.querySelector(".dropdown-container");
+      
+      if (!dropdownContainer) {
+        this.logger("No dropdown container found for location field");
+        return false;
+      }
+
+      // Clear any existing value first
+      element.value = "";
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("keydown", { bubbles: true }));
+      element.dispatchEvent(new Event("keyup", { bubbles: true }));
+      await this.wait(300);
+
+      // Type the location character by character to trigger autocomplete
+      const locationValue = String(value);
+      this.logger(`Starting to type: "${locationValue}"`);
+      
+      for (let i = 0; i < locationValue.length; i++) {
+        const currentValue = locationValue.substring(0, i + 1);
+        
+        // Set the value
+        element.value = currentValue;
+        
+        // Create and dispatch keyboard events to mimic real typing
+        const keydownEvent = new KeyboardEvent("keydown", {
+          key: locationValue[i],
+          code: `Key${locationValue[i].toUpperCase()}`,
+          bubbles: true,
+          cancelable: true
+        });
+        
+        const keyupEvent = new KeyboardEvent("keyup", {
+          key: locationValue[i],
+          code: `Key${locationValue[i].toUpperCase()}`,
+          bubbles: true,
+          cancelable: true
+        });
+        
+        const inputEvent = new Event("input", { bubbles: true });
+        
+        // Dispatch events in proper order
+        element.dispatchEvent(keydownEvent);
+        element.dispatchEvent(inputEvent);
+        element.dispatchEvent(keyupEvent);
+        
+        this.logger(`Typed: "${currentValue}"`);
+        await this.wait(300); // Very slow typing
+        
+        // Check if dropdown appeared early
+        const dropdownResults = dropdownContainer.querySelector(".dropdown-results");
+        if (dropdownResults && dropdownResults.children.length > 0 && 
+            window.getComputedStyle(dropdownContainer).display !== "none") {
+          this.logger("Dropdown appeared early, stopping typing");
+          break;
+        }
+      }
+
+      // Wait for dropdown results to load
+      this.logger("Waiting for location dropdown results...");
+      let attempts = 0;
+      const maxAttempts = 25; // Wait up to 5 seconds
+      
+      while (attempts < maxAttempts) {
+        const dropdownResults = dropdownContainer.querySelector(".dropdown-results");
+        const loadingElement = dropdownContainer.querySelector(".dropdown-loading-results");
+        const noResultsElement = dropdownContainer.querySelector(".dropdown-no-results");
+        
+        // Check if loading is complete
+        const isLoading = loadingElement && 
+          window.getComputedStyle(loadingElement).display !== "none";
+        
+        // Check if we have results
+        const hasResults = dropdownResults && 
+          dropdownResults.children.length > 0 &&
+          window.getComputedStyle(dropdownContainer).display !== "none";
+        
+        // Check if no results found
+        const hasNoResults = noResultsElement &&
+          window.getComputedStyle(noResultsElement).display !== "none";
+
+        this.logger(`Attempt ${attempts + 1}: Loading: ${isLoading}, HasResults: ${hasResults}, NoResults: ${hasNoResults}`);
+
+        if (!isLoading && (hasResults || hasNoResults)) {
+          if (hasResults) {
+            this.logger(`Found dropdown results container with ${dropdownResults.children.length} children`);
+            
+            // Debug: Log the actual HTML structure
+            this.logger(`Dropdown results HTML: ${dropdownResults.innerHTML.substring(0, 500)}`);
+            
+            // Get all clickable elements inside dropdown-results
+            const options = Array.from(dropdownResults.children);
+            
+            // If no direct children, look for specific selectors
+            if (options.length === 0) {
+              const alternativeOptions = Array.from(dropdownResults.querySelectorAll('*'));
+              this.logger(`No direct children found, checking all descendants: ${alternativeOptions.length}`);
+              
+              // Log each descendant to understand structure
+              alternativeOptions.forEach((elem, idx) => {
+                if (elem.textContent.trim()) {
+                  this.logger(`  Descendant ${idx}: <${elem.tagName}> "${elem.textContent.trim().substring(0, 100)}"`);
+                }
+              });
+              
+              // Use descendants that have text content and look clickable
+              options.push(...alternativeOptions.filter(elem => 
+                elem.textContent.trim() && 
+                (elem.onclick || elem.getAttribute('onclick') || 
+                 elem.classList.contains('cursor-pointer') ||
+                 elem.style.cursor === 'pointer' ||
+                 elem.getAttribute('role') === 'option' ||
+                 elem.hasAttribute('data-value') ||
+                 elem.tagName.toLowerCase() === 'button' ||
+                 elem.tagName.toLowerCase() === 'a')
+              ));
+            }
+            
+            this.logger(`Total options to evaluate: ${options.length}`);
+            
+            // Log each option for debugging
+            options.forEach((option, idx) => {
+              this.logger(`Raw option ${idx + 1}: "${option.textContent.trim().substring(0, 100)}" (tag: ${option.tagName})`);
+            });
+            
+            if (options.length === 0) {
+              this.logger("No valid options found in dropdown!");
+              return false;
+            }
+            
+            // Look for the best matching option
+            options = Array.from(dropdownResults.children);
+            let bestMatch = null;
+            let bestScore = 0;
+            
+            const searchValue = locationValue.toLowerCase().trim();
+            this.logger(`Searching for: "${searchValue}" among ${options.length} options`);
+            
+            for (let i = 0; i < options.length; i++) {
+              const option = options[i];
+              const optionText = option.textContent.trim().toLowerCase();
+              let score = 0;
+              
+              this.logger(`Option ${i + 1}: "${optionText}"`);
+              
+              // Exact match gets highest score
+              if (optionText === searchValue) {
+                score = 1000;
+                this.logger(`  → Exact match! Score: ${score}`);
+              }
+              // Starts with search value (very high priority for locations)
+              else if (optionText.startsWith(searchValue)) {
+                score = 900;
+                this.logger(`  → Starts with search! Score: ${score}`);
+              }
+              // Search value starts with option (good for partial typing)
+              else if (searchValue.startsWith(optionText)) {
+                score = 850;
+                this.logger(`  → Search starts with option! Score: ${score}`);
+              }
+              // Contains search value
+              else if (optionText.includes(searchValue)) {
+                score = 700;
+                this.logger(`  → Contains search! Score: ${score}`);
+              }
+              // Word-by-word matching (important for cities with country/state)
+              else {
+                const searchWords = searchValue.split(/[,\s]+/).filter(w => w.length > 0);
+                const optionWords = optionText.split(/[,\s]+/).filter(w => w.length > 0);
+                let exactWordMatches = 0;
+                let partialWordMatches = 0;
+                
+                // Check for exact word matches first
+                for (const searchWord of searchWords) {
+                  for (const optionWord of optionWords) {
+                    if (searchWord === optionWord) {
+                      exactWordMatches++;
+                      break;
+                    }
+                  }
+                }
+                
+                // Check for partial word matches
+                for (const searchWord of searchWords) {
+                  for (const optionWord of optionWords) {
+                    if (searchWord !== optionWord && 
+                        (optionWord.includes(searchWord) || searchWord.includes(optionWord))) {
+                      partialWordMatches++;
+                      break;
+                    }
+                  }
+                }
+                
+                // Calculate score based on word matches
+                const totalSearchWords = searchWords.length;
+                if (exactWordMatches > 0) {
+                  score = (exactWordMatches / totalSearchWords) * 600 + (partialWordMatches * 50);
+                } else if (partialWordMatches > 0) {
+                  score = (partialWordMatches / totalSearchWords) * 400;
+                }
+                
+                this.logger(`  → Word matching: ${exactWordMatches} exact, ${partialWordMatches} partial. Score: ${score}`);
+              }
+              
+              // Boost score if this is the first option (often the best match)
+              if (i === 0 && score > 0) {
+                score += 50;
+                this.logger(`  → First option bonus! New score: ${score}`);
+              }
+              
+              if (score > bestScore) {
+                bestScore = score;
+                bestMatch = option;
+                this.logger(`  → NEW BEST MATCH! Score: ${score}`);
+              }
+            }
+            
+            this.logger(`Final best match: "${bestMatch?.textContent.trim()}" with score: ${bestScore}`);
+            
+            if (bestMatch && bestScore > 0) {
+              this.logger(`Selecting location option: "${bestMatch.textContent.trim()}" (score: ${bestScore})`);
+              
+              // Ensure the field is still focused and the dropdown is visible
+              element.focus();
+              await this.wait(200);
+              
+              // Try multiple click methods to ensure selection works
+              try {
+                // Method 1: Direct click
+                bestMatch.click();
+                await this.wait(300);
+                
+                // Check if selection worked
+                let hiddenLocationInput = container?.querySelector('input[name="selectedLocation"]');
+                if (hiddenLocationInput && hiddenLocationInput.value) {
+                  this.logger("Selection successful with direct click");
+                  return true;
+                }
+                
+                // Method 2: Mouse events if direct click didn't work
+                this.logger("Direct click didn't work, trying mouse events");
+                const mousedownEvent = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+                const mouseupEvent = new MouseEvent('mouseup', { bubbles: true, cancelable: true });
+                const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+                
+                bestMatch.dispatchEvent(mousedownEvent);
+                await this.wait(50);
+                bestMatch.dispatchEvent(mouseupEvent);
+                await this.wait(50);
+                bestMatch.dispatchEvent(clickEvent);
+                await this.wait(500);
+                
+                // Check again
+                hiddenLocationInput = container?.querySelector('input[name="selectedLocation"]');
+                if (hiddenLocationInput && hiddenLocationInput.value) {
+                  this.logger("Selection successful with mouse events");
+                  return true;
+                }
+                
+                // Method 3: Try to trigger selection by setting focus on the option
+                this.logger("Mouse events didn't work, trying focus approach");
+                if (bestMatch.focus) {
+                  bestMatch.focus();
+                  await this.wait(100);
+                }
+                
+                // Simulate Enter key press
+                const enterEvent = new KeyboardEvent('keydown', {
+                  key: 'Enter',
+                  code: 'Enter',
+                  keyCode: 13,
+                  which: 13,
+                  bubbles: true,
+                  cancelable: true
+                });
+                
+                bestMatch.dispatchEvent(enterEvent);
+                await this.wait(500);
+                
+                // Final check
+                hiddenLocationInput = container?.querySelector('input[name="selectedLocation"]');
+                if (hiddenLocationInput && hiddenLocationInput.value) {
+                  this.logger("Selection successful with Enter key");
+                  return true;
+                }
+                
+                this.logger("All selection methods failed, but keeping typed value");
+                return false;
+                
+              } catch (clickError) {
+                this.logger(`Error during option selection: ${clickError.message}`);
+                return false;
+              }
+            } else {
+              this.logger(`No suitable location match found. Best score was: ${bestScore}`);
+              // List all available options for debugging
+              this.logger("Available options were:");
+              options.forEach((opt, idx) => {
+                this.logger(`  ${idx + 1}: "${opt.textContent.trim()}"`);
+              });
+              return false;
+            }
+          } else {
+            this.logger("No location results found for the input");
+            return false;
+          }
+        }
+        
+        attempts++;
+        await this.wait(200);
+      }
+      
+      this.logger("Timeout waiting for location dropdown results");
+      return false;
+      
+    } catch (error) {
+      this.logger(`Error filling location field: ${error.message}`);
       return false;
     }
   }
@@ -461,26 +904,48 @@ export default class LeverFormHandler {
    */
   async fillSelectField(element, value) {
     try {
-      const options = Array.from(element.options);
-      const valueStr = String(value).toLowerCase();
+      const optionElements = Array.from(element.options);
+      const valueStr = String(value).toLowerCase().trim();
 
-      // Find matching option
+      this.logger(
+        `Trying to match "${valueStr}" against ${optionElements.length} options`
+      );
+
+      // Find matching option element
       let targetOption = null;
 
-      // Exact match first
-      for (const option of options) {
-        if (option.textContent.toLowerCase().trim() === valueStr) {
+      // Exact text match first
+      for (const option of optionElements) {
+        const optionText = option.textContent.trim();
+        if (optionText.toLowerCase() === valueStr) {
           targetOption = option;
+          this.logger(`Exact match found: "${optionText}"`);
           break;
         }
       }
 
-      // Partial match if no exact match
+      // Partial text match if no exact match
       if (!targetOption) {
-        for (const option of options) {
+        for (const option of optionElements) {
           const optionText = option.textContent.toLowerCase().trim();
           if (optionText.includes(valueStr) || valueStr.includes(optionText)) {
             targetOption = option;
+            this.logger(`Partial match found: "${option.textContent.trim()}"`);
+            break;
+          }
+        }
+      }
+
+      // Value match as fallback
+      if (!targetOption) {
+        for (const option of optionElements) {
+          if (option.value.toLowerCase() === valueStr) {
+            targetOption = option;
+            this.logger(
+              `Value match found: "${option.textContent.trim()}" (${
+                option.value
+              })`
+            );
             break;
           }
         }
@@ -491,11 +956,17 @@ export default class LeverFormHandler {
         element.focus();
         element.value = targetOption.value;
         element.dispatchEvent(new Event("change", { bubbles: true }));
+        element.dispatchEvent(new Event("input", { bubbles: true }));
         await this.wait(100);
         return true;
       }
 
-      this.logger(`No matching option found for: ${value}`);
+      this.logger(
+        `No matching option found for: "${value}". Available options:`,
+        optionElements.map(
+          (opt) => `"${opt.textContent.trim()}" (${opt.value})`
+        )
+      );
       return false;
     } catch (error) {
       this.logger(`Error filling select field: ${error.message}`);
@@ -508,21 +979,69 @@ export default class LeverFormHandler {
    */
   async fillCheckboxField(element, value) {
     try {
-      const shouldCheck = this.parseAIBoolean(value);
-      if (shouldCheck === null) {
-        this.logger(`Unclear AI response for checkbox: ${value}`);
+      // For single checkboxes (like agreements), parse as boolean
+      const name = element.name;
+      const checkboxes = document.querySelectorAll(
+        `input[type="checkbox"][name="${name}"]`
+      );
+
+      if (checkboxes.length === 1) {
+        // Single checkbox - treat as boolean
+        const shouldCheck = this.parseAIBoolean(value);
+        if (shouldCheck === null) {
+          this.logger(`Unclear AI response for checkbox: ${value}`);
+          return false;
+        }
+
+        const isCurrentlyChecked = element.checked;
+
+        if (shouldCheck !== isCurrentlyChecked) {
+          this.scrollToElement(element);
+          element.focus();
+          element.click();
+          await this.wait(200);
+        }
+
+        return true;
+      } else {
+        // Multiple checkboxes - treat as selection
+        const valueStr = String(value).toLowerCase().trim();
+        const label = this.getFieldLabelForOption(element);
+
+        if (!label) {
+          this.logger(`No label found for checkbox`);
+          return false;
+        }
+
+        this.logger(
+          `Checking if "${valueStr}" matches checkbox option "${label}"`
+        );
+
+        // Check if this checkbox should be selected
+        const shouldSelect =
+          label.toLowerCase().includes(valueStr) ||
+          valueStr.includes(label.toLowerCase()) ||
+          element.value.toLowerCase() === valueStr;
+
+        if (shouldSelect && !element.checked) {
+          this.scrollToElement(element);
+          element.focus();
+          element.click();
+          await this.wait(200);
+          this.logger(`Selected checkbox: "${label}"`);
+          return true;
+        } else if (!shouldSelect && element.checked) {
+          // Uncheck if it was checked but shouldn't be
+          this.scrollToElement(element);
+          element.focus();
+          element.click();
+          await this.wait(200);
+          this.logger(`Deselected checkbox: "${label}"`);
+          return true;
+        }
+
         return false;
       }
-
-      const isCurrentlyChecked = element.checked;
-
-      if (shouldCheck !== isCurrentlyChecked) {
-        this.scrollToElement(element);
-        element.click();
-        await this.wait(200);
-      }
-
-      return true;
     } catch (error) {
       this.logger(`Error filling checkbox field: ${error.message}`);
       return false;
@@ -540,20 +1059,73 @@ export default class LeverFormHandler {
       const radioButtons = document.querySelectorAll(
         `input[type="radio"][name="${name}"]`
       );
-      const valueStr = String(value).toLowerCase();
+      const valueStr = String(value).toLowerCase().trim();
+
+      this.logger(
+        `Trying to match radio "${valueStr}" against ${radioButtons.length} options`
+      );
 
       // Find matching radio button
+      let targetRadio = null;
+
+      // Exact text match first
       for (const radio of radioButtons) {
-        const label = this.getFieldLabel(radio);
-        if (label && label.toLowerCase().includes(valueStr)) {
-          this.scrollToElement(radio);
-          radio.click();
-          await this.wait(200);
-          return true;
+        const label = this.getFieldLabelForOption(radio);
+        if (label && label.toLowerCase().trim() === valueStr) {
+          targetRadio = radio;
+          this.logger(`Exact match found: "${label}"`);
+          break;
         }
       }
 
-      this.logger(`No matching radio option found for: ${value}`);
+      // Partial text match
+      if (!targetRadio) {
+        for (const radio of radioButtons) {
+          const label = this.getFieldLabelForOption(radio);
+          if (label) {
+            const labelText = label.toLowerCase().trim();
+            if (labelText.includes(valueStr) || valueStr.includes(labelText)) {
+              targetRadio = radio;
+              this.logger(`Partial match found: "${label}"`);
+              break;
+            }
+          }
+        }
+      }
+
+      // Value match
+      if (!targetRadio) {
+        for (const radio of radioButtons) {
+          if (radio.value.toLowerCase() === valueStr) {
+            const label = this.getFieldLabelForOption(radio);
+            targetRadio = radio;
+            this.logger(`Value match found: "${label}" (${radio.value})`);
+            break;
+          }
+        }
+      }
+
+      if (targetRadio) {
+        this.scrollToElement(targetRadio);
+        targetRadio.focus();
+        targetRadio.click();
+        await this.wait(200);
+        return true;
+      }
+
+      // Log available options for debugging
+      const availableOptions = [];
+      for (const radio of radioButtons) {
+        const label = this.getFieldLabelForOption(radio);
+        if (label) {
+          availableOptions.push(`"${label}" (${radio.value})`);
+        }
+      }
+
+      this.logger(
+        `No matching radio option found for: "${value}". Available options:`,
+        availableOptions
+      );
       return false;
     } catch (error) {
       this.logger(`Error filling radio field: ${error.message}`);

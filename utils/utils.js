@@ -648,4 +648,8 @@ export default class Utils {
     };
     return userDataForContext;
   }
+
+  checkIfAlreadyAppliedToJob(jobId) {
+    return this.applicationState.appliedJobs.has(jobId);
+  }
 }

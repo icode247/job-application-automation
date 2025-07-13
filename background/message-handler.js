@@ -905,6 +905,7 @@ export default class MessageHandler {
 
   // Handle window closed - stop associated automations
   async handleWindowClosed(windowId) {
+    // ✅ FIX: Clean up pending requests for automations in the closed window
     const requestKeysToDelete = [];
 
     for (const [sessionId, automation] of this.activeAutomations.entries()) {
@@ -940,6 +941,7 @@ export default class MessageHandler {
       }
     }
 
+    // ✅ FIX: Remove all pending requests for closed window automations
     for (const requestKey of requestKeysToDelete) {
       this.pendingRequests.delete(requestKey);
       console.log(`✅ Removed pending request: ${requestKey}`);

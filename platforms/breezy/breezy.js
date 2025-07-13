@@ -564,7 +564,13 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       // Extract job ID from URL (Breezy-specific)
       const jobId = UrlUtils.extractJobId(window.location.href, "breezy");
-      console.log("Extracted Breezy job ID:", jobId);
+      console.log(this.applicationState);
+      // check if we have already applied for this job
+      // if (this.applicationState.appliedJobs.has(jobId)) {
+      //   throw new SkipApplicationError("Already applied for this job");
+      // }
+
+      console.log(this.userProfile);
 
       // Wait for page to fully load
       await this.wait(3000);
@@ -680,16 +686,16 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       });      
 
       // Handle file uploads (resume)
-      await this.fileHandler.handleFileUploads(form, profile, jobDescription);
+      // await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
       // Fill out form fields using AI-enhanced BreezyFormHandler
-      await this.formHandler.fillFormWithProfile(form, profile);
+      // await this.formHandler.fillFormWithProfile(form, profile);
 
       // Handle required checkboxes
-      await this.formHandler.handleRequiredCheckboxes(form);
+      // await this.formHandler.handleRequiredCheckboxes(form);
 
       // Submit the form
-      return await this.formHandler.submitForm(form);
+      // return await this.formHandler.submitForm(form);
     } catch (error) {
       console.error("Error processing Breezy application form:", error);
       this.statusOverlay.addError(
