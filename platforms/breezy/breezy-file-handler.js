@@ -5,12 +5,6 @@ export class BreezyFileHandler {
     this.apiHost = config.apiHost || "http://localhost:3000";
     this.aiBaseUrl = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
     this.processedInputs = new Set();
-
-    console.log("📎 BreezyFileHandler initialized:", {
-      hasStatusService: !!this.statusService,
-      apiHost: this.apiHost,
-      aiBaseUrl: this.aiBaseUrl,
-    });
   }
 
   /**
@@ -30,7 +24,6 @@ export class BreezyFileHandler {
 
       // Find all file input fields
       const fileInputs = form.querySelectorAll('input[type="file"]');
-
       if (fileInputs.length === 0) {
         this.showStatus("No file input fields found", "info");
         return true;
@@ -45,8 +38,6 @@ export class BreezyFileHandler {
           console.log(`⏭️ Skipping already processed input: ${inputId}`);
           continue;
         }
-
-        if (!this.isFileInputAccessible(fileInput)) continue;
 
         uploadCount++;
         this.processedInputs.add(inputId);
@@ -114,8 +105,7 @@ export class BreezyFileHandler {
   async handleSingleFileUpload(fileInput, userDetails, jobDescription) {
     try {
       const fileType = this.determineFileType(fileInput);
-      const fileUrls = this.getFileUrls(userDetails, fileType);
-
+      const fileUrls = userDetails.resumeUrl;
       if (!fileUrls || fileUrls.length === 0) {
         this.showStatus(`No ${fileType} files available`, "warning");
         return false;
@@ -136,7 +126,10 @@ export class BreezyFileHandler {
           fileUrls
         );
       } else {
-        return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
+        return await this.uploadFileFromUrl(
+          fileInput,
+          fileUrls[fileUrls.length - 1]
+        );
       }
     } catch (error) {
       this.showStatus("Single file upload failed: " + error.message, "error");
@@ -438,38 +431,64 @@ export class BreezyFileHandler {
   /**
    * Enhanced filename extraction with proper URL decoding
    */
+  /**
+   * Enhanced filename extraction with proper URL validation and decoding
+   */
   extractFileNameFromUrl(url) {
     try {
+      // Handle null, undefined, or empty strings
+      if (!url || typeof url !== "string" || url.trim() === "") {
+        return `resume_${Date.now()}.pdf`;
+      }
+
       const decodedUrl = decodeURIComponent(url);
+      let fileName = "";
 
-      const urlObj = new URL(decodedUrl);
-      let fileName = urlObj.pathname.split("/").pop();
+      // Try to parse as a URL first (for full URLs with protocol)
+      try {
+        const urlObj = new URL(decodedUrl);
+        fileName = urlObj.pathname.split("/").pop();
+      } catch (urlError) {
+        // If URL construction fails, treat it as a path or filename
+        console.log("Not a valid URL, treating as path/filename:", decodedUrl);
 
-      if (!fileName || !fileName.includes(".") || fileName.includes("%")) {
+        // Extract filename from path-like string
         const pathParts = decodedUrl.split("/");
-        for (let i = pathParts.length - 1; i >= 0; i--) {
-          const part = pathParts[i];
-          if (part.includes(".pdf") || part.includes(".doc")) {
-            fileName = part;
-            break;
+        fileName = pathParts[pathParts.length - 1];
+
+        // If still no filename found, search through path parts for file extensions
+        if (!fileName || !fileName.includes(".")) {
+          for (let i = pathParts.length - 1; i >= 0; i--) {
+            const part = pathParts[i];
+            if (part.includes(".pdf") || part.includes(".doc")) {
+              fileName = part;
+              break;
+            }
           }
         }
       }
 
+      // Clean and validate the extracted filename
       if (fileName && fileName.includes(".")) {
         fileName = fileName
-          .replace(/%[0-9A-F]{2}/gi, "")
-          .replace(/[^\w\s.-]/gi, "")
-          .replace(/\s+/g, "_")
+          .replace(/%[0-9A-F]{2}/gi, "") // Remove URL encoding artifacts
+          .replace(/[^\w\s.-]/gi, "") // Remove invalid filename characters
+          .replace(/\s+/g, "_") // Replace spaces with underscores
           .trim();
 
+        // Ensure it has a valid extension
         if (!fileName.match(/\.(pdf|doc|docx)$/i)) {
           fileName += ".pdf";
         }
 
-        return fileName;
+        // Validate final filename isn't empty after cleaning
+        if (fileName.length > 4) {
+          // At least some chars + extension
+          return fileName;
+        }
       }
 
+      // Final fallback if no valid filename could be extracted
       return `resume_${Date.now()}.pdf`;
     } catch (error) {
       console.error("Error extracting filename:", error);
@@ -725,15 +744,44 @@ export class BreezyFileHandler {
   getFileUrls(userDetails, fileType) {
     switch (fileType) {
       case "resume":
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        if (userDetails.resumeUrl) {
+          return [userDetails.resumeUrl];
+        }
+
+        // Handle nested array structure: [[url1, url2, url3]]
+        if (userDetails.resumeUrls) {
+          const urls = userDetails.resumeUrls;
+          // Flatten the array if it's nested
+          return Array.isArray(urls) ? urls.flat() : [];
+        }
+
+        return [];
+
       case "coverLetter":
-        return userDetails.coverLetterUrl ? [userDetails.coverLetterUrl] : [];
+        if (userDetails.coverLetterUrl) {
+          return [userDetails.coverLetterUrl];
+        }
+
+        // Handle nested array structure for cover letters
+        if (userDetails.coverLetterUrls) {
+          const urls = userDetails.coverLetterUrls;
+          return Array.isArray(urls) ? urls.flat() : [];
+        }
+
+        return [];
+
       default:
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        // Default to resume handling
+        if (userDetails.resumeUrl) {
+          return [userDetails.resumeUrl];
+        }
+
+        if (userDetails.resumeUrls) {
+          const urls = userDetails.resumeUrls;
+          return Array.isArray(urls) ? urls.flat() : [];
+        }
+
+        return [];
     }
   }
 

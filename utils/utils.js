@@ -600,4 +600,52 @@ export default class Utils {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
+
+  getUserDetailsForContext(userData) {
+    const userDataForContext = {
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      email: userData.email,
+      phoneNumber: userData.phoneNumber,
+      phoneCountryCode: userData.phoneCountryCode,
+      country: userData.country,
+      jobPreferences: userData.jobPreferences,
+      cv: userData.cv,
+      currentCompany: userData.currentCompany,
+      yearsOfExperience: userData.yearsOfExperience,
+      fullPosition: userData.fullPosition,
+      linkedIn: userData.linkedIn,
+      website: userData.website,
+      github: userData.github,
+      coverLetter: userData.coverLetter,
+      currentCity: userData.currentCity,
+      streetAddress: userData.streetAddress,
+      desiredSalary: userData.desiredSalary,
+      noticePeriod: userData.noticePeriod,
+      education: userData.education,
+      educationEndMonth: userData.educationEndMonth,
+      educationEndYear: userData.educationEndYear,
+      educationStartMonth: userData.educationStartMonth,
+      educationStartYear: userData.educationStartYear,
+      headline: userData.headline,
+      summary: userData.summary,
+      age: userData.age,
+      race: userData.race,
+      gender: userData.gender,
+      needsSponsorship: userData.needsSponsorship,
+      disabilityStatus: userData.disabilityStatus,
+      veteranStatus: userData.veteranStatus,
+      usCitizenship: userData.usCitizenship,
+      parsedResumeText: userData.parsedResumeText,
+      projects: userData.projects,
+      skills: userData.skills,
+      linkedinProfileUrl: userData.linkedinProfileUrl,
+      extractedCertifications: userData.extractedCertifications,
+      extractedSkills: userData.extractedSkills,
+      extractedProjects: userData.extractedProjects,
+      extractedExperience: userData.extractedExperience,
+      githubURL: userData.githubURL,
+    };
+    return userDataForContext;
+  }
 }

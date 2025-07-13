@@ -1,4 +1,5 @@
-// platforms/breezy/breezy.js
+// platforms/breezy/breezy.js - FIXED VERSION
+//apply
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { BreezyFormHandler } from "./breezy-form-handler.js";
 import { BreezyFileHandler } from "./breezy-file-handler.js";
@@ -272,13 +273,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     this.fileHandler = new BreezyFileHandler({
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
-    });
-
-    this.formHandler = new BreezyFormHandler({
-      logger: (message) => this.statusOverlay.addInfo(message),
-      host: this.getApiHost(),
-      userData: this.userProfile || {},
-      jobDescription: "",
     });
 
     this.statusOverlay.addSuccess("Breezy-specific components initialized");
@@ -666,7 +660,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
 
-    console.log("Breezy application completed successfully");
     this.statusOverlay.addSuccess("Application completed successfully");
     this.statusOverlay.updateStatus("success");
   }
@@ -678,17 +671,13 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
     try {
       // Initialize/update form handler
-      if (!this.formHandler) {
-        this.formHandler = new BreezyFormHandler({
-          logger: (message) => this.statusOverlay.addInfo(message),
-          host: this.getApiHost(),
-          userData: profile,
-          jobDescription,
-        });
-      } else {
-        this.formHandler.userData = profile;
-        this.formHandler.jobDescription = jobDescription;
-      }
+
+      this.formHandler = new BreezyFormHandler({
+        logger: (message) => this.statusOverlay.addInfo(message),
+        host: this.getApiHost(),
+        userData: profile,
+        jobDescription,
+      });      
 
       // Handle file uploads (resume)
       await this.fileHandler.handleFileUploads(form, profile, jobDescription);

@@ -87,7 +87,8 @@
         "platforms/workable/workable-form-handler.js",
         "platforms/workable/workable-file-handler.js",
         "platforms/wellfound/wellfound.js",
-        "platforms/wellfound/wellfound-automation.js"
+        "platforms/wellfound/wellfound-automation.js",
+        "utils/utils.js"
       ],
       "matches": [
         "<all_urls>"

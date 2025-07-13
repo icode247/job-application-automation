@@ -11,7 +11,7 @@ import IndeedAutomationHandler from "./platforms/indeed.js";
 import GlassdoorAutomationHandler from "./platforms/glassdoor.js";
 import WorkableAutomationHandler from "./platforms/workable.js";
 import WellfoundAutomationHandler from "./platforms/wellfound.js";
-
+//handleWindowClosed
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -905,11 +905,24 @@ export default class MessageHandler {
 
   // Handle window closed - stop associated automations
   async handleWindowClosed(windowId) {
+    const requestKeysToDelete = [];
+
     for (const [sessionId, automation] of this.activeAutomations.entries()) {
       if (automation.windowId === windowId) {
         console.log(
           `🪟 Window ${windowId} closed, stopping automation ${sessionId}`
         );
+
+        // ✅ FIX: Find and clean up pending requests for this automation
+        const platform = automation.platform;
+        const userId = automation.userId;
+        const requestKey = `startApplying_${userId}_${platform}`;
+
+        if (this.pendingRequests.has(requestKey)) {
+          requestKeysToDelete.push(requestKey);
+          console.log(`🧹 Cleaning up pending request: ${requestKey}`);
+        }
+
         await automation.stop();
         this.activeAutomations.delete(sessionId);
 
@@ -925,6 +938,11 @@ export default class MessageHandler {
           reason: "Window closed",
         });
       }
+    }
+
+    for (const requestKey of requestKeysToDelete) {
+      this.pendingRequests.delete(requestKey);
+      console.log(`✅ Removed pending request: ${requestKey}`);
     }
   }
 

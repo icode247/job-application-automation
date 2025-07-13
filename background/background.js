@@ -9,6 +9,8 @@ class BackgroundService {
     this.messageHandler = new MessageHandler();
     this.sessionManager = new SessionManager();
     this.isInitialized = false;
+    this.listenersSetup = false;
+    this.windowListenersSetup = false;
   }
 
   async initialize() {
@@ -36,6 +38,11 @@ class BackgroundService {
   }
 
   setupMessageHandling() {
+    if (this.listenersSetup) {
+      console.log("⚠️ Message listeners already set up, skipping");
+      return;
+    }
+
     // Handle messages from your frontend web app
     chrome.runtime.onMessageExternal.addListener(
       (request, sender, sendResponse) => {
@@ -55,14 +62,22 @@ class BackgroundService {
         sendResponse
       );
     });
+
+    this.listenersSetup = true; // ✅ ADD: Mark listeners as set up
+    console.log("✅ Message listeners set up");
   }
 
   setupWindowEvents() {
+    if (this.windowListenersSetup) {
+      console.log("⚠️ Window listeners already set up, skipping");
+      return;
+    }
+
     // Clean up when windows are closed
     chrome.windows.onRemoved.addListener(async (windowId) => {
       await this.windowManager.handleWindowClosed(windowId);
       await this.sessionManager.handleWindowClosed(windowId);
-      await this.messageHandler.handleWindowClosed(windowId); // Add this line
+      await this.messageHandler.handleWindowClosed(windowId);
     });
 
     // Handle tab updates
@@ -71,6 +86,9 @@ class BackgroundService {
         await this.sessionManager.handleTabUpdated(tabId, tab);
       }
     });
+
+    this.windowListenersSetup = true; // ✅ ADD: Mark window listeners as set up
+    console.log("✅ Window listeners set up");
   }
 }
 

@@ -1,4 +1,4 @@
-// shared/base/base-platform-automation.js - FIXED VERSION
+// shared/base/base-platform-automation.js 
 
 import BasePlatform from "../../platforms/base-platform.js";
 import { StatusOverlay } from "../../services/index.js";
@@ -76,7 +76,7 @@ export default class BasePlatformAutomation extends BasePlatform {
     // Create status overlay
     this.statusOverlay = new StatusOverlay({
       id: `${this.platform}-status-overlay`,
-      platform: `${this.platform.toUpperCase()} AUTOMATION`,
+      platform: `${this.platform.toUpperCase()}`,
       icon: "🤖",
       position: { top: "10px", right: "10px" },
     });
@@ -87,7 +87,7 @@ export default class BasePlatformAutomation extends BasePlatform {
     this.startHealthCheck();
     this.startStateVerification();
 
-    this.statusOverlay.addSuccess(`${this.platform} automation initialized`);
+    this.statusOverlay.addSuccess(`Hi! I'm ready to help you apply to ${this.platform} jobs automatically. Let's get started! 🚀`);
   }
 
   /**
@@ -95,10 +95,6 @@ export default class BasePlatformAutomation extends BasePlatform {
    */
   initializePortConnection() {
     try {
-      this.statusOverlay.addInfo(
-        "📡 Initializing port connection with background script"
-      );
-
       // Disconnect existing port if any
       if (this.port) {
         try {
@@ -160,10 +156,10 @@ export default class BasePlatformAutomation extends BasePlatform {
 
       this.connectionRetries = 0;
       this.log("✅ Port connection established successfully");
-      this.statusOverlay.addSuccess("Connection established");
+      // Removed connection success message - not needed for user
     } catch (error) {
       this.log("❌ Error initializing port connection:", error);
-      this.statusOverlay.addError("Connection failed: " + error.message);
+      this.statusOverlay.addError("I'm having trouble connecting to the system. Let me try again...");
       if (this.connectionRetries < this.maxRetries) {
         this.connectionRetries++;
         setTimeout(() => this.initializePortConnection(), 5000);
@@ -253,7 +249,7 @@ export default class BasePlatformAutomation extends BasePlatform {
           this.applicationState.isApplicationInProgress = false;
           this.applicationState.applicationStartTime = null;
           this.statusOverlay.addWarning(
-            "Application timeout detected - resetting state"
+            "The job application seems to be taking longer than expected. Let me continue with the next job."
           );
           setTimeout(() => this.searchNext(), 1000);
         }
@@ -357,7 +353,7 @@ export default class BasePlatformAutomation extends BasePlatform {
 
     if (!data || !data.url) {
       this.log("No URL data in handleSearchNext");
-      this.statusOverlay.addInfo("Job processed, searching next...");
+      // Removed generic message - let specific platform handle this
       setTimeout(() => this.searchNext(), 2500);
       return;
     }
@@ -380,18 +376,17 @@ export default class BasePlatformAutomation extends BasePlatform {
       if (this.urlsMatch(linkUrl, normalizedUrl)) {
         if (data.status === "SUCCESS") {
           this.markLinkAsColor(links[i], "orange", "Completed");
-          this.statusOverlay.addSuccess("Successfully submitted: " + data.url);
+          this.statusOverlay.addSuccess("Great! I successfully applied to this job for you! ✅");
         } else if (data.status === "ERROR") {
           this.markLinkAsColor(links[i], "red", "Error");
           this.statusOverlay.addError(
-            "Error with: " +
-              data.url +
-              (data.message ? ` - ${data.message}` : "")
+            "I encountered an issue with this job application" +
+              (data.message ? ` - ${data.message}` : "") + ". Don't worry, I'll continue with the next one!"
           );
         } else {
           this.markLinkAsColor(links[i], "orange", "Skipped");
           this.statusOverlay.addWarning(
-            "Skipped: " + data.url + (data.message ? ` - ${data.message}` : "")
+            "I skipped this job" + (data.message ? ` because ${data.message.toLowerCase()}` : "") + ". Moving on to the next one!"
           );
         }
         break;
@@ -423,7 +418,7 @@ export default class BasePlatformAutomation extends BasePlatform {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
     this.statusOverlay.addWarning(
-      `Job already processed: ${data?.url || "Unknown URL"}`
+      "I've already applied to this job before, so I'll skip it and find you a new one!"
     );
 
     setTimeout(() => this.searchNext(), 1000);
@@ -439,7 +434,7 @@ export default class BasePlatformAutomation extends BasePlatform {
       "Unknown error from background script";
 
     this.log("❌ Error from background script:", actualMessage);
-    this.statusOverlay.addError("Background error: " + actualMessage);
+    this.statusOverlay.addError("I encountered a technical issue, but I'm working to resolve it. Please bear with me!");
   }
 
   /**
@@ -452,14 +447,12 @@ export default class BasePlatformAutomation extends BasePlatform {
       // Critical: If an application is in progress, do not continue
       if (this.applicationState.isApplicationInProgress) {
         this.log("Application in progress, not searching for next link");
-        this.statusOverlay.addInfo(
-          "Application in progress, waiting to complete..."
-        );
+        // Removed status message - not needed for user
         this.safeSendPortMessage({ type: "CHECK_APPLICATION_STATUS" });
         return;
       }
 
-      this.statusOverlay.addInfo("Searching for job links...");
+      // Removed "searching for job links" message - too frequent
 
       // Find all matching links
       let links = this.findAllLinksElements();
@@ -475,7 +468,7 @@ export default class BasePlatformAutomation extends BasePlatform {
       }
     } catch (err) {
       this.log("Error in searchNext:", err);
-      this.statusOverlay.addError("Error in search: " + err.message);
+      this.statusOverlay.addError("I ran into an issue while searching for jobs. Let me try again!");
       this.resetApplicationStateOnError();
       setTimeout(() => this.searchNext(), 5000);
     }
@@ -569,7 +562,7 @@ export default class BasePlatformAutomation extends BasePlatform {
    * Process a job link
    */
   async processJobLink({ link, url }) {
-    this.statusOverlay.addSuccess("Found job to apply: " + url);
+    this.statusOverlay.addSuccess("Perfect! I found a great job opportunity for you. Let me apply now! 🎯");
 
     if (this.applicationState.isApplicationInProgress) {
       this.log("Application became in progress, aborting new task");
@@ -624,7 +617,7 @@ export default class BasePlatformAutomation extends BasePlatform {
     this.sendCvPageNotRespondTimeout = setTimeout(() => {
       if (this.applicationState.isApplicationInProgress) {
         this.statusOverlay.addWarning(
-          "No response from job page, resuming search"
+          "This job application is taking longer than usual. Let me move on to the next one to keep things moving!"
         );
         this.applicationState.isApplicationInProgress = false;
         this.applicationState.applicationStartTime = null;
@@ -638,7 +631,7 @@ export default class BasePlatformAutomation extends BasePlatform {
    */
   handleJobTaskError(err, url, link) {
     this.log(`Error sending job task for ${url}:`, err);
-    this.statusOverlay.addError("Error sending job task: " + err.message);
+    this.statusOverlay.addError("I had trouble processing this job application, but I'll continue with the next one!");
 
     // Reset flags on error
     this.resetApplicationStateOnError();
@@ -661,9 +654,7 @@ export default class BasePlatformAutomation extends BasePlatform {
       return;
     }
 
-    this.statusOverlay.addInfo(
-      "No new job links found, trying to load more..."
-    );
+    // Removed "no new job links found" message - too technical
     const loadMoreBtn = this.findLoadMoreElement();
 
     if (loadMoreBtn) {
@@ -672,7 +663,7 @@ export default class BasePlatformAutomation extends BasePlatform {
         return;
       }
 
-      this.statusOverlay.addInfo('Clicking "More results" button');
+      this.statusOverlay.addInfo('Let me load more job opportunities for you!');
       loadMoreBtn.click();
 
       setTimeout(() => {
@@ -681,7 +672,7 @@ export default class BasePlatformAutomation extends BasePlatform {
         }
       }, 3000);
     } else {
-      this.statusOverlay.addSuccess("All jobs processed, search completed!");
+      this.statusOverlay.addSuccess("Excellent! I've successfully processed all available jobs for you! 🎉 Great work today!");
       this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
     }
   }

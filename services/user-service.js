@@ -30,24 +30,44 @@ export default class UserService {
   }
 
   async getUserDetails() {
-    // Try cache first
-    if (this.userDetailsCache) {
-      return this.userDetailsCache;
+    const userData = await this.fetchUserDetails();
+
+    if (userData) {
+      return {
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        email: userData.email,
+        phoneNumber: userData.phoneNumber,
+        phoneCountryCode: userData.phoneCountryCode,
+        country: userData.country,
+        jobPreferences: userData.jobPreferences,
+        cv: userData.cv,
+        currentCompany: userData.currentCompany,
+        yearsOfExperience: userData.yearsOfExperience,
+        fullPosition: userData.fullPosition,
+        linkedIn: userData.linkedIn,
+        website: userData.website,
+        github: userData.github,
+        coverLetter: userData.coverLetter,
+        currentCity: userData.currentCity,
+        streetAddress: userData.streetAddress,
+        desiredSalary: userData.desiredSalary,
+        noticePeriod: userData.noticePeriod,
+        education: userData.education,
+        headline: userData.headline,
+        summary: userData.summary,
+        age: userData.age,
+        race: userData.race,
+        gender: userData.gender,
+        needsSponsorship: userData.needsSponsorship,
+        disabilityStatus: userData.disabilityStatus,
+        veteranStatus: userData.veteranStatus,
+        usCitizenship: userData.usCitizenship,
+        parsedResumeText: userData.parsedResumeText,
+      };
     }
 
-    // Try chrome storage
-    try {
-      const result = await chrome.storage.local.get(["userDetails"]);
-      if (result.userDetails) {
-        this.userDetailsCache = result.userDetails;
-        return result.userDetails;
-      }
-    } catch (error) {
-      console.error("Error getting cached user details:", error);
-    }
-
-    // Fetch from API as fallback
-    return await this.fetchUserDetails();
+    return null;
   }
 
   async updateUserPreferences(preferences) {

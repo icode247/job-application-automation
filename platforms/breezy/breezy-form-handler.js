@@ -1,6 +1,7 @@
 // platforms/breezy/breezy-form-handler.js
 import { AIService } from "../../services/index.js";
-
+import Utils from "../../utils/utils.js";
+//getAIAnswer
 export class BreezyFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;
@@ -9,187 +10,7 @@ export class BreezyFormHandler {
     this.jobDescription = options.jobDescription || "";
     this.aiService = new AIService({ apiHost: this.host });
     this.answerCache = new Map();
-  }
-
-  /**
-   * Get all form fields from a Breezy application form
-   */
-  getAllFormFields(form) {
-    try {
-      this.logger("Finding all form fields in Breezy form");
-
-      const fields = [];
-
-      // Breezy-specific selectors
-      const formElements = form.querySelectorAll(
-        'input:not([type="hidden"]), select, textarea, ' +
-          '[role="radio"], [role="checkbox"], ' +
-          'fieldset[role="radiogroup"], ' +
-          "div.form-group, " +
-          'div[role="group"], ' +
-          "div.custom-checkbox"
-      );
-
-      this.logger(`Found ${formElements.length} form elements`);
-
-      for (const element of formElements) {
-        if (!this.isElementVisible(element)) continue;
-
-        const fieldInfo = {
-          element,
-          label: this.getFieldLabel(element),
-          type: this.getFieldType(element),
-          required: this.isFieldRequired(element),
-        };
-
-        // For radio groups, get the full fieldset when possible
-        if (fieldInfo.type === "radio" && element.tagName !== "FIELDSET") {
-          const radioGroup = element.closest('fieldset[role="radiogroup"]');
-          if (radioGroup) {
-            fieldInfo.element = radioGroup;
-          }
-        }
-
-        if (fieldInfo.label) {
-          fields.push(fieldInfo);
-        }
-      }
-
-      // Deduplicate fields - particularly important for radio groups
-      const uniqueFields = [];
-      const seenLabels = new Set();
-
-      for (const field of fields) {
-        if (field.type === "radio") {
-          if (!seenLabels.has(field.label)) {
-            seenLabels.add(field.label);
-            uniqueFields.push(field);
-          }
-        } else {
-          uniqueFields.push(field);
-        }
-      }
-
-      this.logger(`Processed ${uniqueFields.length} unique form fields`);
-      return uniqueFields;
-    } catch (error) {
-      this.logger(`Error getting form fields: ${error.message}`);
-      return [];
-    }
-  }
-
-  /**
-   * Get label text for a form field (Breezy-specific)
-   */
-  getFieldLabel(element) {
-    try {
-      // Breezy specific label finding
-      const breezyLabel = element
-        .closest(".form-group")
-        ?.querySelector("label");
-      if (breezyLabel) {
-        return this.cleanLabelText(breezyLabel.textContent);
-      }
-
-      // Handle file upload fields specifically
-      if (
-        element.type === "file" ||
-        element.classList.contains("custom-file-input") ||
-        element.closest(".custom-file")
-      ) {
-        const customFileLabel = element
-          .closest(".custom-file")
-          ?.querySelector(".custom-file-label");
-        if (customFileLabel) {
-          return this.cleanLabelText(customFileLabel.textContent);
-        }
-
-        const formGroup = element.closest(".form-group");
-        if (formGroup) {
-          const label = formGroup.querySelector("label");
-          if (label) {
-            return this.cleanLabelText(label.textContent);
-          }
-        }
-      }
-
-      // If this is a checkbox/radio group, look for the label with aria-labelledby
-      if (
-        element.getAttribute("role") === "group" ||
-        element.getAttribute("role") === "radiogroup" ||
-        (element.tagName === "FIELDSET" &&
-          element.getAttribute("role") === "radiogroup")
-      ) {
-        const labelledById = element.getAttribute("aria-labelledby");
-        if (labelledById) {
-          const labelEl = document.getElementById(labelledById);
-          if (labelEl) {
-            const labelText = Array.from(labelEl.childNodes)
-              .filter(
-                (node) =>
-                  node.nodeType === Node.TEXT_NODE ||
-                  (node.nodeType === Node.ELEMENT_NODE &&
-                    node.tagName !== "SVG")
-              )
-              .map((node) => node.textContent)
-              .join(" ");
-            return this.cleanLabelText(labelText);
-          }
-        }
-      }
-
-      // Standard HTML label association
-      if (element.id) {
-        const labelElement = document.querySelector(
-          `label[for="${element.id}"]`
-        );
-        if (labelElement) {
-          return this.cleanLabelText(labelElement.textContent);
-        }
-      }
-
-      // Parent label
-      const parentLabel = element.closest("label");
-      if (parentLabel) {
-        const clone = parentLabel.cloneNode(true);
-        const inputElements = clone.querySelectorAll("input, select, textarea");
-        for (const inputEl of inputElements) {
-          if (inputEl.parentNode) {
-            inputEl.parentNode.removeChild(inputEl);
-          }
-        }
-        return this.cleanLabelText(clone.textContent);
-      }
-
-      // Fieldset legend
-      const fieldset = element.closest("fieldset");
-      if (fieldset) {
-        const legend = fieldset.querySelector("legend");
-        if (legend) {
-          return this.cleanLabelText(legend.textContent);
-        }
-      }
-
-      // Aria-label, placeholder, or name as fallback
-      if (element.getAttribute("aria-label")) {
-        return this.cleanLabelText(element.getAttribute("aria-label"));
-      }
-
-      if (element.placeholder) {
-        return this.cleanLabelText(element.placeholder);
-      }
-
-      if (element.name) {
-        return this.cleanLabelText(
-          element.name.replace(/([A-Z])/g, " $1").replace(/_/g, " ")
-        );
-      }
-
-      return "";
-    } catch (error) {
-      this.logger(`Error getting field label: ${error.message}`);
-      return "";
-    }
+    this.utils = new Utils();
   }
 
   /**
@@ -310,9 +131,6 @@ export class BreezyFormHandler {
     return false;
   }
 
-  /**
-   * Fill form with user profile data using AI
-   */
   async fillFormWithProfile(form, profile) {
     try {
       this.logger("Filling Breezy form with user profile data");
@@ -322,6 +140,8 @@ export class BreezyFormHandler {
       this.logger(`Found ${formFields.length} form fields to process`);
 
       let filledCount = 0;
+      const processedFields = new Set(); // Track what we've already processed
+      const failedFields = new Map(); // Track failures to avoid infinite retries
 
       for (const field of formFields) {
         if (!field.label) continue;
@@ -335,8 +155,28 @@ export class BreezyFormHandler {
           continue;
         }
 
+        // Create field identifier for tracking
+        const fieldIdentifier = `${field.type}:${this.cleanLabelText(
+          field.label
+        )}`;
+
+        // Skip if already processed successfully
+        if (processedFields.has(fieldIdentifier)) {
+          this.logger(`Skipping already processed field: ${field.label}`);
+          continue;
+        }
+
+        // Skip if failed too many times
+        const failureCount = failedFields.get(fieldIdentifier) || 0;
+        if (failureCount >= 3) {
+          this.logger(
+            `Skipping field after ${failureCount} failures: ${field.label}`
+          );
+          continue;
+        }
+
         try {
-          this.logger(`Processing field: ${field.label} (${field.type})`);
+          this.logger(`Processing ${field.type} field: ${field.label}`);
 
           const options = this.getFieldOptions(field.element);
           const fieldContext = `This is a ${field.type} field${
@@ -356,25 +196,51 @@ export class BreezyFormHandler {
                 answer.length > 50 ? "..." : ""
               }`
             );
+
             const success = await this.fillField(field.element, answer);
-            if (success) filledCount++;
+            if (success) {
+              filledCount++;
+              processedFields.add(fieldIdentifier); // Mark as successfully processed
+              this.logger(`✅ Successfully filled field: ${field.label}`);
+            } else {
+              throw new Error("Failed to fill field with answer");
+            }
+          } else {
+            throw new Error("No answer received from AI");
           }
 
           await this.wait(300);
         } catch (fieldError) {
+          // Track the failure
+          failedFields.set(fieldIdentifier, failureCount + 1);
           this.logger(
-            `Error processing field "${field.label}": ${fieldError.message}`
+            `❌ Error processing field "${field.label}" (attempt ${
+              failureCount + 1
+            }): ${fieldError.message}`
           );
+
+          // Don't immediately retry, continue to next field
+          continue;
         }
       }
 
-      // Handle required checkboxes and agreements
+      // Handle required checkboxes
       await this.handleRequiredCheckboxes(form);
 
-      this.logger(`Successfully filled ${filledCount} fields with AI answers`);
+      this.logger(`Successfully filled ${filledCount} fields`);
+      this.logger(
+        `Processed fields: ${Array.from(processedFields).join(", ")}`
+      );
+
+      if (failedFields.size > 0) {
+        this.logger(
+          `Failed fields: ${Array.from(failedFields.keys()).join(", ")}`
+        );
+      }
+
       return true;
     } catch (error) {
-      this.logger(`Error filling form with AI answers: ${error.message}`);
+      this.logger(`Error filling form: ${error.message}`);
       return false;
     }
   }
@@ -389,34 +255,66 @@ export class BreezyFormHandler {
     fieldContext = ""
   ) {
     try {
-      const cacheKey = `${question}:${options.join(",")}`;
+      this.logger(`Requesting AI answer for "${question}"`);
+
+      // Create a cache key that includes all relevant parameters
+      const cacheKey = JSON.stringify({
+        question: this.cleanLabelText(question),
+        options: options.sort(), // Sort to ensure consistent ordering
+        fieldType,
+        fieldContext,
+      });
+
+      // Check cache first
       if (this.answerCache.has(cacheKey)) {
+        this.logger(`Using cached answer for "${question}"`);
         return this.answerCache.get(cacheKey);
       }
 
-      this.logger(`Requesting AI answer for "${question}"`);
+      const userDataForContext = this.utils.getUserDetailsForContext(
+        this.userData
+      );
+
+      // Special handling for salary fields
+      if (
+        question.toLowerCase().includes("salary") ||
+        fieldContext.includes("salary")
+      ) {
+        const answer = await this.aiService.getAnswer(
+          `${question} (provide only the numeric amount without currency symbols or commas)`,
+          options,
+          {
+            platform: "breezy",
+            userData: userDataForContext,
+            jobDescription: this.jobDescription,
+            fieldType,
+            fieldContext: fieldContext + " - numeric only",
+          }
+        );
+
+        const numericAnswer = this.extractNumericSalary(answer);
+
+        // Cache the result
+        this.answerCache.set(cacheKey, numericAnswer);
+        return numericAnswer;
+      }
 
       const answer = await this.aiService.getAnswer(question, options, {
         platform: "breezy",
-        userData: this.userData,
+        userData: userDataForContext,
         jobDescription: this.jobDescription,
         fieldType,
         fieldContext,
       });
 
+      // Cache the result
       this.answerCache.set(cacheKey, answer);
       return answer;
     } catch (error) {
-      this.logger(`Error getting AI answer: ${error.message}`);
-
-      // Return appropriate fallback based on field type
-      if (fieldType === "checkbox" || fieldType === "radio") {
-        return options.length > 0 ? options[0] : "yes";
-      } else if (fieldType === "select") {
-        return options.length > 0 ? options[0] : "";
-      } else {
-        return "I prefer not to answer";
-      }
+      this.logger(
+        `I'm having trouble finding the right answer: ${error.message}`
+      );
+      return null;
     }
   }
 
@@ -430,7 +328,7 @@ export class BreezyFormHandler {
       }
 
       const fieldType = this.getFieldType(element);
-      this.logger(`Filling ${fieldType} field with value: ${value}`);
+      this.logger(`Hang on while I fill in the ${fieldType} field`);
 
       switch (fieldType) {
         case "text":
@@ -463,11 +361,12 @@ export class BreezyFormHandler {
           return false; // File uploads handled separately
 
         default:
-          this.logger(`Unsupported field type: ${fieldType}`);
           return false;
       }
     } catch (error) {
-      this.logger(`Error filling field: ${error.message}`);
+      this.logger(
+        `I'm having trouble finding the right answer: ${error.message}`
+      );
       return false;
     }
   }
@@ -481,6 +380,26 @@ export class BreezyFormHandler {
       element.focus();
       await this.wait(100);
 
+      // Handle salary fields specifically
+      if (this.isSalaryField(element)) {
+        const numericValue = this.extractNumericSalary(value);
+        if (numericValue) {
+          element.value = "";
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          await this.wait(50);
+
+          element.value = numericValue;
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          element.dispatchEvent(new Event("blur", { bubbles: true }));
+
+          await this.wait(100);
+          return true;
+        }
+        return false;
+      }
+
+      // Standard field handling
       element.value = "";
       element.dispatchEvent(new Event("input", { bubbles: true }));
       await this.wait(50);
@@ -493,7 +412,9 @@ export class BreezyFormHandler {
       await this.wait(100);
       return true;
     } catch (error) {
-      this.logger(`Error filling input field: ${error.message}`);
+      this.logger(
+        `I'm having trouble finding the right answer: ${error.message}`
+      );
       return false;
     }
   }
@@ -503,6 +424,51 @@ export class BreezyFormHandler {
    */
   async fillTextareaField(element, value) {
     return await this.fillInputField(element, value);
+  }
+
+  /**
+   * Check if element is a salary field
+   */
+  isSalaryField(element) {
+    const name = (element.name || "").toLowerCase();
+    const id = (element.id || "").toLowerCase();
+    const placeholder = (element.placeholder || "").toLowerCase();
+    const className = (element.className || "").toLowerCase();
+
+    return (
+      name.includes("salary") ||
+      name === "csalary" ||
+      id.includes("salary") ||
+      placeholder.includes("salary") ||
+      className.includes("salary") ||
+      element.getAttribute("ng-change") === "stripNonNumeric()"
+    );
+  }
+
+  /**
+   * Extract numeric value from salary string
+   */
+  extractNumericSalary(salaryValue) {
+    if (!salaryValue) return "";
+
+    // Convert to string and extract only numbers
+    const numericOnly = String(salaryValue).replace(/[^\d]/g, ""); // Remove all non-digit characters
+
+    // Return empty string if no numbers found
+    if (!numericOnly) return "";
+
+    // Ensure it's a reasonable salary range (between 1000 and 999999999)
+    const numValue = parseInt(numericOnly, 10);
+    if (numValue < 1000 || numValue > 999999999) {
+      // If unreasonable, try to extract a more reasonable number
+      if (numericOnly.length > 6) {
+        // Take first 6 digits for very long numbers
+        return numericOnly.substring(0, 6);
+      }
+      return numericOnly;
+    }
+
+    return numericOnly;
   }
 
   /**
@@ -620,220 +586,6 @@ export class BreezyFormHandler {
   }
 
   /**
-   * Fill a checkbox field
-   */
-  async fillCheckboxField(element, value) {
-    try {
-      const shouldCheck =
-        value === true ||
-        value === "true" ||
-        value === "yes" ||
-        value === "on" ||
-        value === 1;
-
-      let checkboxInput = element;
-      if (element.tagName.toLowerCase() !== "input") {
-        checkboxInput = element.querySelector('input[type="checkbox"]');
-
-        if (!checkboxInput) {
-          if (element.getAttribute("role") === "checkbox") {
-            const isChecked = element.getAttribute("aria-checked") === "true";
-
-            if ((shouldCheck && !isChecked) || (!shouldCheck && isChecked)) {
-              this.scrollToElement(element);
-              element.click();
-              await this.wait(200);
-            }
-            return true;
-          }
-
-          const customCheckbox = element.querySelector(".custom-checkbox");
-          if (customCheckbox) {
-            this.scrollToElement(customCheckbox);
-            customCheckbox.click();
-            await this.wait(200);
-            return true;
-          }
-        }
-
-        if (!checkboxInput) return false;
-      }
-
-      if (
-        (shouldCheck && !checkboxInput.checked) ||
-        (!shouldCheck && checkboxInput.checked)
-      ) {
-        this.scrollToElement(checkboxInput);
-
-        const labelEl =
-          checkboxInput.closest("label") ||
-          document.querySelector(`label[for="${checkboxInput.id}"]`);
-
-        if (labelEl) {
-          labelEl.click();
-        } else {
-          checkboxInput.click();
-        }
-
-        await this.wait(200);
-
-        if (checkboxInput.checked !== shouldCheck) {
-          checkboxInput.checked = shouldCheck;
-          checkboxInput.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-      }
-
-      return true;
-    } catch (error) {
-      this.logger(`Error filling checkbox field: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Fill a radio button field
-   */
-  async fillRadioField(element, value) {
-    try {
-      const valueStr = String(value).toLowerCase();
-
-      // Handle Breezy's custom radio groups
-      if (
-        element.classList.contains("custom-radio-group") ||
-        element.closest(".custom-radio-group")
-      ) {
-        const container = element.classList.contains("custom-radio-group")
-          ? element
-          : element.closest(".custom-radio-group");
-
-        const radioLabels = container.querySelectorAll(
-          "label.custom-control-label"
-        );
-
-        let matchingLabel = null;
-
-        for (const label of radioLabels) {
-          const labelText = label.textContent.trim().toLowerCase();
-
-          if (
-            labelText === valueStr ||
-            labelText.includes(valueStr) ||
-            valueStr.includes(labelText) ||
-            (valueStr === "yes" && labelText === "yes") ||
-            (valueStr === "no" && labelText === "no")
-          ) {
-            matchingLabel = label;
-            break;
-          }
-        }
-
-        if (
-          !matchingLabel &&
-          (valueStr === "yes" ||
-            valueStr === "no" ||
-            valueStr === "true" ||
-            valueStr === "false")
-        ) {
-          const isYes = valueStr === "yes" || valueStr === "true";
-
-          if (isYes && radioLabels.length > 0) {
-            matchingLabel = radioLabels[0];
-          } else if (!isYes && radioLabels.length > 1) {
-            matchingLabel = radioLabels[1];
-          }
-        }
-
-        if (!matchingLabel && radioLabels.length > 0) {
-          matchingLabel = radioLabels[0];
-        }
-
-        if (matchingLabel) {
-          this.scrollToElement(matchingLabel);
-          matchingLabel.click();
-          await this.wait(300);
-          return true;
-        }
-      }
-
-      // Handle standard radio groups
-      if (
-        element.getAttribute("role") === "radiogroup" ||
-        (element.tagName === "FIELDSET" &&
-          element.getAttribute("role") === "radiogroup")
-      ) {
-        const radios = element.querySelectorAll(
-          '[role="radio"], input[type="radio"]'
-        );
-        if (!radios.length) return false;
-
-        let matchingRadio = null;
-
-        for (const radio of radios) {
-          const label =
-            radio.closest("label") ||
-            document.querySelector(`label[for="${radio.id}"]`);
-
-          if (label) {
-            const labelText = label.textContent.trim().toLowerCase();
-
-            if (
-              labelText === valueStr ||
-              labelText.includes(valueStr) ||
-              valueStr.includes(labelText) ||
-              (valueStr === "yes" && labelText === "yes") ||
-              (valueStr === "no" && labelText === "no")
-            ) {
-              matchingRadio = radio;
-              break;
-            }
-          }
-        }
-
-        if (
-          !matchingRadio &&
-          (valueStr === "yes" ||
-            valueStr === "no" ||
-            valueStr === "true" ||
-            valueStr === "false")
-        ) {
-          const isYes = valueStr === "yes" || valueStr === "true";
-
-          if (isYes && radios.length > 0) {
-            matchingRadio = radios[0];
-          } else if (!isYes && radios.length > 1) {
-            matchingRadio = radios[1];
-          }
-        }
-
-        if (!matchingRadio && radios.length > 0) {
-          matchingRadio = radios[0];
-        }
-
-        if (matchingRadio) {
-          this.scrollToElement(matchingRadio);
-
-          const label =
-            matchingRadio.closest("label") ||
-            document.querySelector(`label[for="${matchingRadio.id}"]`);
-          if (label) {
-            label.click();
-          } else {
-            matchingRadio.click();
-          }
-
-          await this.wait(300);
-          return true;
-        }
-      }
-
-      return false;
-    } catch (error) {
-      this.logger(`Error filling radio field: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
    * Fill a date field
    */
   async fillDateField(element, value) {
@@ -884,88 +636,6 @@ export class BreezyFormHandler {
     } catch (error) {
       this.logger(`Error filling date field: ${error.message}`);
       return false;
-    }
-  }
-
-  /**
-   * Handle required checkboxes and agreements
-   */
-  async handleRequiredCheckboxes(form) {
-    try {
-      this.logger("Handling required checkboxes");
-
-      const checkboxFields = [];
-
-      // Standard checkboxes
-      const standardCheckboxes = form.querySelectorAll(
-        'input[type="checkbox"]'
-      );
-      for (const checkbox of standardCheckboxes) {
-        if (!this.isElementVisible(checkbox)) continue;
-
-        const label = this.getFieldLabel(checkbox);
-        const isRequired = this.isFieldRequired(checkbox);
-        const isAgreement = this.isAgreementCheckbox(label);
-
-        if (isRequired || isAgreement) {
-          checkboxFields.push({
-            element: checkbox,
-            label,
-            isRequired,
-            isAgreement,
-          });
-        }
-      }
-
-      // Breezy custom checkboxes
-      const customCheckboxes = form.querySelectorAll(
-        '.custom-checkbox, [role="checkbox"]'
-      );
-      for (const checkbox of customCheckboxes) {
-        if (!this.isElementVisible(checkbox)) continue;
-
-        const label = this.getFieldLabel(checkbox);
-        const isRequired =
-          this.isFieldRequired(checkbox) ||
-          checkbox.closest(".form-group.required");
-        const isAgreement = this.isAgreementCheckbox(label);
-
-        if (isRequired || isAgreement) {
-          checkboxFields.push({
-            element: checkbox,
-            label,
-            isRequired,
-            isAgreement,
-          });
-        }
-      }
-
-      this.logger(
-        `Found ${checkboxFields.length} required/agreement checkboxes`
-      );
-
-      for (const field of checkboxFields) {
-        let shouldCheck = field.isRequired || field.isAgreement;
-
-        if (!shouldCheck) {
-          const answer = await this.getAIAnswer(
-            field.label,
-            ["yes", "no"],
-            "checkbox",
-            "This is a checkbox that may require consent or agreement."
-          );
-
-          shouldCheck = answer === "yes" || answer === "true";
-        }
-
-        this.logger(
-          `${shouldCheck ? "Checking" : "Unchecking"} checkbox: ${field.label}`
-        );
-        await this.fillCheckboxField(field.element, shouldCheck);
-        await this.wait(200);
-      }
-    } catch (error) {
-      this.logger(`Error handling required checkboxes: ${error.message}`);
     }
   }
 
@@ -1048,57 +718,6 @@ export class BreezyFormHandler {
     }
 
     return !!workHistoryHeading;
-  }
-
-  /**
-   * Get available options from select fields
-   */
-  getFieldOptions(element) {
-    try {
-      const options = [];
-      const fieldType = this.getFieldType(element);
-
-      if (fieldType === "select") {
-        if (element.tagName.toLowerCase() === "select") {
-          Array.from(element.options).forEach((option) => {
-            const text = option.textContent.trim();
-            if (text && option.value) {
-              options.push(text);
-            }
-          });
-        }
-      } else if (fieldType === "radio") {
-        const radios =
-          element.tagName === "FIELDSET"
-            ? element.querySelectorAll('[role="radio"], input[type="radio"]')
-            : element
-                .closest("fieldset, .custom-radio-group")
-                ?.querySelectorAll('[role="radio"], input[type="radio"]') || [];
-
-        radios.forEach((radio) => {
-          const label =
-            radio.closest("label") ||
-            document.querySelector(`label[for="${radio.id}"]`);
-          if (label) {
-            options.push(label.textContent.trim());
-          }
-        });
-
-        if (options.length === 0 && element.closest(".custom-radio-group")) {
-          element
-            .closest(".custom-radio-group")
-            .querySelectorAll("label.custom-control-label")
-            .forEach((label) => {
-              options.push(label.textContent.trim());
-            });
-        }
-      }
-
-      return options;
-    } catch (error) {
-      this.logger(`Error getting field options: ${error.message}`);
-      return [];
-    }
   }
 
   /**
@@ -1222,5 +841,638 @@ export class BreezyFormHandler {
 
   wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Enhanced getAllFormFields to better detect Breezy field structures
+   */
+  getAllFormFields(form) {
+    try {
+      this.logger(
+        "Let me find all the form fields in this Breezy application form"
+      );
+
+      const fields = [];
+      const processedFields = new Set(); // Track processed fields
+
+      // Enhanced selectors to include Breezy-specific structures
+      const formElements = form.querySelectorAll(
+        'input:not([type="hidden"]), select, textarea, ' +
+          '[role="radio"], [role="checkbox"], ' +
+          'fieldset[role="radiogroup"], ' +
+          'div.form-group, div[role="group"], div.custom-checkbox, ' +
+          "div.multiplechoice, div.dropdown, div.gdpr-accept, " +
+          "ul.options"
+      );
+
+      for (const element of formElements) {
+        if (!this.isElementVisible(element)) continue;
+
+        // Create a unique identifier for this field
+        const fieldId = this.createFieldIdentifier(element);
+        if (processedFields.has(fieldId)) {
+          this.logger(`Skipping duplicate field: ${fieldId}`);
+          continue;
+        }
+
+        // Process field based on type...
+        const fieldInfo = this.processFormElement(element);
+
+        if (fieldInfo && fieldInfo.label) {
+          // Additional deduplication check based on label
+          const labelKey = `${fieldInfo.type}:${this.cleanLabelText(
+            fieldInfo.label
+          )}`;
+          if (!processedFields.has(labelKey)) {
+            fields.push(fieldInfo);
+            processedFields.add(fieldId);
+            processedFields.add(labelKey);
+          }
+        }
+      }
+
+      // Final deduplication pass for radio groups
+      return this.deduplicateRadioGroups(fields);
+    } catch (error) {
+      this.logger(`Error getting form fields: ${error.message}`);
+      return [];
+    }
+  }
+
+  createFieldIdentifier(element) {
+    // Create unique identifier based on element properties
+    const id = element.id || "";
+    const name = element.name || "";
+    const className = element.className || "";
+    const tagName = element.tagName.toLowerCase();
+
+    // For containers, use their position in the DOM
+    if (
+      element.classList.contains("multiplechoice") ||
+      element.classList.contains("dropdown") ||
+      element.classList.contains("gdpr-accept")
+    ) {
+      const siblings = Array.from(element.parentNode.children);
+      const index = siblings.indexOf(element);
+      return `container:${tagName}:${className}:${index}`;
+    }
+
+    return `${tagName}:${id}:${name}:${className}`;
+  }
+
+  deduplicateRadioGroups(fields) {
+    const uniqueFields = [];
+    const radioGroupsSeen = new Map();
+
+    for (const field of fields) {
+      if (field.type === "radio") {
+        const groupKey = this.cleanLabelText(field.label);
+        if (!radioGroupsSeen.has(groupKey)) {
+          radioGroupsSeen.set(groupKey, true);
+          uniqueFields.push(field);
+        }
+      } else {
+        uniqueFields.push(field);
+      }
+    }
+
+    return uniqueFields;
+  }
+
+  /**
+   * Enhanced getFieldLabel to handle all Breezy structures
+   */
+  getFieldLabel(element, container = null) {
+    try {
+      // Use provided container or find the appropriate container
+      const fieldContainer =
+        container ||
+        element.closest(".multiplechoice") ||
+        element.closest(".dropdown") ||
+        element.closest(".gdpr-accept") ||
+        element.closest(".form-group");
+
+      // Handle Breezy multiplechoice (radio/checkbox groups)
+      if (
+        fieldContainer &&
+        fieldContainer.classList.contains("multiplechoice")
+      ) {
+        const h3Element = fieldContainer.querySelector(
+          "h3 span.ng-binding, h3.ng-binding"
+        );
+        if (h3Element) {
+          return this.cleanLabelText(h3Element.textContent);
+        }
+
+        const h3 = fieldContainer.querySelector("h3");
+        if (h3) {
+          return this.cleanLabelText(h3.textContent);
+        }
+      }
+
+      // Handle Breezy dropdown structure
+      if (fieldContainer && fieldContainer.classList.contains("dropdown")) {
+        const h3Element = fieldContainer.querySelector("h3 span.ng-binding");
+        if (h3Element) {
+          return this.cleanLabelText(h3Element.textContent);
+        }
+
+        const h3 = fieldContainer.querySelector("h3");
+        if (h3) {
+          return this.cleanLabelText(h3.textContent);
+        }
+      }
+
+      // Handle GDPR consent checkbox
+      if (fieldContainer && fieldContainer.classList.contains("gdpr-accept")) {
+        const h3Element = fieldContainer.querySelector("h3 span");
+        if (h3Element) {
+          return this.cleanLabelText(h3Element.textContent);
+        }
+
+        // Also look at the label text for additional context
+        const label = fieldContainer.querySelector("label");
+        if (label) {
+          const labelText = label.textContent.trim();
+          if (labelText.length > 10) {
+            // If substantial text
+            return this.cleanLabelText("Privacy Notice Consent");
+          }
+        }
+      }
+
+      // Original Breezy specific label finding
+      const breezyLabel = element
+        .closest(".form-group")
+        ?.querySelector("label");
+      if (breezyLabel) {
+        return this.cleanLabelText(breezyLabel.textContent);
+      }
+
+      // Handle file upload fields specifically
+      if (
+        element.type === "file" ||
+        element.classList.contains("custom-file-input") ||
+        element.closest(".custom-file")
+      ) {
+        const customFileLabel = element
+          .closest(".custom-file")
+          ?.querySelector(".custom-file-label");
+        if (customFileLabel) {
+          return this.cleanLabelText(customFileLabel.textContent);
+        }
+
+        const formGroup = element.closest(".form-group");
+        if (formGroup) {
+          const label = formGroup.querySelector("label");
+          if (label) {
+            return this.cleanLabelText(label.textContent);
+          }
+        }
+      }
+
+      // Standard HTML label association
+      if (element.id) {
+        const labelElement = document.querySelector(
+          `label[for="${element.id}"]`
+        );
+        if (labelElement) {
+          return this.cleanLabelText(labelElement.textContent);
+        }
+      }
+
+      // Parent label
+      const parentLabel = element.closest("label");
+      if (parentLabel) {
+        const clone = parentLabel.cloneNode(true);
+        const inputElements = clone.querySelectorAll("input, select, textarea");
+        for (const inputEl of inputElements) {
+          if (inputEl.parentNode) {
+            inputEl.parentNode.removeChild(inputEl);
+          }
+        }
+        return this.cleanLabelText(clone.textContent);
+      }
+
+      // Aria-label, placeholder, or name as fallback
+      if (element.getAttribute("aria-label")) {
+        return this.cleanLabelText(element.getAttribute("aria-label"));
+      }
+
+      if (element.placeholder) {
+        return this.cleanLabelText(element.placeholder);
+      }
+
+      if (element.name) {
+        return this.cleanLabelText(
+          element.name.replace(/([A-Z])/g, " $1").replace(/_/g, " ")
+        );
+      }
+
+      return "";
+    } catch (error) {
+      this.logger(`I'm having trouble getting the field label`);
+      return "";
+    }
+  }
+
+  /**
+   * Enhanced getFieldOptions for Breezy structures
+   */
+  getFieldOptions(element) {
+    try {
+      const options = [];
+      const fieldType = this.getFieldType(element);
+
+      if (fieldType === "select") {
+        if (element.tagName.toLowerCase() === "select") {
+          Array.from(element.options).forEach((option) => {
+            const text = option.textContent.trim();
+            const value = option.value.trim();
+            // Skip empty, undefined, or placeholder options
+            if (text && value && value !== "? undefined:undefined ?") {
+              options.push(text);
+            }
+          });
+        }
+      } else if (fieldType === "radio" || fieldType === "checkbox") {
+        // Find the container for this radio/checkbox group
+        const container =
+          element.closest(".multiplechoice") ||
+          element.closest(".gdpr-accept") ||
+          element.closest("fieldset") ||
+          element.closest(".custom-radio-group");
+
+        if (container) {
+          // Look for Breezy-style options in ul.options
+          const optionsList = container.querySelector("ul.options");
+          if (optionsList) {
+            const optionItems = optionsList.querySelectorAll("li.option");
+            optionItems.forEach((li) => {
+              const span = li.querySelector("span.ng-binding");
+              if (span) {
+                options.push(span.textContent.trim());
+              } else {
+                // Fallback to any text in the li
+                const text = li.textContent.trim();
+                if (text) {
+                  options.push(text);
+                }
+              }
+            });
+          } else {
+            // Standard radio/checkbox handling
+            const inputs = container.querySelectorAll(
+              `input[type="${fieldType}"]`
+            );
+            inputs.forEach((input) => {
+              const label =
+                input.closest("label") ||
+                document.querySelector(`label[for="${input.id}"]`);
+              if (label) {
+                const span = label.querySelector("span.ng-binding");
+                if (span) {
+                  options.push(span.textContent.trim());
+                } else {
+                  options.push(label.textContent.trim());
+                }
+              }
+            });
+          }
+        }
+      }
+
+      return options;
+    } catch (error) {
+      this.logger(`Error getting field options: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Enhanced fillRadioField to handle Breezy structures
+   */
+  async fillRadioField(element, value) {
+    try {
+      const valueStr = String(value).toLowerCase().trim();
+      this.logger(`Filling radio field with value: "${valueStr}"`);
+
+      // Find the container for this radio group
+      const container =
+        element.closest(".multiplechoice") ||
+        element.closest("fieldset") ||
+        element.closest(".custom-radio-group");
+
+      if (container) {
+        // Handle Breezy multiplechoice structure
+        if (container.classList.contains("multiplechoice")) {
+          const optionsList = container.querySelector("ul.options");
+          if (optionsList) {
+            const optionItems = optionsList.querySelectorAll("li.option");
+
+            for (const li of optionItems) {
+              const radioInput = li.querySelector('input[type="radio"]');
+              const span = li.querySelector("span.ng-binding");
+
+              if (radioInput && span) {
+                const optionText = span.textContent.trim().toLowerCase();
+                const optionValue = radioInput.value.toLowerCase();
+
+                // Enhanced matching logic
+                if (this.matchesValue(valueStr, optionText, optionValue)) {
+                  this.scrollToElement(li);
+
+                  // Click the label if it exists, otherwise click the input
+                  const label = li.querySelector("label");
+                  if (label) {
+                    label.click();
+                  } else {
+                    radioInput.click();
+                  }
+
+                  await this.wait(300);
+                  return true;
+                }
+              }
+            }
+          }
+        }
+
+        // Fallback to standard radio handling
+        const radios = container.querySelectorAll('input[type="radio"]');
+        for (const radio of radios) {
+          const label =
+            radio.closest("label") ||
+            document.querySelector(`label[for="${radio.id}"]`);
+
+          if (label) {
+            const span = label.querySelector("span.ng-binding");
+            const labelText = span
+              ? span.textContent.trim().toLowerCase()
+              : label.textContent.trim().toLowerCase();
+            const radioValue = radio.value.toLowerCase();
+
+            if (this.matchesValue(valueStr, labelText, radioValue)) {
+              this.scrollToElement(label);
+              label.click();
+              await this.wait(300);
+              return true;
+            }
+          }
+        }
+      }
+
+      return false;
+    } catch (error) {
+      this.logger(`Error filling radio field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Enhanced fillCheckboxField to handle Breezy structures
+   */
+  async fillCheckboxField(element, value) {
+    try {
+      const shouldCheck = this.shouldCheckValue(value);
+      this.logger(`Filling checkbox field, should check: ${shouldCheck}`);
+
+      // Handle GDPR consent checkbox
+      const gdprContainer = element.closest(".gdpr-accept");
+      if (gdprContainer) {
+        const label = gdprContainer.querySelector("label");
+        if (label && label.contains(element)) {
+          this.scrollToElement(label);
+          label.click();
+          await this.wait(200);
+          return true;
+        }
+      }
+
+      // Handle Breezy multiplechoice checkbox structure
+      const multiplechoiceContainer = element.closest(".multiplechoice");
+      if (multiplechoiceContainer) {
+        const optionsList = multiplechoiceContainer.querySelector("ul.options");
+        if (optionsList) {
+          const optionItem = element.closest("li.option");
+          if (optionItem) {
+            this.scrollToElement(optionItem);
+
+            // Check current state
+            const isCurrentlyChecked = element.checked;
+
+            if (
+              (shouldCheck && !isCurrentlyChecked) ||
+              (!shouldCheck && isCurrentlyChecked)
+            ) {
+              // Try clicking the span or the checkbox itself
+              const span = optionItem.querySelector("span.ng-binding");
+              if (span) {
+                span.click();
+              } else {
+                element.click();
+              }
+
+              await this.wait(200);
+
+              // Verify the state changed
+              if (element.checked !== shouldCheck) {
+                element.checked = shouldCheck;
+                element.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }
+
+            return true;
+          }
+        }
+      }
+
+      // Standard checkbox handling (existing code)
+      let checkboxInput = element;
+      if (element.tagName.toLowerCase() !== "input") {
+        checkboxInput = element.querySelector('input[type="checkbox"]');
+        // ... rest of existing checkbox handling
+      }
+
+      if (
+        (shouldCheck && !checkboxInput.checked) ||
+        (!shouldCheck && checkboxInput.checked)
+      ) {
+        this.scrollToElement(checkboxInput);
+
+        const labelEl =
+          checkboxInput.closest("label") ||
+          document.querySelector(`label[for="${checkboxInput.id}"]`);
+
+        if (labelEl) {
+          labelEl.click();
+        } else {
+          checkboxInput.click();
+        }
+
+        await this.wait(200);
+
+        if (checkboxInput.checked !== shouldCheck) {
+          checkboxInput.checked = shouldCheck;
+          checkboxInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+
+      return true;
+    } catch (error) {
+      this.logger(`Error filling checkbox field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Enhanced handleRequiredCheckboxes to specifically handle GDPR
+   */
+  async handleRequiredCheckboxes(form) {
+    try {
+      this.logger("Handling required checkboxes");
+
+      const checkboxFields = [];
+
+      // Specifically look for GDPR consent checkboxes
+      const gdprContainers = form.querySelectorAll(".gdpr-accept");
+      for (const container of gdprContainers) {
+        const checkbox = container.querySelector('input[type="checkbox"]');
+        if (checkbox && this.isElementVisible(checkbox)) {
+          checkboxFields.push({
+            element: checkbox,
+            label: "Privacy Notice Consent",
+            isRequired: true,
+            isAgreement: true,
+            isGDPR: true,
+          });
+        }
+      }
+
+      // Standard checkboxes
+      const standardCheckboxes = form.querySelectorAll(
+        'input[type="checkbox"]'
+      );
+      for (const checkbox of standardCheckboxes) {
+        if (!this.isElementVisible(checkbox)) continue;
+
+        // Skip if already handled as GDPR
+        if (checkbox.closest(".gdpr-accept")) continue;
+
+        const label = this.getFieldLabel(checkbox);
+        const isRequired = this.isFieldRequired(checkbox);
+        const isAgreement = this.isAgreementCheckbox(label);
+
+        if (isRequired || isAgreement) {
+          checkboxFields.push({
+            element: checkbox,
+            label,
+            isRequired,
+            isAgreement,
+            isGDPR: false,
+          });
+        }
+      }
+
+      // Breezy custom checkboxes
+      const customCheckboxes = form.querySelectorAll(
+        '.custom-checkbox, [role="checkbox"]'
+      );
+      for (const checkbox of customCheckboxes) {
+        if (!this.isElementVisible(checkbox)) continue;
+
+        const label = this.getFieldLabel(checkbox);
+        const isRequired =
+          this.isFieldRequired(checkbox) ||
+          checkbox.closest(".form-group.required");
+        const isAgreement = this.isAgreementCheckbox(label);
+
+        if (isRequired || isAgreement) {
+          checkboxFields.push({
+            element: checkbox,
+            label,
+            isRequired,
+            isAgreement,
+            isGDPR: false,
+          });
+        }
+      }
+
+      this.logger(
+        `Found ${checkboxFields.length} required/agreement checkboxes`
+      );
+
+      for (const field of checkboxFields) {
+        let shouldCheck = field.isRequired || field.isAgreement || field.isGDPR;
+
+        // For GDPR, always check
+        if (field.isGDPR) {
+          shouldCheck = true;
+        } else if (!shouldCheck) {
+          const answer = await this.getAIAnswer(
+            field.label,
+            ["yes", "no"],
+            "checkbox",
+            "This is a checkbox that may require consent or agreement."
+          );
+
+          shouldCheck = answer === "yes" || answer === "true";
+        }
+
+        this.logger(
+          `${shouldCheck ? "Checking" : "Unchecking"} checkbox: ${field.label}`
+        );
+        await this.fillCheckboxField(field.element, shouldCheck);
+        await this.wait(200);
+      }
+    } catch (error) {
+      this.logger(`Error handling required checkboxes: ${error.message}`);
+    }
+  }
+
+  /**
+   * Helper method to determine if a value should result in checking a checkbox
+   */
+  shouldCheckValue(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const lowerValue = value.toLowerCase().trim();
+      return (
+        lowerValue === "true" ||
+        lowerValue === "yes" ||
+        lowerValue === "on" ||
+        lowerValue === "1"
+      );
+    }
+    if (typeof value === "number") return value === 1;
+    return false;
+  }
+
+  /**
+   * Enhanced value matching for radio buttons and select options
+   */
+  matchesValue(aiValue, optionText, optionValue) {
+    // Direct matches
+    if (aiValue === optionText || aiValue === optionValue) return true;
+
+    // Partial matches
+    if (optionText.includes(aiValue) || aiValue.includes(optionText))
+      return true;
+    if (optionValue.includes(aiValue) || aiValue.includes(optionValue))
+      return true;
+
+    // Special cases for yes/no
+    if (
+      (aiValue === "yes" || aiValue === "true") &&
+      (optionText === "yes" || optionValue === "yes")
+    )
+      return true;
+    if (
+      (aiValue === "no" || aiValue === "false") &&
+      (optionText === "no" || optionValue === "no")
+    )
+      return true;
+
+    return false;
   }
 }
