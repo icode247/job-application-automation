@@ -1,5 +1,5 @@
 // shared/base/base-platform-automation.js 
-
+//Timeout waiting for valid page
 import BasePlatform from "../../platforms/base-platform.js";
 import { StatusOverlay } from "../../services/index.js";
 

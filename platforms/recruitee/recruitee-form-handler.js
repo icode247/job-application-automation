@@ -1,68 +1,228 @@
 // platforms/recruitee/recruitee-form-handler.js
-import { API_HOST_URL } from "../../services/constants.js";
+import { AIService } from "../../services/index.js";
+import Utils from "../../utils/utils.js";
 
-/**
- * Recruitee Form Handler - Specialized for Recruitee forms
- */
 export class RecruiteeFormHandler {
   constructor(options = {}) {
-    this.logger = options.logger || (() => {});
-    this.host = options.host || API_HOST_URL;
+    this.logger = options.logger || console.log;
+    this.host = options.host || "http://localhost:3000";
     this.userData = options.userData || {};
     this.jobDescription = options.jobDescription || "";
+    this.aiService = new AIService({ apiHost: this.host });
+    this.answerCache = new Map();
+    this.utils = new Utils();
   }
 
   /**
-   * Fill out the form with profile data
+   * Clean up label text - following Breezy pattern
+   */
+  cleanLabelText(text) {
+    if (!text) return "";
+
+    return text
+      .replace(/[*✱]/g, "")
+      .replace(/\s+/g, " ")
+      .replace(/^\s+|\s+$/g, "")
+      .replace(/\(required\)/i, "")
+      .replace(/\(optional\)/i, "")
+      .toLowerCase();
+  }
+
+  /**
+   * Get the type of a form field - following Breezy pattern
+   */
+  getFieldType(element) {
+    const role = element.getAttribute("role");
+    const tagName = element.tagName.toLowerCase();
+    const className = element.className || "";
+
+    // Radio groups
+    if (
+      role === "radiogroup" ||
+      (tagName === "fieldset" && role === "radiogroup") ||
+      element.closest(".custom-radio-group")
+    ) {
+      return "radio";
+    }
+
+    // Checkbox groups
+    if (
+      (role === "group" &&
+        element.querySelector('[role="checkbox"], input[type="checkbox"]')) ||
+      element.closest(".custom-checkbox-group")
+    ) {
+      return "checkbox";
+    }
+
+    // Individual radio or checkbox
+    if (role === "radio" || role === "checkbox") {
+      return role;
+    }
+
+    // Custom select
+    if (role === "combobox" || element.classList.contains("custom-select")) {
+      return "select";
+    }
+
+    // Upload fields
+    if (
+      className.includes("custom-file") ||
+      element.querySelector('input[type="file"]') ||
+      element.classList.contains("dropzone")
+    ) {
+      return "file";
+    }
+
+    // Standard HTML elements
+    if (tagName === "select") return "select";
+    if (tagName === "textarea") return "textarea";
+    if (tagName === "input") {
+      const type = element.type.toLowerCase();
+      if (type === "file") return "file";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "tel") return "phone";
+      return type || "text";
+    }
+
+    return "unknown";
+  }
+
+  /**
+   * Check if a field is required - following Breezy pattern
+   */
+  isFieldRequired(element) {
+    if (element.required || element.getAttribute("aria-required") === "true") {
+      return true;
+    }
+
+    if (
+      element.classList.contains("is-required") ||
+      element.closest(".form-group")?.classList.contains("required")
+    ) {
+      return true;
+    }
+
+    // Check for asterisk in label
+    const labelledById = element.getAttribute("aria-labelledby");
+    if (labelledById) {
+      const labelElement = document.getElementById(labelledById);
+      if (
+        labelElement &&
+        (labelElement.textContent.includes("*") ||
+          labelElement.textContent.includes("✱"))
+      ) {
+        return true;
+      }
+    }
+
+    // Check for explicit label with asterisk
+    if (element.id) {
+      const labelElement = document.querySelector(`label[for="${element.id}"]`);
+      if (
+        labelElement &&
+        (labelElement.textContent.includes("*") ||
+          labelElement.textContent.includes("✱"))
+      ) {
+        return true;
+      }
+    }
+
+    // Recruitee-specific required indicator
+    const label = this.getFieldLabelElement(element);
+    if (label && label.querySelector(".sc-1glzqyg-1")) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Fill form with profile data - following Breezy pattern
    */
   async fillFormWithProfile(form, profile) {
     try {
-      this.logger("Starting to fill form with profile data");
+      this.logger("Filling Recruitee form with user profile data");
+      this.userData = profile;
 
-      // Process fieldsets first (for grouped fields and questions)
-      await this.processFieldsets(form, profile);
+      const formFields = this.getAllFormFields(form);
+      this.logger(`Found ${formFields.length} form fields to process`);
 
-      // Get all form elements that can be filled
-      const formElements = form.querySelectorAll("input, select, textarea");
+      let filledCount = 0;
+      const processedFields = new Set();
+      const failedFields = new Map();
 
-      // Populate all fields
-      for (const element of formElements) {
-        // Skip hidden fields, submit buttons, and already filled fields
-        if (
-          element.type === "submit" ||
-          element.type === "hidden" ||
-          element.type === "file" ||
-          !this.isElementVisible(element) ||
-          (element.value &&
-            element.type !== "checkbox" &&
-            element.type !== "radio")
-        ) {
+      for (const field of formFields) {
+        if (!field.label) continue;
+        if (field.type === "file") continue;
+
+        const fieldIdentifier = `${field.type}:${this.cleanLabelText(
+          field.label
+        )}`;
+
+        if (processedFields.has(fieldIdentifier)) {
+          this.logger(`Skipping already processed field: ${field.label}`);
           continue;
         }
 
-        // Get field info
-        const fieldInfo = this.getFieldInfo(element);
-        if (!fieldInfo.shouldFill) {
+        const failureCount = failedFields.get(fieldIdentifier) || 0;
+        if (failureCount >= 3) {
+          this.logger(
+            `Skipping field after ${failureCount} failures: ${field.label}`
+          );
           continue;
         }
 
-        // Determine value to fill
-        const valueToFill = await this.determineValueToFill(
-          element,
-          fieldInfo,
-          profile
-        );
-        if (valueToFill === null || valueToFill === undefined) {
+        try {
+          this.logger(`Processing ${field.type} field: ${field.label}`);
+
+          const options = this.getFieldOptions(field.element);
+          const fieldContext = `This is a ${field.type} field${
+            field.required ? " (required)" : ""
+          }`;
+
+          const answer = await this.getAIAnswer(
+            field.label,
+            options,
+            field.type,
+            fieldContext
+          );
+
+          if (answer) {
+            this.logger(
+              `Got AI answer for "${field.label}": ${answer.substring(0, 50)}${
+                answer.length > 50 ? "..." : ""
+              }`
+            );
+
+            const success = await this.fillField(field.element, answer);
+            if (success) {
+              filledCount++;
+              processedFields.add(fieldIdentifier);
+              this.logger(`✅ Successfully filled field: ${field.label}`);
+            } else {
+              throw new Error("Failed to fill field with answer");
+            }
+          } else {
+            throw new Error("No answer received from AI");
+          }
+
+          await this.wait(300);
+        } catch (fieldError) {
+          failedFields.set(fieldIdentifier, failureCount + 1);
+          this.logger(
+            `❌ Error processing field "${field.label}" (attempt ${
+              failureCount + 1
+            }): ${fieldError.message}`
+          );
           continue;
         }
-
-        // Fill the field
-        await this.fillField(element, valueToFill);
       }
 
-      // Handle special phone input field with country code
-      await this.handleRecruiteePhoneInput(form, profile);
-      this.logger("Completed filling form with profile data");
+      // Handle required checkboxes
+      await this.handleRequiredCheckboxes(form);
+
+      this.logger(`Successfully filled ${filledCount} fields`);
       return true;
     } catch (error) {
       this.logger(`Error filling form: ${error.message}`);
@@ -71,654 +231,56 @@ export class RecruiteeFormHandler {
   }
 
   /**
-   * Process fieldsets which may contain grouped fields
+   * Get AI answer for a form field - following Breezy pattern with caching
    */
-  async processFieldsets(form, profile) {
-    try {
-      // Find all fieldsets
-      const fieldsets = form.querySelectorAll("fieldset");
-
-      for (const fieldset of fieldsets) {
-        // Check if this is a question fieldset
-        const legend = fieldset.querySelector("legend");
-        if (!legend) continue;
-
-        const questionText = legend.textContent.trim().replace(/\*$/, "");
-        if (!questionText) continue;
-
-        // Look for radio buttons in this fieldset
-        const radioInputs = fieldset.querySelectorAll('input[type="radio"]');
-        if (radioInputs.length > 0) {
-          await this.handleRadioQuestion(
-            fieldset,
-            questionText,
-            radioInputs,
-            profile
-          );
-          continue;
-        }
-
-        // Look for checkboxes in this fieldset
-        const checkboxInputs = fieldset.querySelectorAll(
-          'div input[type="checkbox"]'
-        );
-        if (checkboxInputs.length > 0) {
-          await this.handleCheckboxQuestion(
-            fieldset,
-            questionText,
-            checkboxInputs,
-            profile
-          );
-          continue;
-        }
-      }
-    } catch (error) {
-      this.logger(`Error processing fieldsets: ${error.message}`);
-    }
-  }
-
-  /**
-   * Handle radio button question
-   */
-  async handleRadioQuestion(fieldset, questionText, radioInputs, profile) {
-    try {
-      // Extract option texts and values
-      const options = [];
-      const radioMap = new Map();
-
-      for (const radio of radioInputs) {
-        const label = this.findRadioLabel(radio);
-        if (label) {
-          options.push(label);
-          radioMap.set(label, radio);
-        }
-      }
-
-      if (options.length === 0) return;
-
-      // Get AI response if possible
-      let selectedOption = null;
-      try {
-        const aiResponse = await this.getAISelectOption(
-          questionText,
-          options,
-          profile
-        );
-        if (aiResponse) {
-          // Find closest match
-          selectedOption = this.findClosestMatch(aiResponse, options);
-        }
-      } catch (error) {
-        this.logger(
-          `AI response error: ${error.message}, using fallback logic`
-        );
-
-        // Handle common question patterns
-        if (
-          questionText.toLowerCase().includes("citizenship") ||
-          questionText.toLowerCase().includes("eligible") ||
-          questionText.toLowerCase().includes("authorized")
-        ) {
-          // Default to "Yes" for eligibility questions
-          selectedOption = options.find((opt) => opt.toLowerCase() === "yes");
-        }
-      }
-
-      // Select appropriate radio button
-      if (selectedOption && radioMap.has(selectedOption)) {
-        const radioToSelect = radioMap.get(selectedOption);
-        await this.fillRadioButton(radioToSelect, true);
-        this.logger(
-          `Selected "${selectedOption}" for question: ${questionText}`
-        );
-      } else if (radioInputs.length > 0) {
-        // Fallback: select first option for required fields or "Yes" if that exists
-        const isRequired = this.isFieldRequired(radioInputs[0]);
-        if (isRequired) {
-          const yesOption = Array.from(radioInputs).find(
-            (radio) => this.findRadioLabel(radio).toLowerCase() === "yes"
-          );
-
-          if (yesOption) {
-            await this.fillRadioButton(yesOption, true);
-            this.logger(
-              `Selected "Yes" for required question: ${questionText}`
-            );
-          } else {
-            await this.fillRadioButton(radioInputs[0], true);
-            this.logger(
-              `Selected first option for required question: ${questionText}`
-            );
-          }
-        }
-      }
-    } catch (error) {
-      this.logger(
-        `Error handling radio question "${questionText}": ${error.message}`
-      );
-    }
-  }
-
-  /**
-   * Handle checkbox group question
-   */
-  async handleCheckboxQuestion(
-    fieldset,
-    questionText,
-    checkboxInputs,
-    profile
+  async getAIAnswer(
+    question,
+    options = [],
+    fieldType = "text",
+    fieldContext = ""
   ) {
     try {
-      // Get if this is a required field
-      const isRequired = Array.from(checkboxInputs).some((checkbox) =>
-        this.isFieldRequired(checkbox)
+      this.logger(`Requesting AI answer for "${question}"`);
+
+      // Create a cache key that includes all relevant parameters
+      const cacheKey = JSON.stringify({
+        question: this.cleanLabelText(question),
+        options: options.sort(),
+        fieldType,
+        fieldContext,
+      });
+
+      // Check cache first
+      if (this.answerCache.has(cacheKey)) {
+        this.logger(`Using cached answer for "${question}"`);
+        return this.answerCache.get(cacheKey);
+      }
+
+      const userDataForContext = this.utils.getUserDetailsForContext(
+        this.userData
       );
 
-      // Handle location checkboxes separately
-      if (
-        questionText.toLowerCase().includes("location") ||
-        fieldset.querySelector('input[name="candidate.locations.value"]')
-      ) {
-        // Will be handled by handleLocationCheckboxes method
-        return;
-      }
+      const answer = await this.aiService.getAnswer(question, options, {
+        platform: "recruitee",
+        userData: userDataForContext,
+        jobDescription: this.jobDescription,
+        fieldType,
+        fieldContext,
+      });
 
-      // For other checkbox groups
-      if (isRequired) {
-        // Get all options
-        const options = [];
-        const checkboxMap = new Map();
-
-        for (const checkbox of checkboxInputs) {
-          const label = this.findRadioLabel(checkbox);
-          if (label) {
-            options.push(label);
-            checkboxMap.set(label, checkbox);
-          }
-        }
-
-        // Try AI for multiple selection
-        try {
-          const aiResponse = await this.getAISelectOption(
-            questionText,
-            options,
-            profile
-          );
-          if (aiResponse) {
-            // AI may return comma-separated values for multiple selection
-            const selectedOptions = aiResponse
-              .split(",")
-              .map((opt) => opt.trim());
-            let selected = false;
-
-            for (const option of selectedOptions) {
-              const matchedOption = this.findClosestMatch(option, options);
-              if (matchedOption && checkboxMap.has(matchedOption)) {
-                await this.fillCheckbox(checkboxMap.get(matchedOption), true);
-                selected = true;
-                this.logger(
-                  `Selected "${matchedOption}" for question: ${questionText}`
-                );
-              }
-            }
-
-            // If nothing was selected, select the first option
-            if (!selected && checkboxInputs.length > 0) {
-              await this.fillCheckbox(checkboxInputs[0], true);
-              this.logger(
-                `Selected first option for checkbox question: ${questionText}`
-              );
-            }
-          }
-        } catch (error) {
-          this.logger(
-            `AI error for checkboxes: ${error.message}, selecting first option`
-          );
-
-          // Fallback: select first checkbox for required fields
-          if (checkboxInputs.length > 0) {
-            await this.fillCheckbox(checkboxInputs[0], true);
-            this.logger(
-              `Selected first option for required checkbox group: ${questionText}`
-            );
-          }
-        }
-      }
+      // Cache the result
+      this.answerCache.set(cacheKey, answer);
+      return answer;
     } catch (error) {
       this.logger(
-        `Error handling checkbox question "${questionText}": ${error.message}`
+        `Error getting AI answer: ${error.message}`
       );
-    }
-  }
-
-  /**
-   * Handle Recruitee's phone input with country code selector
-   */
-  async handleRecruiteePhoneInput(form, profile) {
-    try {
-      // Find phone input
-      const phoneInput = form.querySelector(
-        'input[type="tel"], input[autocomplete="tel"]'
-      );
-      if (!phoneInput) return;
-
-      // Get phone data from profile
-      const phoneCode = profile.phoneCode || profile.phoneCountryCode || "+1";
-      const phoneNumber = profile.phoneNumber || profile.phone || "";
-
-      if (!phoneNumber) return;
-
-      // Use specialized tel input fill
-      await this.fillTelInput(phoneInput, phoneCode, phoneNumber);
-      this.logger(`Set full phone with code: ${phoneCode} ${phoneNumber}`);
-    } catch (error) {
-      this.logger(`Error handling phone input: ${error.message}`);
-    }
-  }
-
-  /**
-   * Fill telephone input with formatted code + number
-   */
-  async fillTelInput(element, phoneCode, phoneNumber) {
-    try {
-      // Process the code - remove any symbols
-      let cleanCode = phoneCode.replace(/[+\-\s()]/g, "");
-
-      // Process the number - remove any country code already in there
-      let cleanNumber = phoneNumber;
-      if (cleanNumber.startsWith("+")) {
-        cleanNumber = cleanNumber.replace(/^\+\d+\s*/, "");
-      }
-
-      // Also remove any leading zeros which sometimes appear in local phone formats
-      cleanNumber = cleanNumber.replace(/^0+/, "");
-
-      // Combine the two parts with a space
-      const formattedPhone = `${cleanCode} ${cleanNumber}`;
-
-      // Focus the element
-      element.focus();
-      await this.wait(50);
-
-      // Clear existing value
-      element.value = "";
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      await this.wait(50);
-
-      // Set new value
-      element.value = formattedPhone;
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      await this.wait(50);
-
-      // Blur the element
-      element.blur();
-      await this.wait(50);
-
-      this.logger(
-        `Set telephone input with formatted value: ${formattedPhone}`
-      );
-      return true;
-    } catch (error) {
-      this.logger(`Error filling telephone input: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Get information about a form field
-   */
-  getFieldInfo(element) {
-    const result = {
-      id: element.id,
-      name: element.name,
-      type: element.type,
-      label: this.getFieldLabel(element),
-      placeholder: element.placeholder || "",
-      required: this.isFieldRequired(element),
-      shouldFill: true,
-      fieldCategory: "unknown",
-    };
-
-    // Determine field category based on attributes
-    const nameAndId = (
-      result.name +
-      " " +
-      result.id +
-      " " +
-      result.label +
-      " " +
-      result.placeholder
-    ).toLowerCase();
-
-    if (element.name && element.name.includes("candidate.")) {
-      // Recruitee specific naming pattern
-      const nameParts = element.name.split(".");
-      if (nameParts.length >= 2) {
-        switch (nameParts[1]) {
-          case "name":
-            result.fieldCategory = "fullName";
-            break;
-          case "email":
-            result.fieldCategory = "email";
-            break;
-          case "phone":
-            result.fieldCategory = "phone";
-            result.shouldFill = false; // Handled separately
-            break;
-          case "cv":
-            result.fieldCategory = "resume";
-            result.shouldFill = false; // Resume upload handled separately
-            break;
-          case "coverLetterFile":
-            result.fieldCategory = "coverLetter";
-            result.shouldFill = false; // File upload handled separately
-            break;
-          case "coverLetter":
-            result.fieldCategory = "coverLetterText";
-            break;
-          case "openQuestionAnswers":
-            // Custom question
-            result.fieldCategory = "customQuestion";
-            break;
-          case "locations":
-            result.fieldCategory = "location";
-            result.shouldFill = false; // Handled separately
-            break;
-        }
-      }
-    } else if (nameAndId.includes("first") && nameAndId.includes("name")) {
-      result.fieldCategory = "firstName";
-    } else if (nameAndId.includes("last") && nameAndId.includes("name")) {
-      result.fieldCategory = "lastName";
-    } else if (nameAndId.includes("full") && nameAndId.includes("name")) {
-      result.fieldCategory = "fullName";
-    } else if (nameAndId.includes("email")) {
-      result.fieldCategory = "email";
-    } else if (nameAndId.includes("phone")) {
-      result.fieldCategory = "phone";
-    } else if (
-      nameAndId.includes("location") ||
-      nameAndId.includes("address") ||
-      nameAndId.includes("city")
-    ) {
-      result.fieldCategory = "location";
-    } else if (nameAndId.includes("linkedin")) {
-      result.fieldCategory = "linkedin";
-    } else if (nameAndId.includes("github")) {
-      result.fieldCategory = "github";
-    } else if (
-      nameAndId.includes("website") ||
-      nameAndId.includes("portfolio")
-    ) {
-      result.fieldCategory = "website";
-    } else if (
-      nameAndId.includes("salary") ||
-      nameAndId.includes("compensation")
-    ) {
-      result.fieldCategory = "salary";
-    } else if (nameAndId.includes("notice") || nameAndId.includes("period")) {
-      result.fieldCategory = "noticePeriod";
-    } else if (
-      nameAndId.includes("experience") ||
-      nameAndId.includes("years")
-    ) {
-      result.fieldCategory = "experience";
-    } else if (nameAndId.includes("cv") || nameAndId.includes("resume")) {
-      result.fieldCategory = "resume";
-      result.shouldFill = false; // Resume upload handled separately
-    }
-
-    return result;
-  }
-
-  /**
-   * Determine the value to fill in a form field
-   */
-  async determineValueToFill(element, fieldInfo, profile) {
-    try {
-      const { fieldCategory, type, label, placeholder, name, id } = fieldInfo;
-
-      // Different handling based on field category
-      switch (fieldCategory) {
-        case "firstName":
-          return profile.firstName || profile.firstname || "";
-
-        case "lastName":
-          return profile.lastName || profile.lastname || "";
-
-        case "fullName":
-          return `${profile.firstName || profile.firstname || ""} ${
-            profile.lastName || profile.lastname || ""
-          }`.trim();
-
-        case "email":
-          return profile.email || "";
-
-        case "phone":
-          return profile.phone || profile.phoneNumber || "";
-
-        case "location":
-          if (
-            label.toLowerCase().includes("city") ||
-            placeholder.toLowerCase().includes("city")
-          ) {
-            return profile.city || profile.location || "";
-          }
-          return (
-            profile.location ||
-            `${profile.city || ""}, ${profile.country || ""}`.trim()
-          );
-
-        case "linkedin":
-          return profile.linkedin || profile.linkedIn || "";
-
-        case "github":
-          return profile.githubURL || "";
-
-        case "website":
-          return (
-            profile.website || profile.portfolio || profile.githubURL || ""
-          );
-
-        case "salary":
-          return profile.salaryExpectation || "Negotiable";
-
-        case "noticePeriod":
-          return profile.noticePeriod || "2 weeks";
-
-        case "experience":
-          return profile.yearsOfExperience || "5";
-
-        case "coverLetterText":
-          return (
-            profile.coverLetter ||
-            "I am excited about the opportunity to join your team and contribute my skills and experience. My background aligns well with the requirements for this position, and I am confident that I would be a valuable addition to your organization. I have attached my resume for your review and would welcome the opportunity to discuss how I can contribute to your team's success."
-          );
-
-        case "customQuestion":
-          return await this.getAIAnswerForQuestion(label, profile);
-      }
-
-      // If this is a checkbox or radio
-      if (type === "checkbox" || type === "radio") {
-        // Handle consent checkboxes
-        if (
-          label.toLowerCase().includes("consent") ||
-          label.toLowerCase().includes("agree") ||
-          label.toLowerCase().includes("terms") ||
-          label.toLowerCase().includes("privacy")
-        ) {
-          return true;
-        }
-
-        // For other checkboxes/radios, use AI if available
-        if (label) {
-          try {
-            return await this.getAIFieldValue(label, element);
-          } catch (e) {
-            // If AI fails, leave unchanged
-            return null;
-          }
-        }
-      }
-
-      // For select elements, make an intelligent choice
-      if (element.tagName === "SELECT") {
-        return await this.handleSelectElement(element, fieldInfo, profile);
-      }
-
-      // For textareas, handle as potential cover letter or questions
-      if (element.tagName === "TEXTAREA") {
-        if (
-          label.toLowerCase().includes("cover letter") ||
-          label.toLowerCase().includes("motivation") ||
-          label.toLowerCase().includes("introduction") ||
-          placeholder.toLowerCase().includes("tell us about yourself")
-        ) {
-          return (
-            profile.coverLetter ||
-            "I am very interested in this position and believe my skills and experience make me a great fit. I have attached my resume for your review."
-          );
-        }
-
-        // If this seems like a custom question
-        if (label.length > 10 || label.includes("?")) {
-          try {
-            return await this.getAIAnswerForQuestion(label, profile);
-          } catch (e) {
-            return "Based on my skills and experience, I believe I would be a great fit for this role.";
-          }
-        }
-      }
-
-      // For fields we couldn't categorize, try an intelligent guess
-      return await this.intelligentFieldGuess(element, fieldInfo, profile);
-    } catch (error) {
-      this.logger(`Error determining value for field: ${error.message}`);
       return null;
     }
   }
 
   /**
-   * Handle select elements intelligently
-   */
-  async handleSelectElement(element, fieldInfo, profile) {
-    try {
-      const { label, placeholder, name, id } = fieldInfo;
-      const options = Array.from(element.options).map((opt) => opt.text.trim());
-
-      // Skip if no options or just placeholder option
-      if (options.length <= 1) {
-        return null;
-      }
-
-      // Get valid options (non-placeholder)
-      const validOptions = options.filter(
-        (opt) =>
-          opt &&
-          ![
-            "select",
-            "choose",
-            "please select",
-            "select an option",
-            "-",
-          ].includes(opt.toLowerCase())
-      );
-
-      if (validOptions.length === 0) {
-        return null;
-      }
-
-      // Handle common select types
-      const nameAndLabel = (
-        name +
-        " " +
-        id +
-        " " +
-        label +
-        " " +
-        placeholder
-      ).toLowerCase();
-
-      // Country select
-      if (nameAndLabel.includes("country")) {
-        const userCountry = profile.country || "United States";
-        const countryOption = validOptions.find((opt) =>
-          opt.toLowerCase().includes(userCountry.toLowerCase())
-        );
-        return countryOption || validOptions[0];
-      }
-
-      // Gender select
-      if (nameAndLabel.includes("gender")) {
-        return profile.gender || "Prefer not to say";
-      }
-
-      // Experience/years select
-      if (
-        nameAndLabel.includes("experience") ||
-        nameAndLabel.includes("years")
-      ) {
-        const yearsExp = parseInt(profile.yearsOfExperience || "5");
-
-        // Find best match for years
-        for (const opt of validOptions) {
-          if (opt.includes(`${yearsExp}`)) {
-            return opt;
-          }
-        }
-
-        // Find ranges
-        for (const opt of validOptions) {
-          if (opt.includes("-")) {
-            const [min, max] = opt.split("-").map((n) => parseInt(n.trim()));
-            if (
-              !isNaN(min) &&
-              !isNaN(max) &&
-              yearsExp >= min &&
-              yearsExp <= max
-            ) {
-              return opt;
-            }
-          }
-
-          if (opt.includes("+")) {
-            const min = parseInt(opt);
-            if (!isNaN(min) && yearsExp >= min) {
-              return opt;
-            }
-          }
-        }
-      }
-
-      // For other selects, use AI if available
-      try {
-        const aiValue = await this.getAISelectOption(
-          label,
-          validOptions,
-          profile
-        );
-        if (aiValue) {
-          // Find closest match
-          const closestOption = this.findClosestMatch(aiValue, validOptions);
-          return closestOption || validOptions[0];
-        }
-      } catch (e) {
-        // If AI fails, make a reasonable guess
-        return validOptions[0];
-      }
-
-      // Default to first valid option if nothing else matched
-      return validOptions[0];
-    } catch (error) {
-      this.logger(`Error handling select element: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Fill a form field with the given value
+   * Fill a form field with the appropriate value - following Breezy pattern
    */
   async fillField(element, value) {
     try {
@@ -726,33 +288,42 @@ export class RecruiteeFormHandler {
         return false;
       }
 
-      const type = element.type || element.tagName.toLowerCase();
-      this.logger(
-        `Filling field ${element.name || element.id} with type ${type}`
-      );
+      const fieldType = this.getFieldType(element);
+      this.logger(`Filling ${fieldType} field with value`);
 
-      switch (type) {
+      switch (fieldType) {
         case "text":
         case "email":
-        case "number":
         case "tel":
         case "url":
-        case "date":
+        case "number":
+        case "password":
+          return await this.fillInputField(element, value);
+
         case "textarea":
-          await this.fillTextInput(element, value);
-          break;
+          return await this.fillTextareaField(element, value);
 
         case "select":
-        case "select-one":
-          await this.fillSelectInput(element, value);
-          break;
+          return await this.fillSelectField(element, value);
+
+        case "phone":
+          return await this.fillPhoneField(element, value);
+
+        case "checkbox":
+          return await this.fillCheckboxField(element, value);
+
+        case "radio":
+          return await this.fillRadioField(element, value);
+
+        case "date":
+          return await this.fillDateField(element, value);
+
+        case "file":
+          return false; // File uploads handled separately
 
         default:
-          this.logger(`Unsupported field type: ${type}`);
           return false;
       }
-
-      return true;
     } catch (error) {
       this.logger(`Error filling field: ${error.message}`);
       return false;
@@ -760,176 +331,519 @@ export class RecruiteeFormHandler {
   }
 
   /**
-   * Fill a text input field
+   * Get all form fields - following Breezy pattern
    */
-  async fillTextInput(element, value) {
-    // Focus the element
-    element.focus();
-    await this.wait(50);
+  getAllFormFields(form) {
+    try {
+      this.logger("Finding all form fields in Recruitee application form");
 
-    // Clear existing value
-    element.value = "";
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    await this.wait(50);
+      const fields = [];
+      const processedFields = new Set();
 
-    // Set new value
-    element.value = value;
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    await this.wait(50);
+      // Enhanced selectors for Recruitee-specific structures
+      const formElements = form.querySelectorAll(
+        'input:not([type="hidden"]), select, textarea, ' +
+          '[role="radio"], [role="checkbox"], ' +
+          'fieldset[role="radiogroup"], ' +
+          'div.form-group, div[role="group"], div.custom-checkbox, ' +
+          "div.sc-1omxthk-1, div.sc-qci8q2-1"
+      );
 
-    // Blur the element
-    element.blur();
-    await this.wait(50);
-  }
+      for (const element of formElements) {
+        if (!this.isElementVisible(element)) continue;
 
-  /**
-   * Fill a select input field
-   */
-  async fillSelectInput(element, value) {
-    // If value is a string, try to find matching option
-    if (typeof value === "string") {
-      value = value.toLowerCase().trim();
+        const fieldId = this.createFieldIdentifier(element);
+        if (processedFields.has(fieldId)) {
+          continue;
+        }
 
-      // Try exact match first
-      for (let i = 0; i < element.options.length; i++) {
-        const option = element.options[i];
-        if (option.text.toLowerCase().trim() === value) {
-          element.selectedIndex = i;
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          return;
+        const fieldInfo = this.processFormElement(element);
+
+        if (fieldInfo && fieldInfo.label) {
+          const labelKey = `${fieldInfo.type}:${this.cleanLabelText(
+            fieldInfo.label
+          )}`;
+          if (!processedFields.has(labelKey)) {
+            fields.push(fieldInfo);
+            processedFields.add(fieldId);
+            processedFields.add(labelKey);
+          }
         }
       }
 
-      // Try contains match
-      for (let i = 0; i < element.options.length; i++) {
-        const option = element.options[i];
-        if (
-          option.text.toLowerCase().includes(value) ||
-          value.includes(option.text.toLowerCase())
-        ) {
-          element.selectedIndex = i;
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          return;
-        }
-      }
-
-      // If no match found but we have options, select first non-placeholder
-      if (element.options.length > 0) {
-        // Skip first option if it looks like a placeholder
-        let startIndex = 0;
-        if (
-          element.options[0].text.toLowerCase().includes("select") ||
-          element.options[0].text.toLowerCase().includes("choose") ||
-          element.options[0].text === ""
-        ) {
-          startIndex = 1;
-        }
-
-        if (startIndex < element.options.length) {
-          element.selectedIndex = startIndex;
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-      }
+      return this.deduplicateRadioGroups(fields);
+    } catch (error) {
+      this.logger(`Error getting form fields: ${error.message}`);
+      return [];
     }
   }
 
   /**
-   * Fill a checkbox field
+   * Process form element - following Breezy pattern
    */
-  async fillCheckbox(element, value) {
-    if (value) {
-      if (!element.checked) {
-        element.checked = true;
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-        await this.wait(50);
+  processFormElement(element) {
+    const fieldType = this.getFieldType(element);
+    const label = this.getFieldLabel(element);
+    const required = this.isFieldRequired(element);
+
+    if (!label && fieldType !== "checkbox" && fieldType !== "radio") {
+      return null;
+    }
+
+    return {
+      element,
+      type: fieldType,
+      label,
+      required,
+    };
+  }
+
+  /**
+   * Create field identifier - following Breezy pattern
+   */
+  createFieldIdentifier(element) {
+    const id = element.id || "";
+    const name = element.name || "";
+    const className = element.className || "";
+    const tagName = element.tagName.toLowerCase();
+
+    if (
+      element.classList.contains("sc-1omxthk-1") ||
+      element.classList.contains("sc-qci8q2-1")
+    ) {
+      const siblings = Array.from(element.parentNode.children);
+      const index = siblings.indexOf(element);
+      return `container:${tagName}:${className}:${index}`;
+    }
+
+    return `${tagName}:${id}:${name}:${className}`;
+  }
+
+  /**
+   * Deduplicate radio groups - following Breezy pattern
+   */
+  deduplicateRadioGroups(fields) {
+    const uniqueFields = [];
+    const radioGroupsSeen = new Map();
+
+    for (const field of fields) {
+      if (field.type === "radio") {
+        const groupKey = this.cleanLabelText(field.label);
+        if (!radioGroupsSeen.has(groupKey)) {
+          radioGroupsSeen.set(groupKey, true);
+          uniqueFields.push(field);
+        }
+      } else {
+        uniqueFields.push(field);
       }
-    } else if (element.checked) {
-      element.checked = false;
-      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    return uniqueFields;
+  }
+
+  /**
+   * Get field label - following Breezy pattern
+   */
+  getFieldLabel(element, container = null) {
+    try {
+      const fieldContainer =
+        container ||
+        element.closest(".sc-1omxthk-1") ||
+        element.closest(".sc-qci8q2-1") ||
+        element.closest(".form-group");
+
+      // Handle Recruitee-specific fieldset structure
+      if (fieldContainer) {
+        const legend = fieldContainer.querySelector("legend");
+        if (legend) {
+          return this.cleanLabelText(legend.textContent);
+        }
+      }
+
+      // Standard HTML label association
+      if (element.id) {
+        const labelElement = document.querySelector(
+          `label[for="${element.id}"]`
+        );
+        if (labelElement) {
+          return this.cleanLabelText(labelElement.textContent);
+        }
+      }
+
+      // Parent label
+      const parentLabel = element.closest("label");
+      if (parentLabel) {
+        const clone = parentLabel.cloneNode(true);
+        const inputElements = clone.querySelectorAll("input, select, textarea");
+        for (const inputEl of inputElements) {
+          if (inputEl.parentNode) {
+            inputEl.parentNode.removeChild(inputEl);
+          }
+        }
+        return this.cleanLabelText(clone.textContent);
+      }
+
+      // Aria-label, placeholder, or name as fallback
+      if (element.getAttribute("aria-label")) {
+        return this.cleanLabelText(element.getAttribute("aria-label"));
+      }
+
+      if (element.placeholder) {
+        return this.cleanLabelText(element.placeholder);
+      }
+
+      if (element.name) {
+        return this.cleanLabelText(
+          element.name.replace(/([A-Z])/g, " $1").replace(/_/g, " ")
+        );
+      }
+
+      return "";
+    } catch (error) {
+      this.logger(`Error getting field label: ${error.message}`);
+      return "";
+    }
+  }
+
+  /**
+   * Get field options - following Breezy pattern
+   */
+  getFieldOptions(element) {
+    try {
+      const options = [];
+      const fieldType = this.getFieldType(element);
+
+      if (fieldType === "select") {
+        if (element.tagName.toLowerCase() === "select") {
+          Array.from(element.options).forEach((option) => {
+            const text = option.textContent.trim();
+            const value = option.value.trim();
+            if (text && value && value !== "? undefined:undefined ?") {
+              options.push(text);
+            }
+          });
+        }
+      } else if (fieldType === "radio" || fieldType === "checkbox") {
+        const container =
+          element.closest(".sc-1omxthk-1") ||
+          element.closest(".sc-qci8q2-1") ||
+          element.closest("fieldset") ||
+          element.closest(".custom-radio-group");
+
+        if (container) {
+          const inputs = container.querySelectorAll(
+            `input[type="${fieldType}"]`
+          );
+          inputs.forEach((input) => {
+            const label =
+              input.closest("label") ||
+              document.querySelector(`label[for="${input.id}"]`);
+            if (label) {
+              const span = label.querySelector("span:last-child");
+              if (span) {
+                options.push(span.textContent.trim());
+              } else {
+                options.push(label.textContent.trim());
+              }
+            }
+          });
+        }
+      }
+
+      return options;
+    } catch (error) {
+      this.logger(`Error getting field options: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Fill input field - following Breezy pattern
+   */
+  async fillInputField(element, value) {
+    try {
+      this.scrollToElement(element);
+      element.focus();
+      await this.wait(100);
+
+      element.value = "";
+      element.dispatchEvent(new Event("input", { bubbles: true }));
       await this.wait(50);
+
+      element.value = value;
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      await this.wait(100);
+      return true;
+    } catch (error) {
+      this.logger(`Error filling input field: ${error.message}`);
+      return false;
     }
   }
 
   /**
-   * Fill a radio button field
+   * Fill textarea field - following Breezy pattern
    */
-  async fillRadioButton(element, value) {
-    if (value) {
-      if (!element.checked) {
-        element.checked = true;
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-        await this.wait(50);
+  async fillTextareaField(element, value) {
+    return await this.fillInputField(element, value);
+  }
+
+  /**
+   * Fill select field - following Breezy pattern
+   */
+  async fillSelectField(element, value) {
+    try {
+      const valueStr = String(value).toLowerCase();
+
+      if (element.tagName.toLowerCase() === "select") {
+        this.scrollToElement(element);
+        element.focus();
+        await this.wait(200);
+
+        let optionSelected = false;
+        const options = Array.from(element.options);
+
+        for (const option of options) {
+          const optionText = option.textContent.trim().toLowerCase();
+          const optionValue = option.value.toLowerCase();
+
+          if (this.matchesValue(valueStr, optionText, optionValue)) {
+            option.selected = true;
+            optionSelected = true;
+            break;
+          }
+        }
+
+        if (!optionSelected && options.length > 0) {
+          for (const option of options) {
+            if (
+              option.value &&
+              option.value !== "null" &&
+              option.value !== "undefined"
+            ) {
+              option.selected = true;
+              optionSelected = true;
+              break;
+            }
+          }
+        }
+
+        if (optionSelected) {
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          await this.wait(200);
+          return true;
+        }
       }
+
+      return false;
+    } catch (error) {
+      this.logger(`Error filling select field: ${error.message}`);
+      return false;
     }
   }
 
   /**
-   * Handle consent checkbox
+   * Fill phone field - following Breezy pattern
    */
-  async handleConsentCheckbox(checkbox) {
-    // Only proceed if not already checked
-    if (!checkbox.checked) {
-      // Set the property
-      checkbox.checked = true;
+  async fillPhoneField(element, value) {
+    try {
+      const phoneCode = this.userData.phoneCode || this.userData.phoneCountryCode || "+1";
+      const phoneNumber = this.userData.phoneNumber || this.userData.phone || "";
 
-      // Create and dispatch a proper change event
-      const changeEvent = new Event("change", {
-        bubbles: true,
-        cancelable: true,
-      });
+      if (!phoneNumber) return false;
 
-      // Dispatch the event
-      checkbox.dispatchEvent(changeEvent);
+      // Process the code - remove any symbols
+      let cleanCode = phoneCode.replace(/[+\-\s()]/g, "");
+      
+      // Process the number - remove any country code already in there
+      let cleanNumber = phoneNumber;
+      if (cleanNumber.startsWith("+")) {
+        cleanNumber = cleanNumber.replace(/^\+\d+\s*/, "");
+      }
+      
+      // Remove leading zeros
+      cleanNumber = cleanNumber.replace(/^0+/, "");
+      
+      // Combine the two parts with a space
+      const formattedPhone = `${cleanCode} ${cleanNumber}`;
 
-      // Ensure React/Angular has time to process the event
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      return await this.fillInputField(element, formattedPhone);
+    } catch (error) {
+      this.logger(`Error filling phone field: ${error.message}`);
+      return false;
     }
-
-    return checkbox.checked;
   }
 
   /**
-   * Handle required checkboxes (typically consent checkboxes)
+   * Fill radio field - following Breezy pattern
+   */
+  async fillRadioField(element, value) {
+    try {
+      const valueStr = String(value).toLowerCase().trim();
+      this.logger(`Filling radio field with value: "${valueStr}"`);
+
+      const container =
+        element.closest(".sc-1omxthk-1") ||
+        element.closest(".sc-qci8q2-1") ||
+        element.closest("fieldset") ||
+        element.closest(".custom-radio-group");
+
+      if (container) {
+        const radios = container.querySelectorAll('input[type="radio"]');
+        for (const radio of radios) {
+          const label =
+            radio.closest("label") ||
+            document.querySelector(`label[for="${radio.id}"]`);
+
+          if (label) {
+            const span = label.querySelector("span:last-child");
+            const labelText = span
+              ? span.textContent.trim().toLowerCase()
+              : label.textContent.trim().toLowerCase();
+            const radioValue = radio.value.toLowerCase();
+
+            if (this.matchesValue(valueStr, labelText, radioValue)) {
+              this.scrollToElement(label);
+              label.click();
+              await this.wait(300);
+              return true;
+            }
+          }
+        }
+      }
+
+      return false;
+    } catch (error) {
+      this.logger(`Error filling radio field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Fill checkbox field - following Breezy pattern
+   */
+  async fillCheckboxField(element, value) {
+    try {
+      const shouldCheck = this.shouldCheckValue(value);
+      this.logger(`Filling checkbox field, should check: ${shouldCheck}`);
+
+      let checkboxInput = element;
+      if (element.tagName.toLowerCase() !== "input") {
+        checkboxInput = element.querySelector('input[type="checkbox"]');
+      }
+
+      if (!checkboxInput) return false;
+
+      if (
+        (shouldCheck && !checkboxInput.checked) ||
+        (!shouldCheck && checkboxInput.checked)
+      ) {
+        this.scrollToElement(checkboxInput);
+
+        const labelEl =
+          checkboxInput.closest("label") ||
+          document.querySelector(`label[for="${checkboxInput.id}"]`);
+
+        if (labelEl) {
+          labelEl.click();
+        } else {
+          checkboxInput.click();
+        }
+
+        await this.wait(200);
+
+        if (checkboxInput.checked !== shouldCheck) {
+          checkboxInput.checked = shouldCheck;
+          checkboxInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+
+      return true;
+    } catch (error) {
+      this.logger(`Error filling checkbox field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Fill date field - following Breezy pattern
+   */
+  async fillDateField(element, value) {
+    try {
+      if (
+        element.tagName.toLowerCase() === "input" &&
+        element.type === "date"
+      ) {
+        return await this.fillInputField(element, value);
+      }
+
+      // Handle custom date pickers
+      this.scrollToElement(element);
+      element.focus();
+      await this.wait(100);
+
+      element.value = "";
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      await this.wait(50);
+
+      try {
+        const dateObj = new Date(value);
+        if (!isNaN(dateObj.getTime())) {
+          const month = (dateObj.getMonth() + 1).toString().padStart(2, "0");
+          const day = dateObj.getDate().toString().padStart(2, "0");
+          const year = dateObj.getFullYear();
+
+          const formattedDate = `${month}/${day}/${year}`;
+          element.value = formattedDate;
+        } else {
+          element.value = value;
+        }
+      } catch (e) {
+        element.value = value;
+      }
+
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      return true;
+    } catch (error) {
+      this.logger(`Error filling date field: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Handle required checkboxes - following Breezy pattern
    */
   async handleRequiredCheckboxes(form) {
     try {
       this.logger("Handling required checkboxes");
 
+      const checkboxFields = [];
+
       // Find all required checkboxes
-      const requiredCheckboxes = Array.from(
-        form.querySelectorAll('input[type="checkbox"][required]')
+      const requiredCheckboxes = form.querySelectorAll(
+        'input[type="checkbox"][required], input[type="checkbox"][aria-required="true"], input[type="checkbox"].required'
       );
 
-      // Also look for checkboxes with required class or aria-required
-      const otherRequiredSelectors = [
-        'input[type="checkbox"].required',
-        'input[type="checkbox"][aria-required="true"]',
-      ];
-
-      for (const selector of otherRequiredSelectors) {
-        const checkboxes = Array.from(form.querySelectorAll(selector));
-        requiredCheckboxes.push(...checkboxes);
-      }
-
-      // Also check for Recruitee-specific required indicators
-      const allCheckboxes = form.querySelectorAll('input[type="checkbox"]');
-      for (const checkbox of allCheckboxes) {
-        const label = this.getFieldLabelElement(checkbox);
-        if (label && label.querySelector(".sc-1glzqyg-1")) {
-          requiredCheckboxes.push(checkbox);
-        }
-      }
-
-      // Check all required checkboxes
       for (const checkbox of requiredCheckboxes) {
-        this.handleConsentCheckbox(checkbox);
-        this.logger(
-          `Checked required checkbox: ${this.getFieldLabel(checkbox)}`
-        );
+        if (!this.isElementVisible(checkbox)) continue;
+
+        const label = this.getFieldLabel(checkbox);
+        const isAgreement = this.isAgreementCheckbox(label);
+
+        checkboxFields.push({
+          element: checkbox,
+          label,
+          isRequired: true,
+          isAgreement,
+        });
       }
 
-      // Look for privacy consent checkboxes even if not explicitly required
+      // Look for consent checkboxes even if not explicitly required
       const consentCheckboxes = Array.from(
         form.querySelectorAll('input[type="checkbox"]')
       ).filter((checkbox) => {
@@ -944,141 +858,124 @@ export class RecruiteeFormHandler {
       });
 
       for (const checkbox of consentCheckboxes) {
-        this.handleConsentCheckbox(checkbox);
-      }
+        if (!this.isElementVisible(checkbox)) continue;
 
-      return true;
-    } catch (error) {
-      this.logger(`Error handling required checkboxes: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Find the submit button on a form
-   */
-  findSubmitButton(form) {
-    try {
-      this.logger("Looking for submit button");
-
-      // Recruitee-specific submit button selector
-      const recruiteeSubmitButton = document.querySelector(
-        'button[data-testid="submit-application-form-button"], button.cNFhOU'
-      );
-      if (
-        recruiteeSubmitButton &&
-        this.isElementVisible(recruiteeSubmitButton) &&
-        !recruiteeSubmitButton.disabled
-      ) {
-        this.logger(
-          `Found Recruitee submit button: ${recruiteeSubmitButton.textContent.trim()}`
-        );
-        return recruiteeSubmitButton;
-      }
-
-      // Try multiple selector patterns for submit buttons
-      const buttonSelectors = [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        "button.btn-primary",
-        "button.btn-submit",
-        "button.button--primary",
-        "button.next-step",
-        "button.submit",
-      ];
-
-      // Try each selector
-      for (const selector of buttonSelectors) {
-        // First look within the form
-        const formButtons = form.querySelectorAll(selector);
-        for (const button of formButtons) {
-          if (this.isElementVisible(button) && !button.disabled) {
-            this.logger(
-              `Found submit button in form: ${
-                button.textContent.trim() || button.value
-              }`
-            );
-            return button;
-          }
-        }
-
-        // Then look on the page (for forms that have button outside)
-        const pageButtons = document.querySelectorAll(selector);
-        for (const button of pageButtons) {
-          if (this.isElementVisible(button) && !button.disabled) {
-            this.logger(
-              `Found submit button on page: ${
-                button.textContent.trim() || button.value
-              }`
-            );
-            return button;
-          }
-        }
-      }
-
-      // Look for buttons with common submit text
-      const buttonTexts = [
-        "submit",
-        "apply",
-        "next",
-        "continue",
-        "save",
-        "send",
-      ];
-      const allButtons = document.querySelectorAll(
-        'button, input[type="submit"], input[type="button"]'
-      );
-
-      for (const button of allButtons) {
-        const buttonText =
-          button.textContent?.toLowerCase() ||
-          button.value?.toLowerCase() ||
-          "";
-        if (
-          buttonTexts.some((text) => buttonText.includes(text)) &&
-          this.isElementVisible(button) &&
-          !button.disabled
-        ) {
-          this.logger(
-            `Found submit button by text: ${
-              button.textContent.trim() || button.value
-            }`
-          );
-          return button;
-        }
-      }
-
-      this.logger("No submit button found");
-      return null;
-    } catch (error) {
-      this.logger(`Error finding submit button: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Submit the form
-   */
-  async submitForm(form) {
-    try {
-      // Find the submit button
-      const submitButton = this.findSubmitButton(form);
-      if (!submitButton) {
-        throw new Error("Submit button not found");
+        const label = this.getFieldLabel(checkbox);
+        checkboxFields.push({
+          element: checkbox,
+          label,
+          isRequired: false,
+          isAgreement: true,
+        });
       }
 
       this.logger(
-        `Clicking submit button: ${
-          submitButton.textContent.trim() || submitButton.value
+        `Found ${checkboxFields.length} required/agreement checkboxes`
+      );
+
+      for (const field of checkboxFields) {
+        let shouldCheck = field.isRequired || field.isAgreement;
+
+        if (!shouldCheck) {
+          const answer = await this.getAIAnswer(
+            field.label,
+            ["yes", "no"],
+            "checkbox",
+            "This is a checkbox that may require consent or agreement."
+          );
+
+          shouldCheck = answer === "yes" || answer === "true";
+        }
+
+        this.logger(
+          `${shouldCheck ? "Checking" : "Unchecking"} checkbox: ${field.label}`
+        );
+        await this.fillCheckboxField(field.element, shouldCheck);
+        await this.wait(200);
+      }
+    } catch (error) {
+      this.logger(`Error handling required checkboxes: ${error.message}`);
+    }
+  }
+
+  /**
+   * Find submit button - following Breezy pattern
+   */
+  findSubmitButton(form) {
+    const submitSelectors = [
+      'button[type="submit"]',
+      'input[type="submit"]',
+      'button[data-testid="submit-application-form-button"]',
+      "button.cNFhOU",
+      "button.btn-primary",
+      "button.btn-submit",
+      "button.c-button--primary",
+      "button.submit-button",
+      "button.submit",
+    ];
+
+    for (const selector of submitSelectors) {
+      const buttons = form.querySelectorAll(selector);
+      if (buttons.length) {
+        for (const btn of buttons) {
+          if (this.isElementVisible(btn) && !btn.disabled) {
+            return btn;
+          }
+        }
+      }
+    }
+
+    // Look for buttons with submit-like text
+    const allButtons = form.querySelectorAll('button, input[type="button"]');
+    for (const btn of allButtons) {
+      if (!this.isElementVisible(btn) || btn.disabled) continue;
+
+      const text = btn.textContent.toLowerCase();
+      if (
+        text.includes("submit") ||
+        text.includes("apply") ||
+        text.includes("send") ||
+        text.includes("continue") ||
+        text === "next"
+      ) {
+        return btn;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Submit form - following Breezy pattern
+   */
+  async submitForm(form) {
+    try {
+      this.logger("Attempting to submit form");
+
+      const submitButton = this.findSubmitButton(form);
+      if (!submitButton) {
+        this.logger("No submit button found");
+        return false;
+      }
+
+      this.logger(
+        `Found submit button: ${
+          submitButton.textContent || submitButton.value || "Unnamed button"
         }`
       );
 
-      // Click the button
+      if (!this.isElementVisible(submitButton) || submitButton.disabled) {
+        this.logger("Submit button is not clickable");
+        return false;
+      }
+
+      this.scrollToElement(submitButton);
+      await this.wait(500);
+
       submitButton.click();
+      this.logger("Clicked submit button");
 
-      // Wait for form submission and page update
-      await this.wait(18000);
-
+      await this.wait(3000);
       return true;
     } catch (error) {
       this.logger(`Error submitting form: ${error.message}`);
@@ -1086,143 +983,86 @@ export class RecruiteeFormHandler {
     }
   }
 
-  // Helper methods...
-  async getAIAnswerForQuestion(question, userData) {
-    try {
-      this.logger(`Getting AI answer for: ${question}`);
+  // Helper methods following Breezy pattern
 
-      const response = await fetch(`${this.host}/api/ai-answer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question,
-          userData,
-          description: this.jobDescription,
-        }),
-      });
+  /**
+   * Check if a label indicates an agreement checkbox
+   */
+  isAgreementCheckbox(label) {
+    if (!label) return false;
 
-      if (!response.ok) {
-        throw new Error(`AI service error: ${response.status}`);
-      }
+    const agreementTerms = [
+      "agree",
+      "accept",
+      "consent",
+      "terms",
+      "privacy",
+      "policy",
+      "gdpr",
+      "confirm",
+      "acknowledge",
+      "permission",
+      "receive",
+      "subscribe",
+      "newsletter",
+      "marketing",
+      "communications",
+    ];
 
-      const data = await response.json();
-      return data.answer;
-    } catch (error) {
-      this.logger(`Error getting AI answer: ${error.message}`);
-      throw error;
-    }
+    return agreementTerms.some((term) => label.includes(term));
   }
 
-  async getAISelectOption(label, options, userData) {
-    try {
-      this.logger(`Getting AI select option for: ${label}`);
-
-      const response = await fetch(`${this.host}/api/ai-answer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: label,
-          options,
-          userData,
-          description: this.jobDescription,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`AI service error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return data.answer;
-    } catch (error) {
-      this.logger(`Error getting AI select option: ${error.message}`);
-      throw error;
+  /**
+   * Helper method to determine if a value should result in checking a checkbox
+   */
+  shouldCheckValue(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const lowerValue = value.toLowerCase().trim();
+      return (
+        lowerValue === "true" ||
+        lowerValue === "yes" ||
+        lowerValue === "on" ||
+        lowerValue === "1"
+      );
     }
+    if (typeof value === "number") return value === 1;
+    return false;
   }
 
-  // Additional helper methods...
-  findClosestMatch(value, options) {
-    if (!value || !options || options.length === 0) return null;
+  /**
+   * Enhanced value matching for radio buttons and select options
+   */
+  matchesValue(aiValue, optionText, optionValue) {
+    // Direct matches
+    if (aiValue === optionText || aiValue === optionValue) return true;
 
-    const lowerValue = value.toLowerCase();
+    // Partial matches
+    if (optionText.includes(aiValue) || aiValue.includes(optionText))
+      return true;
+    if (optionValue.includes(aiValue) || aiValue.includes(optionValue))
+      return true;
 
-    // Exact match
-    const exactMatch = options.find((opt) => opt.toLowerCase() === lowerValue);
-    if (exactMatch) return exactMatch;
+    // Special cases for yes/no
+    if (
+      (aiValue === "yes" || aiValue === "true") &&
+      (optionText === "yes" || optionValue === "yes")
+    )
+      return true;
+    if (
+      (aiValue === "no" || aiValue === "false") &&
+      (optionText === "no" || optionValue === "no")
+    )
+      return true;
 
-    // Contains match
-    const containsMatch = options.find(
-      (opt) =>
-        opt.toLowerCase().includes(lowerValue) ||
-        lowerValue.includes(opt.toLowerCase())
-    );
-    if (containsMatch) return containsMatch;
-
-    return null;
+    return false;
   }
 
-  findRadioLabel(element) {
-    // First try by for attribute
-    if (element.id) {
-      const label = document.querySelector(`label[for="${element.id}"]`);
-      if (label) {
-        return label.textContent.trim();
-      }
-    }
-
-    // Try to find label as a sibling
-    let nextSibling = element.nextElementSibling;
-    if (nextSibling && nextSibling.tagName === "LABEL") {
-      return nextSibling.textContent.trim();
-    }
-
-    // Try to find span inside the parent (Recruitee pattern)
-    const parent = element.closest(".sc-1omxthk-1, .sc-qci8q2-1");
-    if (parent) {
-      const labelEl = parent.querySelector("label");
-      if (labelEl) {
-        const span = labelEl.querySelector(
-          "span:not([class]), span:last-child"
-        );
-        if (span) {
-          return span.textContent.trim();
-        }
-        return labelEl.textContent.trim();
-      }
-    }
-
-    return "";
-  }
-
-  getFieldLabel(element) {
-    try {
-      const labelElement = this.getFieldLabelElement(element);
-
-      if (labelElement) {
-        // Remove the asterisk and any hidden elements
-        let labelText = labelElement.textContent.trim();
-
-        // Remove asterisk and the text inside it
-        labelText = labelText.replace(/\s*\*\s*$/, "");
-
-        return labelText;
-      }
-
-      // For radio buttons and checkboxes, try to find the label right after
-      if (element.type === "radio" || element.type === "checkbox") {
-        return this.findRadioLabel(element);
-      }
-
-      // Fall back to placeholder or name
-      return element.placeholder || element.name || "";
-    } catch (error) {
-      return element.name || "";
-    }
-  }
-
+  /**
+   * Get field label element
+   */
   getFieldLabelElement(element) {
     try {
-      // Try to find label by for attribute
       if (element.id) {
         const label = document.querySelector(`label[for="${element.id}"]`);
         if (label) {
@@ -1230,20 +1070,17 @@ export class RecruiteeFormHandler {
         }
       }
 
-      // Try to find label as a parent or ancestor with label tag
       let parent = element.parentElement;
       while (parent) {
         if (parent.tagName === "LABEL") {
           return parent;
         }
 
-        // Try to find label as a sibling element
         const siblingLabel = parent.querySelector("label");
         if (siblingLabel) {
           return siblingLabel;
         }
 
-        // Look for Recruitee specific label patterns
         const recruiteeLabel = parent.querySelector(".sc-1glzqyg-0");
         if (recruiteeLabel) {
           return recruiteeLabel;
@@ -1258,186 +1095,34 @@ export class RecruiteeFormHandler {
     }
   }
 
-  isFieldRequired(element) {
-    // Check direct required attribute
-    if (element.required || element.getAttribute("aria-required") === "true") {
-      return true;
-    }
-
-    // Check for asterisk in label (Recruitee specific)
-    const label = this.getFieldLabelElement(element);
-    if (label && label.querySelector(".sc-1glzqyg-1")) {
-      return true;
-    }
-
-    // Check for required class
-    if (
-      element.classList.contains("required") ||
-      element.classList.contains("c-form-control--required")
-    ) {
-      return true;
-    }
-
-    // For Recruitee, look for asterisk in parent legend for fieldsets
-    const fieldset = element.closest("fieldset");
-    if (fieldset) {
-      const legend = fieldset.querySelector("legend");
-      if (legend && legend.querySelector(".sc-1glzqyg-1")) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
+  /**
+   * Utility methods
+   */
   isElementVisible(element) {
-    try {
-      if (!element) return false;
+    if (!element) return false;
 
-      // Get element style
-      const style = window.getComputedStyle(element);
-
-      // Check if element is hidden
-      if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        style.opacity === "0"
-      ) {
-        return false;
-      }
-
-      // Check if element has zero dimensions
-      const rect = element.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) {
-        return false;
-      }
-
-      // Check if any parent is hidden
-      let parent = element.parentElement;
-      while (parent) {
-        const parentStyle = window.getComputedStyle(parent);
-        if (
-          parentStyle.display === "none" ||
-          parentStyle.visibility === "hidden" ||
-          parentStyle.opacity === "0"
-        ) {
-          return false;
-        }
-        parent = parent.parentElement;
-      }
-
-      return true;
-    } catch (error) {
-      return true; // Default to true on error
-    }
+    const style = window.getComputedStyle(element);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0"
+    );
   }
 
-  async intelligentFieldGuess(element, fieldInfo, profile) {
-    const { label, placeholder, name, id, type } = fieldInfo;
-    const nameAndLabel = (
-      name +
-      " " +
-      id +
-      " " +
-      label +
-      " " +
-      placeholder
-    ).toLowerCase();
+  scrollToElement(element) {
+    if (!element) return;
 
-    // Common field patterns
-    if (
-      nameAndLabel.includes("name") &&
-      !nameAndLabel.includes("first") &&
-      !nameAndLabel.includes("last")
-    ) {
-      return `${profile.firstName || profile.firstname || ""} ${
-        profile.lastName || profile.lastname || ""
-      }`.trim();
-    }
-
-    if (nameAndLabel.includes("phone")) {
-      return profile.phone || profile.phoneNumber || "";
-    }
-
-    if (nameAndLabel.includes("address")) {
-      return (
-        profile.location ||
-        `${profile.city || ""}, ${profile.country || ""}`.trim()
-      );
-    }
-
-    // For questions or longer text fields
-    if (
-      element.tagName === "TEXTAREA" ||
-      (nameAndLabel.includes("?") && nameAndLabel.length > 15)
-    ) {
+    try {
+      element.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    } catch (error) {
       try {
-        return await this.getAIAnswerForQuestion(label || placeholder, profile);
+        element.scrollIntoView();
       } catch (e) {
-        return "";
+        // Silent fail
       }
-    }
-
-    // For numeric fields
-    if (type === "number") {
-      if (
-        nameAndLabel.includes("salary") ||
-        nameAndLabel.includes("compensation")
-      ) {
-        return "75000";
-      } else if (
-        nameAndLabel.includes("years") ||
-        nameAndLabel.includes("experience")
-      ) {
-        return profile.yearsOfExperience || "5";
-      } else if (nameAndLabel.includes("age")) {
-        return "30";
-      }
-    }
-
-    // For date fields
-    if (type === "date" || nameAndLabel.includes("date")) {
-      const today = new Date();
-
-      if (nameAndLabel.includes("birth") || nameAndLabel.includes("dob")) {
-        return "1990-01-01";
-      } else if (nameAndLabel.includes("start")) {
-        // Two weeks from now for start date
-        const startDate = new Date(today);
-        startDate.setDate(today.getDate() + 14);
-        return startDate.toISOString().split("T")[0];
-      } else {
-        // Default to today
-        return today.toISOString().split("T")[0];
-      }
-    }
-
-    // Default empty for fields we couldn't categorize
-    return "";
-  }
-
-  async getAIFieldValue(fieldLabel, element) {
-    try {
-      if (!fieldLabel) return null;
-
-      // For checkboxes/radio buttons, just check if they're consent related
-      if (element.type === "checkbox" || element.type === "radio") {
-        const label = fieldLabel.toLowerCase();
-        if (
-          label.includes("consent") ||
-          label.includes("agree") ||
-          label.includes("terms") ||
-          label.includes("privacy") ||
-          label.includes("policy")
-        ) {
-          return true;
-        }
-      }
-
-      // For other fields, use more advanced AI
-      return await this.getAIAnswerForQuestion(fieldLabel, this.userData);
-    } catch (error) {
-      return null;
     }
   }
 

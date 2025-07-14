@@ -37,7 +37,7 @@
       "js": [
         "content/content-main.js"
       ],
-      "run_at": "document_start",
+      "run_at": "document_end",
       "all_frames": false
     }
   ],

@@ -1,4 +1,4 @@
-// platforms/workable/workable.js
+// platforms/workable/workable.js - FIXED VERSION
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import WorkableFormHandler from "./workable-form-handler.js";
 import WorkableFileHandler from "./workable-file-handler.js";
@@ -39,8 +39,16 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     return /^https:\/\/([\w-]+)\.workable\.com\/(j|jobs)\/([^\/]+)\/?.*$/;
   }
 
+  // ✅ FIXED: Updated to handle both job overview pages and application pages
   isValidJobPage(url) {
-    return /^https:\/\/([\w-]+)\.workable\.com\/(j|jobs)\/([^\/]+)/.test(url);
+    return /^https:\/\/apply\.workable\.com\/[^\/]+\/(j|jobs)\/([^\/]+)/.test(
+      url
+    );
+  }
+
+  // ✅ ADDED: Method to detect application pages specifically
+  isApplicationPage(url) {
+    return url.includes("/apply/") || url.includes("/application");
   }
 
   getApiHost() {
@@ -52,10 +60,6 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     );
   }
 
-  isApplicationPage(url) {
-    return url.includes("/apply") || this.isValidJobPage(url);
-  }
-
   getJobTaskMessageType() {
     return "START_APPLICATION";
   }
@@ -65,7 +69,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
    */
   platformSpecificUrlNormalization(url) {
     // Remove /apply suffix and normalize Workable URLs
-    return url.replace(/\/apply$/, "");
+    return url.replace(/\/apply\/?$/, "");
   }
 
   // ========================================
@@ -130,6 +134,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
+  // ✅ FIXED: Updated page detection logic
   async detectPageTypeAndStart() {
     const url = window.location.href;
     this.log(`🔍 Detecting page type for: ${url}`);
@@ -138,14 +143,119 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       this.log("📊 Google search page detected");
       this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
-    } else if (this.isValidJobPage(url)) {
-      this.log("📋 Workable job page detected");
-      this.statusOverlay.addInfo("Workable job page detected");
+    } else if (this.isApplicationPage(url)) {
+      this.log("📋 Workable application page detected");
+      this.statusOverlay.addInfo("Workable application page detected");
       await this.startApplicationProcess();
+    } else if (this.isValidJobPage(url)) {
+      this.log("📋 Workable job overview page detected");
+      this.statusOverlay.addInfo(
+        "Workable job page detected - navigating to application"
+      );
+      await this.navigateToApplicationAndStart();
     } else {
       this.log("❓ Unknown page type, waiting for navigation");
       await this.waitForValidPage();
     }
+  }
+
+  // ✅ ADDED: Method to navigate to application tab and start
+  async navigateToApplicationAndStart() {
+    try {
+      // Extract job description from overview page first
+      const jobDescription = await this.extractJobDescription();
+      this.cachedJobDescription = jobDescription;
+
+      // Navigate to Application tab
+      const applicationTabNavigated = await this.navigateToApplicationTab();
+      if (!applicationTabNavigated) {
+        throw new Error("Cannot find or navigate to Application tab");
+      }
+
+      this.statusOverlay.addInfo("Successfully navigated to Application tab");
+
+      // Wait for application page to load
+      await this.wait(2000);
+
+      // Start application process
+      await this.startApplicationProcess();
+    } catch (error) {
+      this.reportError(error, { phase: "navigation" });
+      this.handleApplicationError(error);
+    }
+  }
+
+  // ✅ ADDED: Method to navigate to application tab (similar to Ashby)
+  async navigateToApplicationTab() {
+    try {
+      this.statusOverlay.addInfo("Looking for Application tab...");
+
+      // Find the Application tab using Workable-specific selectors
+      const applicationTab =
+        document.querySelector('a[data-ui="application-form-tab"]') ||
+        document.querySelector('a[href*="/apply/"]') ||
+        Array.from(document.querySelectorAll("a")).find((tab) =>
+          tab.textContent.toLowerCase().includes("application")
+        );
+
+      if (!applicationTab) {
+        this.statusOverlay.addWarning("Application tab not found");
+        return false;
+      }
+
+      this.statusOverlay.addInfo("Found Application tab, clicking...");
+
+      // Get current URL to detect navigation
+      const currentUrl = window.location.href;
+
+      // Click the Application tab
+      applicationTab.click();
+
+      // Wait for navigation to complete
+      const navigationSuccess = await this.waitForUrlChange(
+        currentUrl,
+        "/apply/",
+        10000
+      );
+
+      if (!navigationSuccess) {
+        this.statusOverlay.addWarning(
+          "URL did not change to application page, continuing anyway..."
+        );
+        // Give it a bit more time and continue
+        await this.wait(2000);
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Error navigating to Application tab:", error);
+      this.statusOverlay.addError(
+        "Error navigating to Application tab: " + error.message
+      );
+      return false;
+    }
+  }
+
+  // ✅ ADDED: Method to wait for URL change (from Ashby)
+  async waitForUrlChange(originalUrl, expectedPath, timeout = 10000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      await this.wait(500);
+
+      const currentUrl = window.location.href;
+
+      // Check if URL changed and contains expected path
+      if (currentUrl !== originalUrl && currentUrl.includes(expectedPath)) {
+        console.log(`✅ URL changed to: ${currentUrl}`);
+        return true;
+      }
+    }
+
+    console.warn(
+      `⚠️ URL did not change to contain '${expectedPath}' within ${timeout}ms`
+    );
+    return false;
   }
 
   // ========================================
@@ -172,6 +282,10 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
       case "PROFILE_DATA":
         this.handleProfileData(data);
+        break;
+
+      case "CONNECTION_ESTABLISHED":
+        this.log("✅ Port connection established");
         break;
 
       default:
@@ -299,11 +413,11 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       }
 
       // Check for success page first
-      const applied = this.checkSubmissionSuccess();
-      if (applied) {
-        await this.handleAlreadyApplied();
-        return;
-      }
+      // const applied = this.checkSubmissionSuccess();
+      // if (applied) {
+      //   await this.handleAlreadyApplied();
+      //   return;
+      // }
 
       // Proceed with application process
       await this.apply();
@@ -452,8 +566,9 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   async processApplicationForm(form) {
     this.statusOverlay.addInfo("Found application form, beginning to fill out");
 
-    // Extract job description for AI context
-    const jobDescription = await this.extractJobDescription();
+    // Extract job description for AI context (use cached if available)
+    const jobDescription =
+      this.cachedJobDescription || (await this.extractJobDescription());
 
     // Update form handler with job description
     if (this.formHandler) {
@@ -643,13 +758,18 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     );
   }
 
+  // ✅ FIXED: Updated to handle both search and job pages
   async waitForValidPage(timeout = 30000) {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
       const url = window.location.href;
 
-      if (url.includes("google.com/search") || this.isValidJobPage(url)) {
+      if (
+        url.includes("google.com/search") ||
+        this.isValidJobPage(url) ||
+        this.isApplicationPage(url)
+      ) {
         await this.detectPageTypeAndStart();
         return;
       }

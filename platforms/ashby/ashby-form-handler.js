@@ -1,7 +1,7 @@
 // platforms/ashby/ashby-form-handler.js
 import { AIService } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
-//submitAndVerify
+
 export class AshbyFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;
