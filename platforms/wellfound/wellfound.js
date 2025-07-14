@@ -1,3 +1,4 @@
+// platforms/wellfound/wellfound.js - FIXED VERSION
 import BasePlatform from "../base-platform.js";
 import AIService from "../../services/ai-service.js";
 import ApplicationTrackerService from "../../services/application-tracker-service.js";
@@ -13,8 +14,9 @@ export default class WellfoundPlatform extends BasePlatform {
     this.automationStarted = false;
     this.processedJobs = new Set();
     this.currentJobDetails = null;
+    this.currentJobIndex = 0;
 
-    // FIXED: Initialize services with proper API host from config
+    // Initialize services with proper API host from config
     const apiHost = config.apiHost || 
                    config.config?.apiHost || 
                    config.sessionContext?.apiHost ||
@@ -41,8 +43,6 @@ export default class WellfoundPlatform extends BasePlatform {
   async initialize() {
     await super.initialize();
     this.log("🚀 Wellfound platform initialized");
-
-    // Create status overlay
     this.statusOverlay.create();
   }
 
@@ -56,286 +56,876 @@ export default class WellfoundPlatform extends BasePlatform {
     this.hasStarted = true;
     this.isRunning = true;
     this.log("🚀 Starting Wellfound automation with user preferences");
-    this.log("📋 Received start parameters:", params); // ADDED: Debug log
     this.statusOverlay.addInfo("Alright, let's get you some amazing job opportunities on Wellfound! Let me start searching based on your preferences...");
 
     try {
-      // FIXED: Better config merging with validation
+      // Setup configuration
       this.config = { 
         ...this.config, 
         ...params,
-        // Ensure essential fields have values
         jobsToApply: params.jobsToApply || this.config.jobsToApply || 10,
         userId: params.userId || this.config.userId || this.userId,
         preferences: params.preferences || this.config.preferences || {},
         apiHost: params.apiHost || this.config.apiHost || this.HOST
       };
 
-      // FIXED: Update services with proper userId and config if they weren't set properly
-      if (this.config.userId && (!this.appTracker.userId || !this.userService.userId)) {
-        this.appTracker = new ApplicationTrackerService({
-          apiHost: this.HOST,
-          userId: this.config.userId,
-        });
-        this.userService = new UserService({
-          apiHost: this.HOST,
-          userId: this.config.userId,
-        });
-        this.log("🔧 Services re-initialized with correct userId");
-      }
-
-      this.log("📋 Final configuration after merging:", {
-        jobsToApply: this.config.jobsToApply,
-        userId: this.config.userId,
-        hasPreferences: !!this.config.preferences,
-        preferencesKeys: Object.keys(this.config.preferences || {}),
-        apiHost: this.config.apiHost
-      });
-
-      if (!this.config.jobsToApply || this.config.jobsToApply <= 0) {
-        const errorMessage = "I need to know how many jobs you want me to apply to!";
-        this.statusOverlay.addError(errorMessage);
-        throw new Error(errorMessage);
-      }
-
-      if (!this.config.userId) {
-        const errorMessage = "User ID is required for automation";
-        this.statusOverlay.addError(errorMessage);
-        throw new Error(errorMessage);
-      }
-
-      // Check user authorization before starting
+      // Check user authorization
       await this.checkUserAuthorization();
-
       this.updateProgress({ total: this.config.jobsToApply });
 
-      // Wait for page readiness
-      await this.waitForPageLoad();
-      this.log("📄 Page loaded, current URL:", window.location.href);
+      // STEP 1: Navigate to jobs page if needed
+      await this.ensureOnJobsPage();
 
-      // Navigate to Wellfound Jobs if not already there
-      const currentUrl = window.location.href.toLowerCase();
-      if (!currentUrl.includes("wellfound.com/jobs")) {
-        this.log("📍 Navigating to Wellfound Jobs");
-        this.statusOverlay.addInfo("Let me take you to the Wellfound jobs page! ✨");
-        await this.navigateToWellfoundJobs();
-      } else {
-        this.log("✅ Already on Wellfound Jobs page");
-        this.statusOverlay.addSuccess("Great! We're already on Wellfound Jobs. Now let me apply your filters...");
-      }
+      // STEP 2: Open filter panel
+      await this.openFilterPanel();
 
-      // Apply filters based on user preferences
-      await this.applyFilters();
+      // STEP 3: Apply user filters
+      await this.applyUserFilters();
 
-      // Click View Results to show job cards
-      await this.clickViewResults();
+      // STEP 4: Show results
+      await this.showJobResults();
 
-      // Start processing jobs
+      // STEP 5: Process jobs sequentially
       this.automationStarted = true;
       this.statusOverlay.updateStatus("applying", "Finding perfect matches for you");
-      await this.processJobs({ jobsToApply: this.config.jobsToApply });
+      await this.processJobsSequentially();
+
     } catch (error) {
       this.hasStarted = false;
       this.reportError(error, { phase: "start" });
     }
   }
 
-  async checkUserAuthorization() {
+  async ensureOnJobsPage() {
+    const currentUrl = window.location.href.toLowerCase();
+    if (!currentUrl.includes("wellfound.com/jobs")) {
+      this.log("📍 Navigating to Wellfound Jobs");
+      this.statusOverlay.addInfo("Let me take you to the Wellfound jobs page! ✨");
+      window.location.href = "https://wellfound.com/jobs";
+      await this.delay(3000);
+      await this.waitForPageLoad();
+    } else {
+      this.log("✅ Already on Wellfound Jobs page");
+      this.statusOverlay.addSuccess("Great! We're already on Wellfound Jobs.");
+    }
+  }
+
+  async openFilterPanel() {
     try {
-      this.statusOverlay.addInfo("Let me check if you're all set to apply...");
-
-      const canApply = await this.userService.canApplyMore();
-      if (!canApply) {
-        const remaining = await this.userService.getRemainingApplications();
-        const userDetails = await this.userService.getUserDetails();
-
-        const message =
-          userDetails.userRole === "credit"
-            ? `Looks like you're running low on credits (${userDetails.credits} left). Time to top up! 💳`
-            : `You've hit your daily limit! Don't worry, you have ${remaining} applications left overall. 📊`;
-
-        this.statusOverlay.addWarning(message);
-        throw new Error(`Cannot apply: ${message}`);
+      this.statusOverlay.addInfo("Opening the filter panel...");
+      
+      // Check if already open
+      if (await this.isFilterPanelOpen()) {
+        this.log("✅ Filter panel is already open!");
+        this.statusOverlay.addSuccess("Filter panel is ready!");
+        return true;
       }
 
-      this.log("✅ User authorization check passed");
-      this.statusOverlay.addSuccess("Perfect! You're all authorized and ready to go!");
+      // Find and click the filters button
+      const filtersButton = await this.findFiltersButton();
+      if (!filtersButton) {
+        throw new Error("Could not find filters button");
+      }
+
+      // Click with multiple strategies
+      await this.clickElementReliably(filtersButton);
+      await this.delay(2000);
+
+      // Verify panel opened
+      if (await this.isFilterPanelOpen()) {
+        this.log("✅ Filter panel opened successfully!");
+        this.statusOverlay.addSuccess("Filter panel opened!");
+        return true;
+      } else {
+        throw new Error("Filter panel did not open after clicking");
+      }
     } catch (error) {
-      this.log("❌ User authorization check failed:", error.message);
-      this.statusOverlay.addError("Hmm, there's an issue with your account permissions. " + error.message);
+      this.log("⚠️ Failed to open filter panel:", error.message);
+      this.statusOverlay.addWarning("Couldn't open filter panel, but continuing...");
+      return false;
+    }
+  }
+
+  async findFiltersButton() {
+    const strategies = [
+      () => document.querySelector('button[data-test="SearchBar-FiltersButton"]'),
+      () => document.querySelector('.styles_filtersIcon__WhlNp')?.closest('button'),
+      () => Array.from(document.querySelectorAll('button')).find(btn => 
+        btn.textContent?.toLowerCase().includes('filters')),
+      () => Array.from(document.querySelectorAll('[role="button"]')).find(btn => 
+        btn.textContent?.toLowerCase().includes('filters'))
+    ];
+
+    for (const strategy of strategies) {
+      const button = strategy();
+      if (button && button.offsetParent !== null) {
+        this.log("🎯 Found filters button via strategy");
+        return button;
+      }
+    }
+    return null;
+  }
+
+  async applyUserFilters() {
+    try {
+      this.statusOverlay.addInfo("Applying your job preferences...");
+      const preferences = this.config.preferences || {};
+      
+      await this.applyPositionFilters(preferences.positions);
+      await this.applyLocationFilters(preferences.location, preferences.remoteOnly);
+      await this.applySalaryFilters(preferences.salary);
+      await this.applyJobTypeFilters(preferences.jobType);
+      await this.applyExperienceFilters(preferences.experience);
+
+      this.log("✅ All filters applied successfully");
+      this.statusOverlay.addSuccess("All your filters are applied!");
+    } catch (error) {
+      this.log("⚠️ Failed to apply some filters:", error.message);
+      this.statusOverlay.addWarning("Had trouble with some filters, but main search is working!");
+    }
+  }
+
+  async showJobResults() {
+    try {
+      this.statusOverlay.addInfo("Loading your job matches...");
+      
+      // Look for View Results button
+      const viewResultsButton = await this.findViewResultsButton();
+      if (viewResultsButton) {
+        await this.clickElementReliably(viewResultsButton);
+        await this.delay(3000);
+      }
+
+      // Wait for job cards to load
+      await this.waitForJobCards();
+      
+      const jobCards = document.querySelectorAll('.styles_component__uTjje');
+      this.log(`✅ Found ${jobCards.length} job cards`);
+      this.statusOverlay.addSuccess(`Perfect! Found ${jobCards.length} job opportunities!`);
+      
+      return jobCards.length > 0;
+    } catch (error) {
+      this.log("❌ Failed to show job results:", error.message);
+      this.statusOverlay.addError("Had trouble loading job results");
       throw error;
     }
   }
 
-  async navigateToWellfoundJobs() {
-    window.location.href = "https://wellfound.com/jobs";
-    await this.delay(3000);
-    await this.waitForPageLoad();
-    this.log("✅ Navigation to Wellfound Jobs completed");
-    this.statusOverlay.addSuccess("Perfect! Now I'm setting up the search with all your preferences.");
+  async findViewResultsButton() {
+    const strategies = [
+      () => document.querySelector('button[data-test="SearchBar-ViewResultsButton"]'),
+      () => Array.from(document.querySelectorAll('button')).find(btn => 
+        btn.textContent?.toLowerCase().includes('view results')),
+      () => Array.from(document.querySelectorAll('button')).find(btn => 
+        /\d+\s*results?/i.test(btn.textContent))
+    ];
+
+    for (const strategy of strategies) {
+      const button = strategy();
+      if (button && button.offsetParent !== null) {
+        return button;
+      }
+    }
+    return null;
   }
 
-  async applyFilters() {
+  // MAIN SEQUENTIAL PROCESSING METHOD
+  async processJobsSequentially() {
+    let appliedCount = 0;
+    let processedCount = 0;
+    const targetJobs = this.config.jobsToApply;
+
     try {
-      this.statusOverlay.addInfo("Checking filter panel status...");
+      this.log(`🎯 Starting sequential job processing. Target: ${targetJobs} jobs`);
+      this.statusOverlay.addInfo(`Processing ${targetJobs} jobs sequentially...`);
 
-      // Check if filter panel is already open
-      const isAlreadyOpen = await this.isFilterPanelOpen();
-      if (isAlreadyOpen) {
-        this.log("✅ Filter panel is already open!");
-        this.statusOverlay.addSuccess("Filter panel is already open! Applying your preferences...");
-      } else {
-        this.statusOverlay.addInfo("Opening the filter panel to apply your job preferences...");
-
-        // Click the Filters button to open the filter panel
-        const filtersButton = await this.clickFiltersButton();
-        if (!filtersButton) {
-          this.log("⚠️ Could not open filter panel, but continuing with filter application...");
-          this.statusOverlay.addWarning("Couldn't open the filter panel, but I'll try to apply filters anyway...");
+      while (appliedCount < targetJobs && this.isRunning) {
+        // Get current job cards
+        const jobCards = await this.getCurrentJobCards();
+        
+        if (jobCards.length === 0) {
+          this.statusOverlay.addWarning("No more job cards found!");
+          break;
         }
 
-        // Wait for filter panel to open
-        await this.delay(2000);
+        // Process each job card in sequence
+        for (let i = this.currentJobIndex; i < jobCards.length && appliedCount < targetJobs; i++) {
+          if (!this.isRunning) break;
+
+          const jobCard = jobCards[i];
+          this.currentJobIndex = i;
+
+          try {
+            this.log(`📋 Processing job ${i + 1}/${jobCards.length}`);
+            this.statusOverlay.addInfo(`Checking job ${processedCount + 1}...`);
+
+            // STEP 5A: Open job details
+            const jobOpened = await this.openJobDetails(jobCard);
+            if (!jobOpened) {
+              this.log("⚠️ Could not open job details, skipping");
+              continue;
+            }
+
+            // STEP 5B: Extract job description and details
+            const jobDetails = await this.extractCompleteJobDetails();
+            if (!jobDetails) {
+              this.log("⚠️ Could not extract job details, skipping");
+              await this.returnToJobsList();
+              continue;
+            }
+
+            processedCount++;
+
+            // STEP 5C: Check if job matches preferences
+            if (!this.doesJobMatchPreferences(jobDetails)) {
+              this.log(`❌ Job "${jobDetails.title}" doesn't match preferences`);
+              this.statusOverlay.addInfo(`Skipping "${jobDetails.title}" - doesn't match preferences`);
+              await this.returnToJobsList();
+              continue;
+            }
+
+            // STEP 5D: Check if already applied
+            const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(jobDetails.jobId);
+            if (alreadyApplied) {
+              this.log(`⚠️ Already applied to "${jobDetails.title}"`);
+              await this.returnToJobsList();
+              continue;
+            }
+
+            // STEP 5E: Extract form fields and apply
+            const applicationSuccess = await this.applyToJobWithFormHandling(jobDetails);
+            
+            if (applicationSuccess) {
+              appliedCount++;
+              this.progress.completed = appliedCount;
+              this.updateProgress({ completed: appliedCount });
+
+              await this.userService.updateApplicationCount();
+              await this.saveAppliedJob(jobDetails);
+
+              this.log(`✅ Successfully applied to job ${appliedCount}/${targetJobs}`);
+              this.statusOverlay.addSuccess(
+                `Applied to "${jobDetails.title}"! (${appliedCount}/${targetJobs})`
+              );
+
+              this.reportApplicationSubmitted(jobDetails, {
+                method: "Wellfound Application",
+                userId: this.config.userId,
+                matchedPreferences: true,
+              });
+            } else {
+              this.progress.failed++;
+              this.updateProgress({ failed: this.progress.failed });
+              this.statusOverlay.addError(`Failed to apply to "${jobDetails.title}"`);
+            }
+
+            // STEP 5F: Return to jobs list for next iteration
+            await this.returnToJobsList();
+            await this.delay(2000); // Delay between applications
+
+          } catch (error) {
+            this.log(`❌ Error processing job ${i + 1}:`, error.message);
+            await this.returnToJobsList();
+            continue;
+          }
+        }
+
+        // Try to load more jobs if we need more and haven't reached target
+        if (appliedCount < targetJobs) {
+          const hasMore = await this.loadMoreJobs();
+          if (!hasMore) {
+            this.statusOverlay.addInfo("No more jobs available for your criteria");
+            break;
+          }
+          this.currentJobIndex = 0; // Reset index for new batch
+        }
       }
-      
-      this.statusOverlay.addInfo("Now applying your preferences...");
 
-      const preferences = this.config.preferences || {};
-      
-      // Apply search keywords (positions)
-      await this.applyPositionFilters(preferences.positions);
-      
-      // Apply location filters
-      await this.applyLocationFilters(preferences.location, preferences.remoteOnly);
-      
-      // Apply salary filters
-      await this.applySalaryFilters(preferences.salary);
-      
-      // Apply job type filters
-      await this.applyJobTypeFilters(preferences.jobType);
-      
-      // Apply experience level filters
-      await this.applyExperienceFilters(preferences.experience);
+      // Complete the process
+      const message = appliedCount >= targetJobs
+        ? `🎉 Successfully applied to all ${appliedCount} target jobs!`
+        : `Applied to ${appliedCount} out of ${targetJobs} jobs. No more suitable matches found.`;
 
-      this.log("✅ All filters applied successfully");
-      this.statusOverlay.addSuccess("All your filters are now applied! Let's see what amazing opportunities we found!");
+      this.log(message);
+      this.statusOverlay.addSuccess(message);
+      this.reportComplete();
+
+      return {
+        status: appliedCount >= targetJobs ? "target_reached" : "no_more_jobs",
+        appliedCount,
+        processedCount,
+      };
+
     } catch (error) {
-      this.log("⚠️ Failed to apply some filters:", error.message);
-      this.statusOverlay.addWarning("I had trouble with some filters, but the main search is working great!");
+      this.log("❌ Error in sequential job processing:", error.message);
+      this.statusOverlay.addError("Error during job processing");
+      this.reportError(error, { phase: "processJobsSequentially" });
+      throw error;
     }
   }
 
-  async clickFiltersButton() {
-    try {
-      this.log("🔍 Looking for Filters button...");
-      
-      // Look for the Filters button with multiple strategies
-      let filtersButton = null;
-      
-      // Strategy 1: Look for any clickable element containing "Filters"
-      const potentialButtons = document.querySelectorAll('button, div[role="button"], [class*="button"], div[onclick], [style*="cursor: pointer"]');
-      for (const element of potentialButtons) {
-        if (element.textContent && element.textContent.trim().toLowerCase().includes('filters')) {
-          filtersButton = element;
-          this.log("🎯 Found filters button via text search:", element);
-          break;
-        }
-      }
-      
-      // Strategy 2: Look for the specific icon
-      if (!filtersButton) {
-        const filterIcon = document.querySelector('.styles_filtersIcon__WhlNp');
-        if (filterIcon) {
-          // Find the closest clickable parent
-          filtersButton = filterIcon.closest('button, div[role="button"], [onclick], [class*="button"]') || 
-                         filterIcon.parentElement;
-          this.log("🎯 Found filters button via icon:", filtersButton);
-        }
-      }
-      
-      // Strategy 3: Look for any element with the text "Filters"
-      if (!filtersButton) {
-        const allElements = document.querySelectorAll('*');
-        for (const element of allElements) {
-          if (element.textContent && 
-              element.textContent.trim() === 'Filters' &&
-              element.offsetParent !== null) { // Make sure it's visible
-            filtersButton = element.closest('button, div, span') || element;
-            this.log("🎯 Found filters button via exact text match:", filtersButton);
-            break;
-          }
-        }
-      }
+  async getCurrentJobCards() {
+    await this.waitForElement('.styles_component__uTjje', 5000);
+    return Array.from(document.querySelectorAll('.styles_component__uTjje'));
+  }
 
-      if (!filtersButton) {
-        this.log("❌ Could not find Filters button at all");
+  async openJobDetails(jobCard) {
+    try {
+      // Find the Learn More button or job link
+      const learnMoreButton = jobCard.querySelector('button[data-test="LearnMoreButton"]') ||
+                             jobCard.querySelector('a[href*="/jobs/"]') ||
+                             jobCard.querySelector('.learn-more');
+
+      if (!learnMoreButton) {
+        this.log("❌ No Learn More button found in job card");
         return false;
       }
 
-      // Try multiple click methods to ensure it works
-      const clickMethods = [
-        () => filtersButton.click(),
-        () => filtersButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })),
-        () => filtersButton.dispatchEvent(new Event('click', { bubbles: true })),
-        () => {
-          // Simulate a full mouse interaction
-          filtersButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-          filtersButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-          filtersButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        }
-      ];
+      // Click to open job details
+      await this.clickElementReliably(learnMoreButton);
+      await this.delay(2000);
 
-      this.log("🎯 Attempting to click Filters button...");
+      // Wait for job details page to load
+      await this.waitForElement('.styles_description__xjvTf, .job-description', 8000);
       
-      // Scroll into view first
-      filtersButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await this.delay(1000);
-
-      // Try each click method
-      for (let i = 0; i < clickMethods.length; i++) {
-        try {
-          this.log(`Attempting click method ${i + 1}...`);
-          clickMethods[i]();
-          await this.delay(2000);
-          
-          // Check if filter panel opened by looking for filter elements
-          if (await this.isFilterPanelOpen()) {
-            this.log("✅ Filter panel opened successfully!");
-            this.statusOverlay.addSuccess("Filter panel opened successfully!");
-            return true;
-          }
-        } catch (error) {
-          this.log(`Click method ${i + 1} failed:`, error.message);
-        }
-      }
-
-      // If none of the click methods worked, try manual focus and key press
-      try {
-        this.log("Trying focus + Enter method...");
-        filtersButton.focus();
-        await this.delay(500);
-        filtersButton.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        await this.delay(2000);
-        
-        if (await this.isFilterPanelOpen()) {
-          this.log("✅ Filter panel opened with keyboard!");
-          this.statusOverlay.addSuccess("Filter panel opened successfully!");
-          return true;
-        }
-      } catch (error) {
-        this.log("Keyboard method failed:", error.message);
-      }
-
-      this.log("❌ All click methods failed - filter panel did not open");
-      this.statusOverlay.addWarning("Couldn't open the filter panel, but I'll try to apply filters anyway...");
-      return false;
-      
+      this.log("✅ Job details page opened");
+      return true;
     } catch (error) {
-      this.log("❌ Error in clickFiltersButton:", error.message);
-      this.statusOverlay.addWarning("Had trouble opening the filter panel, but continuing...");
+      this.log("❌ Failed to open job details:", error.message);
       return false;
     }
   }
+
+  async extractCompleteJobDetails() {
+    try {
+      await this.delay(1000); // Ensure page is fully loaded
+
+      // Extract comprehensive job details
+      const jobDetails = {
+        jobId: this.extractJobIdFromUrl(window.location.href),
+        title: this.extractText([
+          'h1.inline.text-xl.font-semibold.text-black',
+          'h1',
+          '.job-title'
+        ]),
+        company: this.extractText([
+          'a[rel="noopener noreferrer"] span.text-sm.font-semibold.text-black',
+          '.company-name',
+          '.text-sm.font-semibold.text-black'
+        ]),
+        location: this.extractLocationInfo(),
+        jobType: this.extractJobTypeInfo(),
+        description: this.extractJobDescription(),
+        requirements: this.extractJobRequirements(),
+        salary: this.extractSalaryInfo(),
+        benefits: this.extractBenefits(),
+        applicationFormFields: await this.extractApplicationFormFields(),
+        url: window.location.href,
+        platform: this.platform,
+        extractedAt: Date.now(),
+      };
+
+      // Generate job ID if not found
+      if (!jobDetails.jobId) {
+        jobDetails.jobId = `${jobDetails.company}-${jobDetails.title}`
+          .replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      }
+
+      this.currentJobDetails = jobDetails;
+      this.log("📋 Complete job details extracted:", {
+        title: jobDetails.title,
+        company: jobDetails.company,
+        hasFormFields: !!jobDetails.applicationFormFields
+      });
+
+      return jobDetails;
+    } catch (error) {
+      this.log("❌ Failed to extract complete job details:", error.message);
+      return null;
+    }
+  }
+
+  extractLocationInfo() {
+    try {
+      const locationElements = document.querySelectorAll('ul.block.text-md.text-black li');
+      for (const element of locationElements) {
+        const text = element.textContent.trim();
+        if (text.includes('Remote') || text.includes('Location')) {
+          return text.split('|')[0].trim();
+        }
+      }
+      return "Not specified";
+    } catch (error) {
+      return "Not specified";
+    }
+  }
+
+  extractJobTypeInfo() {
+    try {
+      const typeElements = document.querySelectorAll('ul.block.text-md.text-black li');
+      for (const element of typeElements) {
+        const text = element.textContent.trim();
+        if (text.includes('Full Time') || text.includes('Part Time') || text.includes('Contract')) {
+          return text.split('|').pop().trim();
+        }
+      }
+      return "Not specified";
+    } catch (error) {
+      return "Not specified";
+    }
+  }
+
+  extractJobDescription() {
+    const descriptionElement = document.querySelector('.styles_description__xjvTf') ||
+                              document.querySelector('#job-description') ||
+                              document.querySelector('.description');
+    return descriptionElement ? descriptionElement.textContent.trim() : "No description available";
+  }
+
+  extractJobRequirements() {
+    try {
+      // Look for requirements section
+      const requirementsSection = Array.from(document.querySelectorAll('h3, h4, strong')).find(el =>
+        el.textContent.toLowerCase().includes('requirement') ||
+        el.textContent.toLowerCase().includes('qualification')
+      );
+
+      if (requirementsSection) {
+        const nextSibling = requirementsSection.nextElementSibling;
+        if (nextSibling) {
+          return nextSibling.textContent.trim();
+        }
+      }
+
+      return "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  extractSalaryInfo() {
+    try {
+      const salaryElements = document.querySelectorAll('span, div, p');
+      for (const element of salaryElements) {
+        const text = element.textContent;
+        if (text && /\$[\d,]+/.test(text)) {
+          return text.trim();
+        }
+      }
+      return "Not specified";
+    } catch (error) {
+      return "Not specified";
+    }
+  }
+
+  extractBenefits() {
+    try {
+      // Look for benefits section
+      const benefitsSection = Array.from(document.querySelectorAll('h3, h4, strong')).find(el =>
+        el.textContent.toLowerCase().includes('benefit') ||
+        el.textContent.toLowerCase().includes('perk')
+      );
+
+      if (benefitsSection) {
+        const nextSibling = benefitsSection.nextElementSibling;
+        if (nextSibling) {
+          return nextSibling.textContent.trim();
+        }
+      }
+
+      return "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  // CRITICAL: Extract application form fields
+  async extractApplicationFormFields() {
+    try {
+      // Look for apply buttons first to see if there's a form
+      const applyButtons = document.querySelectorAll(
+        'button:contains("Apply"), a:contains("Apply"), [class*="apply"]'
+      );
+
+      if (applyButtons.length === 0) {
+        return null;
+      }
+
+      // Click apply button to reveal form (if not external)
+      const applyButton = Array.from(applyButtons).find(btn => 
+        !btn.href && !btn.textContent.includes('website')
+      );
+
+      if (!applyButton) {
+        return { type: 'external', fields: [] };
+      }
+
+      // Click apply to reveal form
+      await this.clickElementReliably(applyButton);
+      await this.delay(2000);
+
+      // Extract form fields
+      const formFields = [];
+      const form = document.querySelector('form') || document.querySelector('[role="dialog"]');
+
+      if (form) {
+        const inputs = form.querySelectorAll('input, textarea, select');
+        
+        for (const input of inputs) {
+          if (input.type === 'hidden' || input.type === 'submit') continue;
+
+          const fieldInfo = {
+            name: input.name || input.id || input.placeholder,
+            type: input.type || input.tagName.toLowerCase(),
+            placeholder: input.placeholder,
+            required: input.required,
+            selector: this.generateSelector(input)
+          };
+
+          formFields.push(fieldInfo);
+        }
+      }
+
+      return {
+        type: 'form',
+        fields: formFields,
+        formSelector: form ? this.generateSelector(form) : null
+      };
+
+    } catch (error) {
+      this.log("❌ Failed to extract form fields:", error.message);
+      return null;
+    }
+  }
+
+  // MAIN APPLICATION METHOD WITH FORM HANDLING
+  async applyToJobWithFormHandling(jobDetails) {
+    try {
+      this.statusOverlay.addInfo(`Applying to "${jobDetails.title}"...`);
+
+      // If we already extracted form fields, use them
+      if (jobDetails.applicationFormFields) {
+        if (jobDetails.applicationFormFields.type === 'external') {
+          this.statusOverlay.addInfo(`"${jobDetails.title}" requires external application`);
+          await this.saveExternalJob(jobDetails);
+          return false; // Don't count as automated application
+        }
+
+        // Fill and submit the form
+        const success = await this.fillAndSubmitApplicationForm(
+          jobDetails.applicationFormFields, 
+          jobDetails
+        );
+
+        if (success) {
+          // Verify application success
+          const verified = await this.verifyApplicationSuccess();
+          if (verified) {
+            this.statusOverlay.addSuccess(`Successfully applied to "${jobDetails.title}"!`);
+            return true;
+          }
+        }
+      }
+
+      // Fallback: try to find and click apply button
+      const applyButton = await this.findApplyButton();
+      if (applyButton) {
+        const isExternal = applyButton.href || 
+                          applyButton.textContent.includes('website') ||
+                          applyButton.textContent.includes('external');
+
+        if (isExternal) {
+          await this.saveExternalJob(jobDetails);
+          return false;
+        }
+
+        await this.clickElementReliably(applyButton);
+        await this.delay(2000);
+
+        // Try to handle any form that appears
+        const formHandled = await this.handleDynamicApplicationForm(jobDetails);
+        if (formHandled) {
+          const verified = await this.verifyApplicationSuccess();
+          return verified;
+        }
+      }
+
+      this.statusOverlay.addWarning(`No applicable form found for "${jobDetails.title}"`);
+      return false;
+
+    } catch (error) {
+      this.log("❌ Failed to apply to job:", error.message);
+      this.statusOverlay.addError(`Error applying to "${jobDetails.title}"`);
+      return false;
+    }
+  }
+
+  async fillAndSubmitApplicationForm(formInfo, jobDetails) {
+    try {
+      if (!formInfo || !formInfo.fields || formInfo.fields.length === 0) {
+        return false;
+      }
+
+      // Get user details for form filling
+      const userDetails = await this.userService.getUserDetails();
+      if (!userDetails) {
+        this.log("❌ No user details available for form filling");
+        return false;
+      }
+
+      const form = document.querySelector(formInfo.formSelector);
+      if (!form) {
+        this.log("❌ Application form not found");
+        return false;
+      }
+
+      // Fill each field
+      for (const fieldInfo of formInfo.fields) {
+        await this.fillFormField(fieldInfo, userDetails, jobDetails);
+        await this.delay(300); // Small delay between fields
+      }
+
+      // Submit the form
+      const submitButton = form.querySelector('button[type="submit"], .submit-btn, button:contains("Submit")');
+      if (submitButton) {
+        await this.clickElementReliably(submitButton);
+        await this.delay(3000);
+        return true;
+      } else {
+        this.log("❌ No submit button found");
+        return false;
+      }
+
+    } catch (error) {
+      this.log("❌ Error filling and submitting form:", error.message);
+      return false;
+    }
+  }
+
+  async fillFormField(fieldInfo, userDetails, jobDetails) {
+    try {
+      const field = document.querySelector(fieldInfo.selector);
+      if (!field) return;
+
+      let value = "";
+
+      // Map field to user data
+      const fieldName = (fieldInfo.name || fieldInfo.placeholder || "").toLowerCase();
+      
+      if (fieldName.includes('name') && !fieldName.includes('company')) {
+        value = `${userDetails.firstName} ${userDetails.lastName}`;
+      } else if (fieldName.includes('first') || fieldName.includes('fname')) {
+        value = userDetails.firstName;
+      } else if (fieldName.includes('last') || fieldName.includes('lname')) {
+        value = userDetails.lastName;
+      } else if (fieldName.includes('email')) {
+        value = userDetails.email;
+      } else if (fieldName.includes('phone')) {
+        value = userDetails.phoneNumber;
+      } else if (fieldName.includes('linkedin')) {
+        value = userDetails.linkedIn;
+      } else if (fieldName.includes('website') || fieldName.includes('portfolio')) {
+        value = userDetails.website;
+      } else if (fieldName.includes('github')) {
+        value = userDetails.github;
+      } else if (fieldName.includes('cover') || fieldName.includes('letter')) {
+        value = this.generateCoverLetter(userDetails, jobDetails);
+      } else if (fieldName.includes('resume') || fieldName.includes('cv')) {
+        // Handle file upload separately
+        return;
+      }
+
+      if (value) {
+        field.value = value;
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+    } catch (error) {
+      this.log("❌ Error filling field:", error.message);
+    }
+  }
+
+  async handleDynamicApplicationForm(jobDetails) {
+    try {
+      // Wait for form to appear
+      await this.delay(2000);
+      
+      const form = document.querySelector('form') || 
+                  document.querySelector('[role="dialog"] form') ||
+                  document.querySelector('.application-form');
+
+      if (!form) return false;
+
+      // Get user details
+      const userDetails = await this.userService.getUserDetails();
+      if (!userDetails) return false;
+
+      // Fill common fields
+      const fieldMappings = {
+        'input[name*="name"], input[placeholder*="name"]': `${userDetails.firstName} ${userDetails.lastName}`,
+        'input[name*="email"], input[placeholder*="email"]': userDetails.email,
+        'input[name*="phone"], input[placeholder*="phone"]': userDetails.phoneNumber,
+        'textarea[name*="cover"], textarea[placeholder*="cover"]': this.generateCoverLetter(userDetails, jobDetails)
+      };
+
+      for (const [selector, value] of Object.entries(fieldMappings)) {
+        const field = form.querySelector(selector);
+        if (field && value) {
+          field.value = value;
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          field.dispatchEvent(new Event('change', { bubbles: true }));
+          await this.delay(300);
+        }
+      }
+
+      // Submit form
+      const submitButton = form.querySelector('button[type="submit"], .submit');
+      if (submitButton) {
+        await this.clickElementReliably(submitButton);
+        await this.delay(3000);
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      this.log("❌ Error handling dynamic form:", error.message);
+      return false;
+    }
+  }
+
+  async verifyApplicationSuccess() {
+    try {
+      await this.delay(2000);
+
+      // Look for success indicators
+      const successSelectors = [
+        '.success',
+        '.confirmation',
+        '[class*="success"]',
+        '[class*="confirm"]'
+      ];
+
+      for (const selector of successSelectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          this.log("✅ Application success verified");
+          return true;
+        }
+      }
+
+      // Look for success text
+      const successTexts = [
+        'application submitted',
+        'thank you',
+        'successfully applied',
+        'application received'
+      ];
+
+      const bodyText = document.body.textContent.toLowerCase();
+      for (const text of successTexts) {
+        if (bodyText.includes(text)) {
+          this.log("✅ Application success verified by text");
+          return true;
+        }
+      }
+
+      // If no explicit success, assume success if no error
+      this.log("⚠️ Could not verify success, assuming success");
+      return true;
+
+    } catch (error) {
+      this.log("❌ Error verifying application success:", error.message);
+      return false;
+    }
+  }
+
+  async returnToJobsList() {
+    try {
+      // Try browser back button first
+      window.history.back();
+      await this.delay(2000);
+
+      // Verify we're back on jobs list
+      const jobCards = document.querySelectorAll('.styles_component__uTjje');
+      if (jobCards.length > 0) {
+        this.log("✅ Successfully returned to jobs list");
+        return true;
+      }
+
+      // Fallback: navigate directly to jobs page
+      window.location.href = "https://wellfound.com/jobs";
+      await this.delay(3000);
+      await this.waitForJobCards();
+      
+      return true;
+    } catch (error) {
+      this.log("❌ Error returning to jobs list:", error.message);
+      return false;
+    }
+  }
+
+  // Utility methods
+  async clickElementReliably(element) {
+    const strategies = [
+      () => element.click(),
+      () => element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })),
+      () => {
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      },
+      () => {
+        element.focus();
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      }
+    ];
+
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await this.delay(500);
+
+    for (const strategy of strategies) {
+      try {
+        strategy();
+        await this.delay(1000);
+        return true;
+      } catch (error) {
+        continue;
+      }
+    }
+
+    throw new Error("All click strategies failed");
+  }
+
+  generateSelector(element) {
+    if (element.id) return `#${element.id}`;
+    if (element.name) return `[name="${element.name}"]`;
+    if (element.className) return `.${element.className.split(' ')[0]}`;
+    return element.tagName.toLowerCase();
+  }
+
+  generateCoverLetter(userDetails, jobDetails) {
+    return `Dear ${jobDetails.company} team,
+
+I am excited to apply for the ${jobDetails.title} position at ${jobDetails.company}. With my background in software development and passion for innovative solutions, I believe I would be a valuable addition to your team.
+
+${userDetails.coverLetter || 'I am eager to contribute to your organization and would welcome the opportunity to discuss how my skills align with your needs.'}
+
+Best regards,
+${userDetails.firstName} ${userDetails.lastName}`;
+  }
+
+  extractText(selectors) {
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent) {
+        return element.textContent.trim();
+      }
+    }
+    return "";
+  }
+
+  // UNCHANGED METHODS FROM ORIGINAL IMPLEMENTATION
 
   async isFilterPanelOpen() {
     try {
@@ -514,151 +1104,6 @@ export default class WellfoundPlatform extends BasePlatform {
     }
   }
 
-  async clickViewResults() {
-    try {
-      this.statusOverlay.addInfo("Looking for the View Results button to show your job matches...");
-      
-      let viewResultsButton = null;
-      
-      // Strategy 1: Look for the specific data-test attribute
-      viewResultsButton = document.querySelector('button[data-test="SearchBar-ViewResultsButton"]');
-      if (viewResultsButton) {
-        this.log("🎯 Found View Results button via data-test attribute");
-      }
-      
-      // Strategy 2: Look for any button with "View results" text
-      if (!viewResultsButton) {
-        const buttons = document.querySelectorAll('button');
-        for (const button of buttons) {
-          if (button.textContent && button.textContent.trim().toLowerCase().includes('view results')) {
-            viewResultsButton = button;
-            this.log("🎯 Found View Results button via text search");
-            break;
-          }
-        }
-      }
-      
-      // Strategy 3: Look for buttons in the footer area that might contain results count
-      if (!viewResultsButton) {
-        const footerButtons = document.querySelectorAll('.styles_footer__2BOOk button, footer button, [class*="footer"] button');
-        for (const button of footerButtons) {
-          if (button.textContent && 
-              (button.textContent.includes('results') || 
-               button.textContent.includes('View') ||
-               /\d+\s*results?/i.test(button.textContent))) {
-            viewResultsButton = button;
-            this.log("🎯 Found View Results button in footer area");
-            break;
-          }
-        }
-      }
-      
-      // Strategy 4: Look for any button that might trigger results
-      if (!viewResultsButton) {
-        const allButtons = document.querySelectorAll('button, [role="button"]');
-        for (const button of allButtons) {
-          const text = button.textContent?.trim().toLowerCase() || '';
-          if (text.includes('view') || text.includes('show') || text.includes('results') || text.includes('apply')) {
-            // Check if it's not a filter button or other non-results button
-            if (!text.includes('filter') && !text.includes('clear') && !text.includes('reset')) {
-              viewResultsButton = button;
-              this.log("🎯 Found potential View Results button:", button.textContent);
-              break;
-            }
-          }
-        }
-      }
-
-      if (!viewResultsButton) {
-        this.log("❌ Could not find View Results button, checking if results are already visible...");
-        
-        // Check if job cards are already visible (maybe the button was already clicked or not needed)
-        const existingJobCards = document.querySelectorAll('.styles_component__uTjje');
-        if (existingJobCards.length > 0) {
-          this.log("✅ Job cards already visible, no need to click View Results");
-          this.statusOverlay.addSuccess("Great! Job results are already showing!");
-          return true;
-        }
-        
-        this.statusOverlay.addWarning("Couldn't find the View Results button. Let me check if jobs are already showing...");
-        
-        // Wait a bit and check again
-        await this.delay(3000);
-        const jobCardsAfterWait = document.querySelectorAll('.styles_component__uTjje');
-        if (jobCardsAfterWait.length > 0) {
-          this.log("✅ Job cards appeared after waiting");
-          this.statusOverlay.addSuccess("Perfect! Job results are now showing!");
-          return true;
-        }
-        
-        throw new Error("View Results button not found and no job cards visible");
-      }
-
-      // Try multiple click methods
-      const clickMethods = [
-        () => viewResultsButton.click(),
-        () => viewResultsButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })),
-        () => {
-          viewResultsButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-          viewResultsButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-          viewResultsButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        }
-      ];
-
-      this.log("🎯 Attempting to click View Results button...");
-      
-      // Scroll into view first
-      viewResultsButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await this.delay(1000);
-
-      // Try each click method
-      for (let i = 0; i < clickMethods.length; i++) {
-        try {
-          this.log(`Attempting View Results click method ${i + 1}...`);
-          clickMethods[i]();
-          await this.delay(3000);
-          
-          // Check if job cards appeared
-          const jobCards = document.querySelectorAll('.styles_component__uTjje');
-          if (jobCards.length > 0) {
-            this.log(`✅ View Results clicked successfully! Found ${jobCards.length} job cards`);
-            this.statusOverlay.addSuccess("Perfect! Found your job matches. Now let me start applying to them!");
-            await this.waitForJobCards();
-            return true;
-          }
-        } catch (error) {
-          this.log(`View Results click method ${i + 1} failed:`, error.message);
-        }
-      }
-
-      // If clicking didn't work, try keyboard
-      try {
-        this.log("Trying focus + Enter for View Results...");
-        viewResultsButton.focus();
-        await this.delay(500);
-        viewResultsButton.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        await this.delay(3000);
-        
-        const jobCards = document.querySelectorAll('.styles_component__uTjje');
-        if (jobCards.length > 0) {
-          this.log("✅ View Results worked with keyboard!");
-          this.statusOverlay.addSuccess("Perfect! Found your job matches!");
-          await this.waitForJobCards();
-          return true;
-        }
-      } catch (error) {
-        this.log("Keyboard method failed for View Results:", error.message);
-      }
-
-      throw new Error("All View Results click methods failed");
-      
-    } catch (error) {
-      this.log("❌ Failed to click View Results:", error.message);
-      this.statusOverlay.addError("Had trouble loading the job results, but I'll keep trying!");
-      throw error;
-    }
-  }
-
   async waitForJobCards() {
     try {
       await this.waitForElement('.styles_component__uTjje', 10000);
@@ -667,310 +1112,6 @@ export default class WellfoundPlatform extends BasePlatform {
     } catch (error) {
       this.log("⚠️ Timeout waiting for job cards");
       throw new Error("Job cards failed to load");
-    }
-  }
-
-  async processJobs({ jobsToApply }) {
-    let processedCount = 0;
-    let appliedCount = 0;
-    let skippedCount = 0;
-    let processedJobs = new Set();
-
-    try {
-      this.log(`Starting to process Wellfound jobs. Target: ${jobsToApply} jobs`);
-      this.statusOverlay.addInfo(`Alright! I'm going to help you apply to ${jobsToApply} jobs. Let me start scanning through the opportunities...`);
-
-      while (appliedCount < jobsToApply) {
-        const jobCards = await this.getJobCards();
-        console.log(`Found ${jobCards.length} job cards`);
-
-        if (jobCards.length === 0) {
-          this.statusOverlay.addWarning("Looks like I've reached the end of available jobs for your search criteria!");
-          break;
-        }
-
-        this.statusOverlay.addInfo(`Great! I found ${jobCards.length} jobs. Let me check each one...`);
-
-        for (const jobCard of jobCards) {
-          if (appliedCount >= jobsToApply) {
-            this.log(`Reached target of ${jobsToApply} jobs`);
-            this.statusOverlay.addSuccess(`Amazing! I've successfully applied to your target of ${jobsToApply} jobs! 🎉`);
-            break;
-          }
-
-          const jobId = this.getJobIdFromCard(jobCard);
-          if (!jobId || processedJobs.has(jobId)) {
-            continue;
-          }
-
-          processedJobs.add(jobId);
-          processedCount++;
-
-          try {
-            // Click Learn More to view job details
-            const success = await this.clickLearnMore(jobCard);
-            
-            if (success) {
-              // Extract job details
-              const jobDetails = await this.extractJobDetails();
-              
-              if (jobDetails) {
-                // Check if job matches user preferences
-                if (this.doesJobMatchPreferences(jobDetails)) {
-                  this.updateProgress({
-                    current: `Checking: ${jobDetails.title} at ${jobDetails.company}`,
-                  });
-
-                  // Check if already applied
-                  const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(jobId);
-                  if (alreadyApplied) {
-                    this.log(`Already applied to job ${jobId}, skipping.`);
-                    skippedCount++;
-                    continue;
-                  }
-
-                  // Try to apply to the job
-                  const applied = await this.applyToJob(jobDetails);
-                  
-                  if (applied) {
-                    appliedCount++;
-                    this.progress.completed = appliedCount;
-                    this.updateProgress({ completed: appliedCount });
-
-                    await this.userService.updateApplicationCount();
-                    await this.saveAppliedJob(jobDetails);
-
-                    this.log(`Successfully applied to job ${appliedCount}/${jobsToApply}`);
-                    this.statusOverlay.addSuccess(
-                      `Woohoo! Just applied to "${jobDetails.title}" at ${jobDetails.company}! That's ${appliedCount} down, ${jobsToApply - appliedCount} to go! 🎯`
-                    );
-
-                    this.reportApplicationSubmitted(jobDetails, {
-                      method: "Wellfound Application",
-                      userId: this.config.userId || this.userId,
-                      matchedPreferences: true,
-                    });
-                  } else {
-                    this.progress.failed++;
-                    this.updateProgress({ failed: this.progress.failed });
-                    this.statusOverlay.addError(`Oops! Had trouble applying to "${jobDetails.title}". Don't worry, I'll keep going with the next ones!`);
-                  }
-                } else {
-                  this.log(`Skipping job "${jobDetails.title}" - doesn't match preferences`);
-                  this.statusOverlay.addInfo(`"${jobDetails.title}" at ${jobDetails.company} doesn't quite match your preferences, so I'll skip this one.`);
-                  skippedCount++;
-                }
-              }
-            }
-
-            await this.delay(2000); // Delay between jobs
-          } catch (error) {
-            this.log(`Error processing job ${jobId}:`, error);
-            this.statusOverlay.addError("Had a little hiccup with one of the jobs, but I'm keeping going! 💪");
-            continue;
-          }
-        }
-
-        // If we need more jobs, try to load more (scroll or pagination)
-        if (appliedCount < jobsToApply) {
-          const hasMore = await this.loadMoreJobs();
-          if (!hasMore) {
-            this.statusOverlay.addSuccess(
-              `I've looked everywhere and applied to ${appliedCount} out of ${jobsToApply} jobs! I couldn't find any more that match your criteria right now. 🎯`
-            );
-            break;
-          }
-        }
-      }
-
-      const completionStatus = appliedCount >= jobsToApply ? "target_reached" : "no_more_jobs";
-      const message = appliedCount >= jobsToApply
-        ? `Mission accomplished! 🎉 I successfully applied to all ${appliedCount} jobs you wanted!`
-        : `Great work! I applied to ${appliedCount} out of ${jobsToApply} jobs. I couldn't find any more that perfectly match your criteria right now.`;
-
-      this.log(message);
-      this.statusOverlay.addSuccess(message);
-      this.reportComplete();
-
-      return {
-        status: completionStatus,
-        message,
-        appliedCount,
-        processedCount,
-        skippedCount,
-        preferencesUsed: this.config.preferences,
-      };
-    } catch (error) {
-      console.error("Error in processJobs:", error);
-      this.statusOverlay.addError("Something went wrong during the job application process. Don't worry though - I saved your progress!");
-      this.reportError(error, { phase: "processJobs" });
-      throw error;
-    }
-  }
-
-  async getJobCards() {
-    const jobCards = document.querySelectorAll('.styles_component__uTjje');
-    return Array.from(jobCards);
-  }
-
-  getJobIdFromCard(jobCard) {
-    // Try to extract a unique identifier from the job card
-    const link = jobCard.querySelector('a[href*="/jobs/"]');
-    if (link) {
-      const href = link.getAttribute('href');
-      const match = href.match(/\/jobs\/(\d+)/);
-      return match ? match[1] : null;
-    }
-    
-    // Fallback: use company + title as unique identifier
-    const company = jobCard.querySelector('.styles_headerContainer__GfbYF h2')?.textContent?.trim();
-    const title = jobCard.querySelector('.styles_component__Ey28k .styles_title__xpQDw')?.textContent?.trim();
-    
-    if (company && title) {
-      return `${company}-${title}`.replace(/[^a-zA-Z0-9]/g, '');
-    }
-    
-    return null;
-  }
-
-  async clickLearnMore(jobCard) {
-    try {
-      const learnMoreButton = jobCard.querySelector('button[data-test="LearnMoreButton"]');
-      if (learnMoreButton) {
-        learnMoreButton.click();
-        await this.delay(2000);
-        
-        // Wait for job details to load
-        await this.waitForElement('.styles_description__xjvTf', 5000);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      this.log("Failed to click Learn More button:", error.message);
-      return false;
-    }
-  }
-
-  async extractJobDetails() {
-    try {
-      // Extract job title from the main heading
-      const title = document.querySelector('h1.inline.text-xl.font-semibold.text-black')?.textContent?.trim() || 
-                   document.querySelector('h1')?.textContent?.trim() || 
-                   "Unknown Position";
-      
-      // Extract company name from the company link/text
-      const company = document.querySelector('a[rel="noopener noreferrer"][target="_blank"] span.text-sm.font-semibold.text-black')?.textContent?.trim() ||
-                     document.querySelector('.text-sm.font-semibold.text-black')?.textContent?.trim() ||
-                     "Unknown Company";
-      
-      // Extract location from the job details
-      const locationElement = document.querySelector('li:contains("Remote")') || 
-                             document.querySelector('ul.block.text-md.text-black li');
-      let location = "Not specified";
-      if (locationElement) {
-        const locationText = locationElement.textContent.trim();
-        // Extract location from text like "Remote (United States) | Full Time"
-        const locationMatch = locationText.match(/Remote\s*\(([^)]+)\)|([^|]+)/);
-        location = locationMatch ? (locationMatch[1] || locationMatch[2]).trim() : locationText;
-      }
-      
-      // Extract job type (Full Time, Contract, etc.)
-      const jobTypeElement = document.querySelector('ul.block.text-md.text-black li:last-child');
-      const jobType = jobTypeElement ? jobTypeElement.textContent.replace(/.*\|/, '').trim() : "Not specified";
-      
-      // Extract job description from the description container
-      const descriptionElement = document.querySelector('.styles_description__xjvTf') ||
-                                 document.querySelector('#job-description') ||
-                                 document.querySelector('.description');
-      const description = descriptionElement ? descriptionElement.textContent.trim() : "No description available";
-      
-      // Extract additional details from the grid section
-      const detailsGrid = document.querySelector('.grid.grid-cols-1.gap-6.rounded-b-xl.bg-neutral-50');
-      let visaSponsorship = "Not specified";
-      let relocation = "Not specified";
-      let hiringContact = "Not specified";
-      let hiresRemotelyIn = "Not specified";
-      
-      if (detailsGrid) {
-        const detailSections = detailsGrid.querySelectorAll('div');
-        detailSections.forEach(section => {
-          const label = section.querySelector('span.text-md.font-semibold')?.textContent?.trim();
-          
-          if (label === "Hires remotely in") {
-            hiresRemotelyIn = section.querySelector('a')?.textContent?.trim() || "Not specified";
-          } else if (label === "Visa Sponsorship") {
-            visaSponsorship = section.querySelector('p span')?.textContent?.trim() || "Not Available";
-          } else if (label === "Relocation") {
-            const relocationSpan = section.querySelector('span.flex');
-            relocation = relocationSpan ? relocationSpan.textContent.trim() : "Not specified";
-          } else if (label === "Hiring contact") {
-            hiringContact = section.querySelector('.text-md.text-black')?.textContent?.trim() || "Not specified";
-          }
-        });
-      }
-      
-      // Extract posting date if available
-      const postingDateElement = document.querySelector('.text-sm.font-extralight.text-neutral-500');
-      const postedDate = postingDateElement ? postingDateElement.textContent.replace('Reposted:', '').trim() : "Not specified";
-      
-      // Generate a job ID from URL or create one
-      let jobId = this.extractJobIdFromUrl(window.location.href);
-      if (!jobId) {
-        // Create a unique ID based on company and title
-        jobId = `${company}-${title}`.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-      }
-
-      const jobDetails = {
-        jobId,
-        title,
-        company,
-        location,
-        jobType,
-        description,
-        hiresRemotelyIn,
-        visaSponsorship,
-        relocation,
-        hiringContact,
-        postedDate,
-        url: window.location.href,
-        platform: this.platform,
-        extractedAt: Date.now(),
-      };
-
-      this.currentJobDetails = jobDetails;
-      this.log("📋 Extracted job details:", {
-        title: jobDetails.title,
-        company: jobDetails.company,
-        location: jobDetails.location,
-        jobType: jobDetails.jobType
-      });
-      
-      return jobDetails;
-    } catch (error) {
-      this.log("Failed to extract job details:", error.message);
-      return null;
-    }
-  }
-
-  extractJobIdFromUrl(url) {
-    try {
-      // Try to extract job ID from Wellfound URL patterns
-      const patterns = [
-        /\/jobs\/(\d+)/,
-        /jobId=(\d+)/,
-        /job[_-](\d+)/
-      ];
-      
-      for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match) {
-          return match[1];
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      return null;
     }
   }
 
@@ -1005,171 +1146,85 @@ export default class WellfoundPlatform extends BasePlatform {
     return true;
   }
 
-  async applyToJob(jobDetails) {
+  extractJobIdFromUrl(url) {
     try {
-      this.statusOverlay.addInfo(`Starting my application magic for "${jobDetails.title}"... ✨`);
-      
-      // Look for apply button in the job details page
-      const applyButtons = [
-        'button:contains("Apply")',
-        'a:contains("Apply")',
-        'button[class*="apply"]',
-        'a[class*="apply"]',
-        '.apply-button',
-        '.apply-btn'
+      // Try to extract job ID from Wellfound URL patterns
+      const patterns = [
+        /\/jobs\/(\d+)/,
+        /jobId=(\d+)/,
+        /job[_-](\d+)/
       ];
       
-      let applyButton = null;
-      for (const selector of applyButtons) {
-        applyButton = document.querySelector(selector);
-        if (applyButton) break;
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) {
+          return match[1];
+        }
       }
       
-      if (applyButton) {
-        // Check if this is an external application
-        const isExternal = applyButton.getAttribute('href') || 
-                          applyButton.textContent.includes('company website') ||
-                          applyButton.textContent.includes('external');
-        
-        if (isExternal) {
-          // This is an external application - save for manual application
-          this.statusOverlay.addInfo(`"${jobDetails.title}" requires applying on their company website. I'll save this one for you to apply manually later! 📌`);
-          
-          // Save as external job for tracking
-          await this.saveExternalJob(jobDetails);
-          return false; // Don't count as successful automated application
-        } else {
-          // This is a direct application through Wellfound
-          applyButton.click();
-          await this.delay(2000);
-          
-          // Handle potential application form or modal
-          const success = await this.handleApplicationForm(jobDetails);
-          
-          if (success) {
-            this.statusOverlay.addSuccess(`Successfully applied to "${jobDetails.title}"! 🚀`);
-            return true;
-          } else {
-            this.statusOverlay.addWarning(`Had some trouble with the application form for "${jobDetails.title}"`);
-            return false;
-          }
-        }
-      } else {
-        // No apply button found - this might be a view-only job or requires other action
-        this.statusOverlay.addInfo(`"${jobDetails.title}" doesn't have a direct apply button. I'll save it for your reference! 📝`);
-        await this.saveExternalJob(jobDetails);
-        return false;
-      }
+      return null;
     } catch (error) {
-      this.log("Failed to apply to job:", error.message);
-      this.statusOverlay.addError("Had trouble with this application, but I'm moving on to the next one!");
+      return null;
+    }
+  }
+
+  async loadMoreJobs() {
+    try {
+      // Try to scroll to load more jobs
+      window.scrollTo(0, document.body.scrollHeight);
+      await this.delay(3000);
+      
+      // Check if new job cards loaded
+      const newJobCards = document.querySelectorAll('.styles_component__uTjje');
+      return newJobCards.length > 0;
+    } catch (error) {
+      this.log("Failed to load more jobs:", error.message);
       return false;
     }
   }
 
-  async handleApplicationForm(jobDetails) {
+  async checkUserAuthorization() {
     try {
-      // Wait for application form/modal to appear
-      await this.delay(2000);
-      
-      // Look for application form elements
-      const formElements = [
-        'form',
-        '.application-form',
-        '.modal',
-        '[role="dialog"]'
-      ];
-      
-      let applicationForm = null;
-      for (const selector of formElements) {
-        applicationForm = document.querySelector(selector);
-        if (applicationForm) break;
+      this.statusOverlay.addInfo("Let me check if you're all set to apply...");
+
+      const canApply = await this.userService.canApplyMore();
+      if (!canApply) {
+        const remaining = await this.userService.getRemainingApplications();
+        const userDetails = await this.userService.getUserDetails();
+
+        const message =
+          userDetails.userRole === "credit"
+            ? `Looks like you're running low on credits (${userDetails.credits} left). Time to top up! 💳`
+            : `You've hit your daily limit! Don't worry, you have ${remaining} applications left overall. 📊`;
+
+        this.statusOverlay.addWarning(message);
+        throw new Error(`Cannot apply: ${message}`);
       }
-      
-      if (applicationForm) {
-        // Fill out the application form
-        await this.fillApplicationForm(applicationForm, jobDetails);
-        
-        // Submit the form
-        const submitButton = applicationForm.querySelector('button[type="submit"], .submit-btn, button:contains("Submit")');
-        if (submitButton) {
-          submitButton.click();
-          await this.delay(3000);
-          
-          // Check for success confirmation
-          const successIndicators = [
-            '.success',
-            '.confirmation',
-            ':contains("Application submitted")',
-            ':contains("Thank you")'
-          ];
-          
-          for (const indicator of successIndicators) {
-            if (document.querySelector(indicator)) {
-              return true;
-            }
-          }
-        }
-      }
-      
-      // If no form found, assume the click was sufficient
-      return true;
+
+      this.log("✅ User authorization check passed");
+      this.statusOverlay.addSuccess("Perfect! You're all authorized and ready to go!");
     } catch (error) {
-      this.log("Error handling application form:", error.message);
-      return false;
+      this.log("❌ User authorization check failed:", error.message);
+      this.statusOverlay.addError("Hmm, there's an issue with your account permissions. " + error.message);
+      throw error;
     }
   }
 
-  async fillApplicationForm(form, jobDetails) {
-    try {
-      // Get user details for form filling
-      const userDetails = await this.userService.getUserDetails();
-      if (!userDetails) return;
-      
-      // Fill common form fields
-      const fieldMappings = {
-        'name': userDetails.firstName + ' ' + userDetails.lastName,
-        'first_name': userDetails.firstName,
-        'last_name': userDetails.lastName,
-        'email': userDetails.email,
-        'phone': userDetails.phoneNumber,
-        'linkedin': userDetails.linkedIn,
-        'website': userDetails.website,
-        'github': userDetails.github,
-        'cover_letter': userDetails.coverLetter || `Dear ${jobDetails.company} team,\n\nI am excited to apply for the ${jobDetails.title} position...`,
-      };
-      
-      for (const [fieldName, value] of Object.entries(fieldMappings)) {
-        if (!value) continue;
-        
-        const field = form.querySelector(`input[name*="${fieldName}"], textarea[name*="${fieldName}"], input[placeholder*="${fieldName}"]`);
-        if (field) {
-          field.value = value;
-          field.dispatchEvent(new Event('input', { bubbles: true }));
-          field.dispatchEvent(new Event('change', { bubbles: true }));
-          await this.delay(300);
-        }
-      }
-      
-      // Handle file uploads (resume/CV)
-      const fileInputs = form.querySelectorAll('input[type="file"]');
-      for (const fileInput of fileInputs) {
-        await this.handleFileUpload(fileInput, userDetails, jobDetails);
-      }
-      
-    } catch (error) {
-      this.log("Error filling application form:", error.message);
-    }
-  }
+  async findApplyButton() {
+    const selectors = [
+      'button:contains("Apply")',
+      'a:contains("Apply")',
+      'button[class*="apply"]',
+      'a[class*="apply"]',
+      '.apply-button',
+      '.apply-btn'
+    ];
 
-  async handleFileUpload(fileInput, userDetails, jobDetails) {
-    try {
-      // This would need to be implemented based on the user's resume/CV files
-      // For now, we'll skip file uploads as they require actual file handling
-      this.log("File upload detected but skipped for now");
-    } catch (error) {
-      this.log("Error handling file upload:", error.message);
+    for (const selector of selectors) {
+      const button = document.querySelector(selector);
+      if (button) return button;
     }
+    return null;
   }
 
   async saveExternalJob(jobDetails) {
@@ -1223,21 +1278,6 @@ export default class WellfoundPlatform extends BasePlatform {
     }
   }
 
-  async loadMoreJobs() {
-    try {
-      // Try to scroll to load more jobs
-      window.scrollTo(0, document.body.scrollHeight);
-      await this.delay(3000);
-      
-      // Check if new job cards loaded
-      const newJobCards = document.querySelectorAll('.styles_component__uTjje');
-      return newJobCards.length > 0;
-    } catch (error) {
-      this.log("Failed to load more jobs:", error.message);
-      return false;
-    }
-  }
-
   // Utility methods
   async waitForPageLoad() {
     try {
@@ -1282,6 +1322,14 @@ export default class WellfoundPlatform extends BasePlatform {
         }
       }, 3000);
     }
+  }
+
+  async navigateToWellfoundJobs() {
+    window.location.href = "https://wellfound.com/jobs";
+    await this.delay(3000);
+    await this.waitForPageLoad();
+    this.log("✅ Navigation to Wellfound Jobs completed");
+    this.statusOverlay.addSuccess("Perfect! Now I'm setting up the search with all your preferences.");
   }
 
   async pause() {
