@@ -15,10 +15,30 @@ class ContentScriptManager {
     this.userProfile = null;
     this.maxInitializationAttempts = 3;
     this.initializationAttempts = 0;
+
+    // ADD: Duplicate prevention flags
+    this.initializationInProgress = false;
+    this.startInProgress = false;
+    this.lastInitialization = 0;
+    this.processedUrls = new Set();
   }
 
   async initialize() {
-    if (this.isInitialized) return;
+    if (this.isInitialized || this.initializationInProgress) {
+      console.log(
+        "🔄 Initialization already completed or in progress, skipping"
+      );
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastInitialization < 5000) {
+      console.log("🔄 Too soon since last initialization, skipping");
+      return;
+    }
+
+    this.initializationInProgress = true;
+    this.lastInitialization = now;
 
     try {
       this.initializationAttempts++;
@@ -74,8 +94,13 @@ class ContentScriptManager {
 
       if (this.initializationAttempts < this.maxInitializationAttempts) {
         console.log(`🔄 Retrying initialization in 3 seconds...`);
-        setTimeout(() => this.initialize(), 3000);
+        setTimeout(() => {
+          this.initializationInProgress = false;
+          this.initialize();
+        }, 3000);
       }
+    } finally {
+      this.initializationInProgress = false;
     }
   }
 
@@ -87,7 +112,6 @@ class ContentScriptManager {
       return true;
     }
 
-    // Method 2: Check sessionStorage
     const sessionId = sessionStorage.getItem("automationSessionId");
     const platform = sessionStorage.getItem("automationPlatform");
     const userId = sessionStorage.getItem("automationUserId");
@@ -101,7 +125,6 @@ class ContentScriptManager {
       return true;
     }
 
-    // Method 3: Check if this is an automation tab via background script
     try {
       const response = await this.sendMessageToBackground({
         action: "checkIfAutomationWindow",
@@ -597,23 +620,39 @@ class ContentScriptManager {
 
   async handleStartAutomation(request, sendResponse) {
     try {
+      // FIXED: Prevent duplicate starts
+      if (this.startInProgress) {
+        console.log("⚠️ Start already in progress, ignoring duplicate");
+        sendResponse({ success: true, message: "Start already in progress" });
+        return;
+      }
+
+      if (this.platformAutomation?.isRunning) {
+        console.log("⚠️ Automation already running, ignoring duplicate start");
+        sendResponse({ success: true, message: "Already running" });
+        return;
+      }
+
+      this.startInProgress = true;
+
       if (this.platformAutomation) {
+        // FIXED: Clear any conflicting timeouts
         if (this.initializationTimeout) {
           clearTimeout(this.initializationTimeout);
           this.initializationTimeout = null;
+          console.log("🔄 Cleared auto-start timeout to prevent conflict");
         }
 
         // Update config
         this.config = { ...this.config, ...request.config };
 
-        // FIXED: Update session context and ensure user profile is available
+        // Update session context
         if (request.sessionContext) {
           this.sessionContext = {
             ...this.sessionContext,
             ...request.sessionContext,
           };
 
-          // Extract user profile if not already set
           if (!this.userProfile && request.sessionContext.userProfile) {
             this.userProfile = request.sessionContext.userProfile;
             console.log(`👤 User profile loaded from start message:`, {
@@ -626,11 +665,9 @@ class ContentScriptManager {
           await this.platformAutomation.setSessionContext(this.sessionContext);
         }
 
-        // FIXED: Validate user profile before starting
         if (!this.userProfile) {
           console.warn("⚠️ No user profile available, attempting to fetch...");
           try {
-            // Try to get user profile from session context one more time
             const context = this.getSessionContextFromStorage();
             if (context && context.userProfile) {
               this.userProfile = context.userProfile;
@@ -665,24 +702,40 @@ class ContentScriptManager {
     } catch (error) {
       console.error(`❌ Error starting automation: ${error.message}`);
       sendResponse({ success: false, error: error.message });
+    } finally {
+      this.startInProgress = false;
     }
   }
 
   setAutoStartTimeout() {
-    // Auto-start after 10 seconds if no start message received
+    if (this.platformAutomation?.isRunning) {
+      console.log("🔄 Automation already running, skipping auto-start timeout");
+      return;
+    }
+
     this.initializationTimeout = setTimeout(async () => {
-      if (this.platformAutomation && !this.platformAutomation.isRunning) {
+      if (
+        this.platformAutomation &&
+        !this.platformAutomation.isRunning &&
+        !this.startInProgress
+      ) {
         this.log("🔄 Auto-starting automation with basic config");
+        this.startInProgress = true;
+
         try {
           await this.platformAutomation.start({
-            jobsToApply: 10, // Default value
+            jobsToApply: 10,
             submittedLinks: [],
             preferences: {},
-            userId: this.userId, // Include userId
+            userId: this.userId,
           });
         } catch (error) {
           this.log(`❌ Auto-start failed: ${error.message}`);
+        } finally {
+          this.startInProgress = false;
         }
+      } else {
+        this.log("🔄 Skipping auto-start - conditions not met");
       }
     }, 10000);
   }
@@ -855,7 +908,6 @@ class ContentScriptManager {
 
     for (const mutation of mutations) {
       if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-        // Check if new content suggests page change or important updates
         const addedElements = Array.from(mutation.addedNodes).filter(
           (node) => node.nodeType === 1
         );
@@ -870,8 +922,11 @@ class ContentScriptManager {
     if (significantChange) {
       this.notifyDOMChange();
 
-      // Notify platform automation of DOM changes
-      if (this.platformAutomation && this.platformAutomation.onDOMChange) {
+      if (
+        this.platformAutomation &&
+        this.platformAutomation.onDOMChange &&
+        !this.startInProgress
+      ) {
         this.platformAutomation.onDOMChange();
       }
     }
@@ -902,7 +957,6 @@ class ContentScriptManager {
   }
 
   setupNavigationListeners() {
-    // Listen for URL changes (for SPAs)
     let currentUrl = window.location.href;
 
     const checkUrlChange = () => {
@@ -910,11 +964,22 @@ class ContentScriptManager {
         const oldUrl = currentUrl;
         currentUrl = window.location.href;
 
+        // FIXED: Track processed URLs to prevent re-processing
+        if (this.processedUrls.has(currentUrl)) {
+          console.log(`🔄 URL already processed: ${currentUrl}`);
+          return;
+        }
+
         console.log(`🔄 Navigation detected: ${oldUrl} → ${currentUrl}`);
+        this.processedUrls.add(currentUrl);
         this.notifyNavigation(oldUrl, currentUrl);
 
-        // Notify platform automation of navigation
-        if (this.platformAutomation && this.platformAutomation.onNavigation) {
+        // FIXED: Only notify if not currently processing
+        if (
+          this.platformAutomation &&
+          this.platformAutomation.onNavigation &&
+          !this.startInProgress
+        ) {
           this.platformAutomation.onNavigation(oldUrl, currentUrl);
         }
       }
@@ -926,7 +991,7 @@ class ContentScriptManager {
     // Listen for popstate events
     window.addEventListener("popstate", checkUrlChange);
 
-    // Override pushState and replaceState to catch programmatic navigation
+    // Override pushState and replaceState
     const originalPushState = history.pushState;
     const originalReplaceState = history.replaceState;
 
@@ -1173,13 +1238,15 @@ class ContentScriptManager {
   }
 
   cleanup() {
-    // Clear timeout
+    this.initializationInProgress = false;
+    this.startInProgress = false;
+    this.processedUrls.clear();
+
     if (this.initializationTimeout) {
       clearTimeout(this.initializationTimeout);
       this.initializationTimeout = null;
     }
 
-    // Remove automation indicator
     if (this.indicator) {
       this.indicator.remove();
       this.indicator = null;
@@ -1201,31 +1268,40 @@ class ContentScriptManager {
   }
 }
 
-// Initialize content script manager
+// FIXED: Single initialization with better control
 const contentManager = new ContentScriptManager();
 console.log("📝 Content script manager created");
-// Initialize when DOM is ready
-const initializeWhenReady = () => {
-  console.log("📝 Initializing content script manager...");
-  if (document.readyState === "complete") {
-    contentManager.initialize();
-    console.log("✅ Content script manager initialized");
-  } else {
-    setTimeout(initializeWhenReady, 100);
-  }
-};
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => {
+// FIXED: Use only one initialization path
+const initializeOnce = (() => {
+  let initialized = false;
+
+  return () => {
+    if (initialized) {
+      console.log("🔄 Initialization already attempted, skipping");
+      return;
+    }
+    initialized = true;
+
+    console.log("📝 Initializing content script manager...");
     setTimeout(() => contentManager.initialize(), 1000);
-  });
+  };
+})();
+
+// FIXED: Single initialization trigger
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeOnce);
 } else {
-  setTimeout(() => contentManager.initialize(), 1000);
+  initializeOnce();
 }
 
-// Also initialize on page show (for back/forward navigation)
-window.addEventListener("pageshow", () => {
-  setTimeout(() => contentManager.initialize(), 1000);
+// FIXED: Only re-initialize on pageshow if completely new session
+window.addEventListener("pageshow", (event) => {
+  // Only reinitialize if it's a new page load (not back/forward cache)
+  if (!event.persisted && !contentManager.isInitialized) {
+    console.log("📝 New page detected, initializing...");
+    setTimeout(initializeOnce, 1000);
+  }
 });
 
 // Cleanup on page unload

@@ -825,13 +825,10 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
       // Fill out form fields using AI-enhanced AshbyFormHandler
-      await this.formHandler.fillFormWithProfile(form, profile);
-
-      // Handle required checkboxes
-      await this.formHandler.handleRequiredCheckboxes(form);
+      await this.formHandler.fillFormWithProfile(profile);
 
       // Submit the form
-      return await this.formHandler.submitForm(form);
+      return await this.formHandler.submitAndVerify();
     } catch (error) {
       console.error("Error processing Ashby application form:", error);
       this.statusOverlay.addError(
@@ -846,11 +843,11 @@ export default class AshbyPlatform extends BasePlatformAutomation {
   // ========================================
 
   /**
- * Check if element is visible - Ashby specific
- */
-isElementVisible(element) {
+   * Check if element is visible - Ashby specific
+   */
+  isElementVisible(element) {
     if (!element) return false;
-  
+
     try {
       const style = window.getComputedStyle(element);
       return (
