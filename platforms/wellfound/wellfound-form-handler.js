@@ -3,7 +3,7 @@ export default class WellfoundFormHandler {
     this.aiService = aiService;
     this.userService = userService;
     this.logger = logger;
-    this.answerCache = new Map(); // Add caching like LinkedIn
+    this.answerCache = new Map();
   }
 
   log(message, data = {}) {
@@ -16,7 +16,6 @@ export default class WellfoundFormHandler {
 
   checkForLocationRestrictions() {
     try {
-      // Look for location restriction error or warning messages
       const restrictionSelectors = [
         ".shared_fieldError__t2UkY",
         ".styles-module_component__HiSmQ",
@@ -53,39 +52,18 @@ export default class WellfoundFormHandler {
   async processApplicationForm() {
     try {
       this.log("🔍 Looking for application form...");
-
-      // Wait a bit for form to appear after clicking apply
       await this.delay(1000);
 
-      // Look for application forms - exclude search forms
-      const formSelectors = [
-        'form:has(button[data-test="JobDescriptionSlideIn--SubmitButton"])',
-        'form:has(button[type="submit"])',
-        "form:has(textarea)",
-        '[role="dialog"] form',
-        ".application-form",
-      ];
+      // Wait for the modal to appear
+      await this.waitForElement('div[data-test="JobApplication-Modal"]');
+      await this.waitForElement('button[data-test=JobApplicationModal--SubmitButton]');
 
-      let applicationForm = null;
-      for (const selector of formSelectors) {
-        try {
-          const form = document.querySelector(selector);
-          if (form && this.isApplicationForm(form)) {
-            applicationForm = form;
-            this.log(`✅ Found application form via selector: ${selector}`);
-            break;
-          }
-        } catch (error) {
-          continue;
-        }
+      const applicationModal = document.querySelector('div[data-test="JobApplication-Modal"]');
+      if (!applicationModal) {
+        this.log("❌ No application modal found");
+        return { success: false, reason: "no_modal_found" };
       }
 
-      if (!applicationForm) {
-        this.log("❌ No application form found");
-        return { success: false, reason: "no_form_found" };
-      }
-
-      // Check for restrictions first
       const restriction = this.checkForLocationRestrictions();
       if (restriction) {
         this.log("❌ Form is restricted, skipping extraction");
@@ -96,24 +74,34 @@ export default class WellfoundFormHandler {
         };
       }
 
-      // Process form fields individually (LinkedIn approach)
-      const success = await this.fillCurrentStep(applicationForm);
+      // Grab all fields using the improved method
+      const fields = await this.grabFields();
+      this.log(`📝 Found ${fields.length} form fields`);
 
-      if (success) {
-        const submitSuccess = await this.submitForm(applicationForm);
-        if (submitSuccess) {
-          return {
-            success: true,
-            form: applicationForm,
-            message: "Form processed successfully",
-          };
-        }
+      // Process each field
+      for (const field of fields) {
+        await this.handleWellfoundField(field);
+        await this.delay(500);
+      }
+
+      const submitButton = document.querySelector('button[data-test=JobApplicationModal--SubmitButton]');
+      if (submitButton && !submitButton.disabled) {
+        this.log("📤 Submitting application form");
+        await this.clickElementReliably(submitButton);
+        await this.delay(3000);
+        
+        return {
+          success: true,
+          message: "Form processed successfully",
+        };
       } else {
+        this.log("❌ Submit button not available or disabled");
         return {
           success: false,
-          reason: "form_processing_failed",
+          reason: "submit_button_disabled",
         };
       }
+
     } catch (error) {
       this.log("❌ Error processing application form:", error.message);
       return {
@@ -124,186 +112,273 @@ export default class WellfoundFormHandler {
     }
   }
 
-  // LinkedIn-style form processing
-  async fillCurrentStep(form) {
-    try {
-      // Find all form fields in current step
-      const formFields = this.getCurrentStepFields(form);
+  // New method based on the provided code
+  async grabFields() {
+    const results = [];
+    
+    // Get all label.block elements in the modal
+    const labels = document.querySelectorAll('div[data-test="JobApplication-Modal"] form label.block');
+    this.log(`🔍 Found ${labels.length} label.block elements`);
 
-      this.log(`📝 Processing ${formFields.length} form fields`);
+    for (const label of labels) {
+      const result = {
+        element: null,
+        type: '',
+        label: label.firstChild.innerText.trim(),
+        required: false,
+        options: []
+      };
 
-      for (const field of formFields) {
-        if (field.hasAttribute("data-processed")) {
-          continue; // Skip already processed fields
+      // Check if required (ends with *)
+      if (result.label.endsWith('*')) {
+        result.label = result.label.slice(0, -1).trim();
+        result.required = true;
+      }
+
+      // Special handling for cover letter questions
+      if (result.label.startsWith('What interests you about working')) {
+        result.label = 'Cover letter - ' + result.label;
+      }
+
+      const container = label.children[1];
+      if (!container) { 
+        this.log(`⚠️ No container found for label: ${result.label}`);
+        continue; 
+      }
+
+      // Priority-based field type detection
+      if (container.querySelector('input[type=radio]')) {
+        result.type = 'radio';
+        result.element = [...container.querySelectorAll('input[type=radio]')];
+        result.options = result.element.map(input => 
+          input.parentElement.querySelector('label').innerText.trim()
+        );
+        this.log(`📻 Radio field: ${result.label} with options: ${result.options.join(', ')}`);
+        
+      } else if (label.querySelector('input[type=checkbox]')) {
+        result.type = 'checkbox';
+        result.element = [...label.querySelectorAll('input[type=checkbox]')];
+        result.options = result.element.map(input => 
+          input.parentElement.querySelector('label').innerText.trim()
+        );
+        this.log(`☑️ Checkbox field: ${result.label} with options: ${result.options.join(', ')}`);
+        
+      } else if (container.querySelector('.select__control')) {
+        result.type = 'select';
+        result.element = container.querySelector('.select__control');
+        
+        // Trigger dropdown to get options
+        if (!container.querySelector('.select__menu .select__option')) {
+          this.log(`🔽 Opening React Select dropdown for: ${result.label}`);
+          const input = result.element.querySelector('input');
+          if (input) {
+            input.dispatchEvent(new Event('mousedown', {bubbles: true}));
+            input.dispatchEvent(new Event('focusin', {bubbles: true}));
+            await this.delay(1000);
+          }
         }
 
-        await this.handleField(field);
-        field.setAttribute("data-processed", "true");
+        result.options = [...container.querySelectorAll('.select__menu .select__option')]
+          .map(option => option.innerText.trim())
+          .filter(text => text.length > 0);
+        
+        this.log(`📋 Select field: ${result.label} with options: ${result.options.join(', ')}`);
+        
+        // Close dropdown
+        const input = result.element.querySelector('input');
+        if (input) {
+          input.dispatchEvent(new Event('focusout', {bubbles: true}));
+        }
+        
+      } else {
+        result.element = container.firstChild;
+        result.type = result.element ? result.element.type : 'unknown';
+        this.log(`📝 Input field: ${result.label} type: ${result.type}`);
       }
 
-      return true;
-    } catch (error) {
-      this.log("❌ Error filling current step:", error.message);
-      return false;
-    }
-  }
-
-  getCurrentStepFields(form) {
-    // Get all input elements that are currently visible and not processed
-    const allInputs = form.querySelectorAll("input, textarea, select");
-    const currentStepFields = [];
-
-    for (const input of allInputs) {
-      // Skip hidden, submit, and search fields
-      if (input.type === "hidden" || input.type === "submit") continue;
-
-      // Skip if not visible
-      if (!this.isElementVisible(input)) continue;
-
-      const fieldName = (input.name || input.id || "").toLowerCase();
-      const fieldPlaceholder = (input.placeholder || "").toLowerCase();
-
-      // Skip search-related fields
-      if (fieldName.includes("search") || fieldPlaceholder.includes("search")) {
-        continue;
+      if (result.element && result.type) {
+        results.push(result);
       }
-
-      currentStepFields.push(input);
     }
 
-    return currentStepFields;
+    // Handle cover letter separately
+    const coverLetter = document.getElementById('form-input--userNote');
+    if (coverLetter) {
+      results.push({
+        element: coverLetter,
+        type: 'textarea',
+        label: 'Cover letter - ' + coverLetter.placeholder,
+        required: true,
+        options: []
+      });
+      this.log(`📄 Cover letter field found`);
+    }
+
+    return results;
   }
 
-  async handleField(field) {
+  async handleWellfoundField(field) {
     try {
-      const fieldType = field.type || field.tagName.toLowerCase();
-
-      // Route to appropriate handler based on field type
-      switch (fieldType) {
-        case "select":
-          await this.handleSelectField(field);
-          break;
-        case "radio":
-          await this.handleRadioField(field);
-          break;
-        case "checkbox":
-          await this.handleCheckboxField(field);
-          break;
-        case "textarea":
-          await this.handleTextAreaField(field);
-          break;
-        case "text":
-        case "email":
-        case "tel":
-        case "url":
-          await this.handleTextField(field);
-          break;
-        default:
-          this.log(`⚠️ Unknown field type: ${fieldType}`);
+      this.log(`🔧 Processing field: ${field.label} (${field.type})`);
+      
+      // Scroll to element
+      try {
+        const modalContent = document.querySelector('.ReactModal__Content');
+        if (modalContent) {
+          this.scrollToElement(modalContent, Array.isArray(field.element) ? field.element[0] : field.element);
+        }
+      } catch (error) {
+        // Ignore scroll errors
       }
+
+      const answer = await this.getAnswer(field.label, field.options);
+      
+      if (!answer && answer !== 0) {
+        if (field.required && Array.isArray(field.element) && field.element[0]) {
+          // Click first option for required fields with no answer
+          field.element[0].click();
+          this.log(`✅ Selected first option for required field: ${field.label}`);
+        } else {
+          this.log(`⏭️ Skipping field with no answer: ${field.label}`);
+        }
+        return;
+      }
+
+      // Handle different field types
+      if (Array.isArray(field.element)) {
+        // Radio buttons or checkboxes
+        let found = false;
+        for (const el of field.element) {
+          const optionText = el.parentElement.querySelector('label').innerText.trim();
+          if (optionText === answer || optionText.toLowerCase().includes(answer.toLowerCase())) {
+            el.click();
+            found = true;
+            this.log(`✅ Selected "${optionText}" for: ${field.label}`);
+            break;
+          }
+        }
+        if (!found) {
+          this.log(`⚠️ Could not find matching option "${answer}" for: ${field.label}`);
+        }
+        
+      } else if (field.type === 'select') {
+        // React Select
+        const container = field.element.parentElement;
+        
+        // Open dropdown if not already open
+        if (!container.querySelector('.select__menu .select__option')) {
+          const input = field.element.querySelector('input');
+          if (input) {
+            input.dispatchEvent(new Event('mousedown', {bubbles: true}));
+            input.dispatchEvent(new Event('focusin', {bubbles: true}));
+            await this.delay(1000);
+          }
+        }
+
+        // Find and click matching option
+        const options = container.querySelectorAll('.select__menu .select__option');
+        let found = false;
+        for (const option of options) {
+          const optionText = option.innerText.trim();
+          if (optionText === answer || optionText.toLowerCase().includes(answer.toLowerCase())) {
+            option.click();
+            found = true;
+            this.log(`✅ Selected "${optionText}" for: ${field.label}`);
+            break;
+          }
+        }
+        
+        if (!found) {
+          this.log(`⚠️ Could not find matching option "${answer}" for: ${field.label}`);
+        }
+
+        await this.delay(1000);
+        
+        // Close dropdown
+        const input = field.element.querySelector('input');
+        if (input) {
+          input.dispatchEvent(new Event('focusout', {bubbles: true}));
+        }
+        
+      } else {
+        // Regular input fields
+        this.setNativeValue(field.element, answer);
+        this.log(`✅ Filled "${field.label}" with: ${answer}`);
+      }
+
     } catch (error) {
-      this.log(`❌ Error handling field: ${error.message}`);
+      this.log(`❌ Error handling field "${field.label}": ${error.message}`);
     }
   }
 
-  async handleSelectField(select) {
-    const label = this.getFieldLabel(select);
-    const options = this.extractSelectOptions(select);
-
-    if (options.length === 0) {
-      this.log(`⚠️ No options found for select field: ${label}`);
-      return;
-    }
-
-    const answer = await this.getAnswer(label, options);
-
-    // Find matching option and select it
-    const matchingOption = Array.from(select.options).find(
-      (opt) => opt.text.trim() === answer || opt.value === answer
-    );
-
-    if (matchingOption) {
-      select.value = matchingOption.value;
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-      this.log(`✅ Selected "${answer}" for: ${label}`);
+  // Helper method to set native value (like React)
+  setNativeValue(element, value) {
+    const { set: valueSetter } = Object.getOwnPropertyDescriptor(element, 'value') || {};
+    const prototype = Object.getPrototypeOf(element);
+    const { set: prototypeValueSetter } = Object.getOwnPropertyDescriptor(prototype, 'value') || {};
+    
+    if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+      prototypeValueSetter.call(element, value);
+    } else if (valueSetter) {
+      valueSetter.call(element, value);
     } else {
-      this.log(`⚠️ Could not find matching option "${answer}" for: ${label}`);
+      element.value = value;
     }
+    
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  async handleRadioField(radio) {
-    const container = radio.closest("fieldset") || radio.closest("div");
-    const label = this.getFieldLabel(radio);
-    const options = this.extractRadioOptions(radio, container);
+  // Helper method to scroll to element
+  scrollToElement(container, element) {
+    if (!container || !element) return;
+    
+    const containerRect = container.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const offset = elementRect.top - containerRect.top;
+    
+    container.scrollTop += offset;
+    
+    const scrollEvent = new Event('scroll', {
+      bubbles: true,
+      cancelable: true,
+    });
+    
+    container.dispatchEvent(scrollEvent);
+  }
 
-    if (options.length === 0) {
-      this.log(`⚠️ No options found for radio field: ${label}`);
-      return;
-    }
-
-    const answer = await this.getAnswer(label, options);
-
-    // Find and click the matching radio button
-    const radioInputs = container.querySelectorAll(
-      `input[name="${radio.name}"]`
-    );
-    for (const radioInput of radioInputs) {
-      const radioLabel = this.getFieldLabel(radioInput);
-      if (radioLabel.includes(answer) || radioInput.value === answer) {
-        radioInput.checked = true;
-        radioInput.dispatchEvent(new Event("change", { bubbles: true }));
-        this.log(`✅ Selected "${answer}" for: ${label}`);
-        break;
+  // Helper method to wait for element
+  async waitForElement(selector, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const element = document.querySelector(selector);
+      if (element) {
+        resolve(element);
+        return;
       }
-    }
+
+      const observer = new MutationObserver((mutations) => {
+        const element = document.querySelector(selector);
+        if (element) {
+          observer.disconnect();
+          resolve(element);
+        }
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+      setTimeout(() => {
+        observer.disconnect();
+        reject(new Error(`Element ${selector} not found within ${timeout}ms`));
+      }, timeout);
+    });
   }
 
-  async handleCheckboxField(checkbox) {
-    const label = this.getFieldLabel(checkbox);
-    const answer = await this.getAnswer(label, ["Yes", "No"]);
-
-    const shouldCheck =
-      answer.toLowerCase().includes("yes") ||
-      answer.toLowerCase().includes("true");
-    checkbox.checked = shouldCheck;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-    this.log(`✅ Set checkbox "${label}" to: ${shouldCheck}`);
-  }
-
-  async handleTextAreaField(textarea) {
-    const label = this.getFieldLabel(textarea);
-    const answer = await this.getAnswer(label);
-
-    textarea.value = answer;
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.dispatchEvent(new Event("change", { bubbles: true }));
-    this.log(`✅ Filled textarea "${label}" with ${answer.length} characters`);
-  }
-
-  async handleTextField(textInput) {
-    const label = this.getFieldLabel(textInput);
-    const answer = await this.getAnswer(label);
-
-    // Handle date fields
-    if (this.isDateField(textInput, label)) {
-      const formattedDate = this.formatDateForInput(answer);
-      textInput.value = formattedDate;
-    } else {
-      textInput.value = answer;
-    }
-
-    textInput.dispatchEvent(new Event("input", { bubbles: true }));
-    textInput.dispatchEvent(new Event("change", { bubbles: true }));
-    textInput.dispatchEvent(new Event("blur", { bubbles: true }));
-
-    this.log(`✅ Filled text field "${label}" with: ${answer}`);
-  }
-
-  // LinkedIn-style answer method (individual, with caching)
   async getAnswer(label, options = []) {
     const normalizedLabel = label?.toLowerCase()?.trim() || "";
 
-    // Check cache first (like LinkedIn)
     if (this.answerCache.has(normalizedLabel)) {
       this.log(`🔄 Using cached answer for: ${label}`);
       return this.answerCache.get(normalizedLabel);
@@ -312,7 +387,6 @@ export default class WellfoundFormHandler {
     try {
       this.log(`🤖 Getting AI answer for: "${label}"`);
 
-      // Use AI service for smart answers (same as LinkedIn)
       const context = {
         platform: "wellfound",
         userData: await this.userService.getUserDetails(),
@@ -322,19 +396,15 @@ export default class WellfoundFormHandler {
       const answer = await this.aiService.getAnswer(label, options, context);
       const cleanedAnswer = answer.replace(/["*\-]/g, '');
 
-      // Cache the answer (like LinkedIn)
       this.answerCache.set(normalizedLabel, cleanedAnswer);
       this.log(`✅ Got AI answer for "${label}": ${cleanedAnswer}`);
       return cleanedAnswer;
     } catch (error) {
       this.log(`❌ AI Answer Error for "${label}": ${error.message}`);
-
-      // Fallback to default answers (like LinkedIn)
       return this.getFallbackAnswer(normalizedLabel, options);
     }
   }
 
-  // LinkedIn-style fallback logic
   getFallbackAnswer(normalizedLabel, options = []) {
     const defaultAnswers = {
       "work authorization": "Yes",
@@ -342,21 +412,26 @@ export default class WellfoundFormHandler {
       "require sponsorship": "No",
       "require visa": "No",
       "visa sponsorship": "No",
-      experience: "2 years",
+      "experience": "Yes",
+      "data quality": "Yes",
+      "dataset diversity": "Yes",
+      "working": "I am excited about the opportunity to contribute to innovative projects and work with cutting-edge technology.",
       "years of experience": "2 years",
-      phone: "555-0123",
-      salary: "80000",
+      "phone": "555-0123",
+      "salary": "80000",
       "expected salary": "80000",
       "desired salary": "80000",
-      location: "Remote",
+      "location": "Remote",
       "preferred location": "Remote",
       "willing to relocate": "Yes",
       "start date": "Immediately",
       "notice period": "2 weeks",
-      availability: "Immediately",
+      "availability": "Immediately",
+      "hear about us": "LinkedIn",
+      "how did you hear": "LinkedIn",
+      "cover letter": "I am writing to express my strong interest in this position. With my background and experience, I believe I would be a valuable addition to your team.",
     };
 
-    // Check for keyword matches
     for (const [key, value] of Object.entries(defaultAnswers)) {
       if (normalizedLabel.includes(key)) {
         this.log(`🔄 Using fallback answer for "${normalizedLabel}": ${value}`);
@@ -364,175 +439,19 @@ export default class WellfoundFormHandler {
       }
     }
 
-    // Return first option if available
     if (options.length > 0) {
       this.log(`🔄 Using first option for "${normalizedLabel}": ${options[0]}`);
       return options[0];
     }
 
-    // Final fallback
     this.log(`🔄 Using default fallback for "${normalizedLabel}": Yes`);
     return "Yes";
   }
 
-  getFieldLabel(field) {
-    try {
-      // Strategy 1: Look for associated label
-      if (field.id) {
-        const label = document.querySelector(`label[for="${field.id}"]`);
-        if (label) {
-          return this.cleanQuestionText(label.textContent);
-        }
-      }
-
-      // Strategy 2: Look for parent label
-      const parentLabel = field.closest("label");
-      if (parentLabel) {
-        const labelText = Array.from(parentLabel.childNodes)
-          .filter(
-            (node) =>
-              node.nodeType === Node.TEXT_NODE ||
-              (node.nodeType === Node.ELEMENT_NODE && node !== field)
-          )
-          .map((node) => node.textContent || "")
-          .join(" ")
-          .trim();
-        if (labelText) return this.cleanQuestionText(labelText);
-      }
-
-      // Strategy 3: Look for preceding div with question text
-      const container = field.closest("div");
-      if (container) {
-        const questionElements = container.querySelectorAll(
-          "div, span, p, label"
-        );
-        for (const element of questionElements) {
-          const text = element.textContent?.trim();
-          if (
-            text &&
-            text.length > 10 &&
-            (text.includes("?") || text.includes(":"))
-          ) {
-            return this.cleanQuestionText(text);
-          }
-        }
-      }
-
-      // Strategy 4: Look for preceding siblings
-      let sibling = field.previousElementSibling;
-      let attempts = 0;
-      while (sibling && attempts < 3) {
-        const text = sibling.textContent?.trim();
-        if (text && text.length > 5) {
-          return this.cleanQuestionText(text);
-        }
-        sibling = sibling.previousElementSibling;
-        attempts++;
-      }
-
-      // Fallback: use placeholder or name
-      return this.cleanQuestionText(
-        field.placeholder || field.name || "Unknown field"
-      );
-    } catch (error) {
-      return this.cleanQuestionText(
-        field.placeholder || field.name || "Unknown field"
-      );
-    }
-  }
-
-  extractSelectOptions(select) {
-    try {
-      const options = [];
-      const optionElements = select.querySelectorAll("option");
-
-      for (const option of optionElements) {
-        const text = this.cleanQuestionText(option.textContent || option.value);
-        if (text && text !== "Select an option" && !options.includes(text)) {
-          options.push(text);
-        }
-      }
-
-      // Handle React-Select dropdowns
-      if (options.length === 0) {
-        const reactSelect = select.closest(".select__control");
-        if (reactSelect) {
-          const valueContainer = reactSelect.querySelector(
-            ".select__single-value"
-          );
-          if (valueContainer) {
-            const text = this.cleanQuestionText(valueContainer.textContent);
-            if (text) options.push(text);
-          }
-        }
-      }
-
-      return options;
-    } catch (error) {
-      this.log("❌ Error extracting select options:", error.message);
-      return [];
-    }
-  }
-
-  extractRadioOptions(radio, container) {
-    try {
-      const options = [];
-      const name = radio.name;
-      const sameNameInputs = container.querySelectorAll(
-        `input[name="${name}"]`
-      );
-
-      for (const sameInput of sameNameInputs) {
-        const label =
-          document.querySelector(`label[for="${sameInput.id}"]`) ||
-          sameInput.closest("label") ||
-          sameInput.nextElementSibling;
-
-        const optionText = label
-          ? this.cleanQuestionText(label.textContent)
-          : sameInput.value || `Option ${options.length + 1}`;
-
-        if (optionText && !options.includes(optionText)) {
-          options.push(optionText);
-        }
-      }
-      return options;
-    } catch (error) {
-      this.log("❌ Error extracting radio options:", error.message);
-      return [];
-    }
-  }
-
-  isDateField(input, label) {
-    const placeholder = input.placeholder?.toLowerCase() || "";
-    const name = input.name?.toLowerCase() || "";
-    const labelLower = label.toLowerCase();
-
-    return (
-      placeholder.includes("mm/dd/yyyy") ||
-      placeholder.includes("date") ||
-      name.includes("date") ||
-      labelLower.includes("date") ||
-      input.type === "date"
-    );
-  }
-
-  formatDateForInput(dateStr) {
-    try {
-      const date = new Date(dateStr);
-      const mm = String(date.getMonth() + 1).padStart(2, "0");
-      const dd = String(date.getDate()).padStart(2, "0");
-      const yyyy = date.getFullYear();
-      return `${mm}/${dd}/${yyyy}`;
-    } catch (error) {
-      return dateStr;
-    }
-  }
-
   scrapeJobDescription() {
     try {
-      // Try multiple selectors for job description
       const descriptionSelectors = [
+        'div[class^=styles_description]',
         '[data-test*="job-description"]',
         ".job-description",
         ".description",
@@ -549,148 +468,6 @@ export default class WellfoundFormHandler {
       return "No job description found";
     } catch (error) {
       return "No job description found";
-    }
-  }
-
-  cleanQuestionText(text) {
-    return text.replace(/\*$/, "").replace(/\s+/g, " ").trim();
-  }
-
-  isElementVisible(element) {
-    if (!element) return false;
-
-    const style = window.getComputedStyle(element);
-    return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      style.opacity !== "0" &&
-      element.offsetParent !== null
-    );
-  }
-
-  isApplicationForm(form) {
-    try {
-      // Check if this is a search form (exclude these)
-      const searchIndicators = [
-        'input[name*="search"]',
-        'input[placeholder*="search" i]',
-        'input[placeholder*="role" i]',
-        'button[data-test*="Search"]',
-        ".search-form",
-        '[class*="search"]',
-      ];
-
-      for (const indicator of searchIndicators) {
-        if (form.querySelector(indicator)) {
-          this.log("❌ Form appears to be a search form, skipping");
-          return false;
-        }
-      }
-
-      // Check for application form indicators
-      const applicationIndicators = [
-        "textarea",
-        'button[type="submit"]',
-        'input[type="file"]',
-        'button[data-test*="Submit"]',
-        'button[data-test*="Apply"]',
-        'input[type="radio"]',
-        "select",
-        'input[type="checkbox"]',
-      ];
-
-      for (const indicator of applicationIndicators) {
-        if (form.querySelector(indicator)) {
-          this.log("✅ Form appears to be an application form");
-          return true;
-        }
-      }
-
-      // Check form fields count
-      const formFields = form.querySelectorAll("input, textarea, select");
-      const nonHiddenFields = Array.from(formFields).filter(
-        (field) => field.type !== "hidden" && field.type !== "submit"
-      );
-
-      if (nonHiddenFields.length >= 1) {
-        this.log("✅ Form has sufficient fields to be an application form");
-        return true;
-      }
-
-      return false;
-    } catch (error) {
-      this.log("❌ Error checking if form is application form:", error.message);
-      return false;
-    }
-  }
-
-  async submitForm(form) {
-    try {
-      if (!form) {
-        this.log("❌ No form to submit");
-        return false;
-      }
-
-      const submitButton =
-        form.querySelector('button[type="submit"]') ||
-        form.querySelector('button[data-test*="Submit"]') ||
-        form.querySelector('button[data-test*="Apply"]');
-
-      if (!submitButton) {
-        this.log("❌ No submit button found in form");
-        return false;
-      }
-
-      if (submitButton.disabled) {
-        this.log("⚠️ Submit button is disabled - checking for form errors");
-        const errorCheck = await this.checkFormErrors(form);
-        if (errorCheck.hasErrors) {
-          this.log(`❌ Form has errors: ${errorCheck.errors.join(", ")}`);
-          return false;
-        }
-      }
-
-      this.log("📤 Submitting application form");
-      await this.clickElementReliably(submitButton);
-      await this.delay(3000);
-
-      return true;
-    } catch (error) {
-      this.log("❌ Error submitting form:", error.message);
-      return false;
-    }
-  }
-
-  async checkFormErrors(form) {
-    try {
-      const errors = [];
-
-      const errorSelectors = [
-        ".error",
-        ".field-error",
-        ".shared_fieldError__t2UkY",
-        '[class*="error"]',
-        ".text-red-500",
-        ".text-danger",
-      ];
-
-      for (const selector of errorSelectors) {
-        const errorElements = form.querySelectorAll(selector);
-        for (const errorEl of errorElements) {
-          const errorText = errorEl.textContent?.trim();
-          if (errorText && errorText.length > 0) {
-            errors.push(errorText);
-          }
-        }
-      }
-
-      return {
-        hasErrors: errors.length > 0,
-        errors: errors,
-      };
-    } catch (error) {
-      this.log("❌ Error checking form errors:", error.message);
-      return { hasErrors: false, errors: [] };
     }
   }
 

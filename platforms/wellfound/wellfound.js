@@ -7,7 +7,6 @@ import WellfoundFormHandler from "./wellfound-form-handler.js";
 import { StatusOverlay } from "../../services/index.js";
 
 export default class WellfoundPlatform extends BasePlatform {
-  // Update AI Service integration for form answers
   constructor(config) {
     super(config);
     this.platform = "wellfound";
@@ -969,6 +968,8 @@ export default class WellfoundPlatform extends BasePlatform {
         platform: this.platform,
       });
 
+
+      console.log(success)
       if (success) {
         await this.appTracker.updateApplicationCount();
         this.log(`✅ Job application saved to database: ${jobDetails.title}`);
