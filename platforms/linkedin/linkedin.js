@@ -306,8 +306,6 @@ export default class LinkedInPlatform extends BasePlatform {
         });
       }
 
-      console.log(this.config)
-
       if (!this.config.jobsToApply || this.config.jobsToApply <= 0) {
         const errorMessage =
           "I need to know how many jobs you want me to apply to!";

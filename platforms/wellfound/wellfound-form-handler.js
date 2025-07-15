@@ -3,6 +3,7 @@ export default class WellfoundFormHandler {
     this.aiService = aiService;
     this.userService = userService;
     this.logger = logger;
+    this.answerCache = new Map(); // Add caching like LinkedIn
   }
 
   log(message, data = {}) {
@@ -10,105 +11,6 @@ export default class WellfoundFormHandler {
       this.logger.log(message, data);
     } else {
       console.log(`🤖 [FormHandler] ${message}`, data);
-    }
-  }
-
-  async findApplyButton() {
-    try {
-      this.log("🔍 Looking for Apply button...");
-
-      // Strategy 1: Look for Wellfound-specific apply button
-      let applyButton = document.querySelector(
-        'button[data-test="JobDescriptionSlideIn--SubmitButton"]'
-      );
-      if (applyButton) {
-        this.log("✅ Found Apply button via data-test attribute");
-        return applyButton;
-      }
-
-      // Strategy 2: Look for any submit button in a form
-      const submitButtons = document.querySelectorAll('button[type="submit"]');
-      for (const button of submitButtons) {
-        const buttonText = button.textContent?.toLowerCase() || "";
-        if (buttonText.includes("apply")) {
-          this.log("✅ Found Apply button via submit type");
-          return button;
-        }
-      }
-
-      // Strategy 3: Look for buttons with "Apply" text
-      const allButtons = document.querySelectorAll("button");
-      for (const button of allButtons) {
-        const buttonText = button.textContent?.toLowerCase() || "";
-        if (buttonText.includes("apply") && !buttonText.includes("filters")) {
-          this.log("✅ Found Apply button via text content");
-          return button;
-        }
-      }
-
-      // Strategy 4: Look for links with "Apply" text (external applications)
-      const allLinks = document.querySelectorAll("a");
-      for (const link of allLinks) {
-        const linkText = link.textContent?.toLowerCase() || "";
-        if (linkText.includes("apply")) {
-          this.log("✅ Found Apply link via text content");
-          return link;
-        }
-      }
-
-      this.log("❌ No Apply button found");
-      return null;
-    } catch (error) {
-      this.log("❌ Error finding Apply button:", error.message);
-      return null;
-    }
-  }
-
-  async clickApplyButton() {
-    try {
-      const applyButton = await this.findApplyButton();
-      if (!applyButton) {
-        return { success: false, reason: "no_button" };
-      }
-
-      // Check if it's an external link
-      if (applyButton.href) {
-        this.log("🔗 Apply button is external link");
-        return {
-          success: false,
-          reason: "external_link",
-          url: applyButton.href,
-        };
-      }
-
-      // Check if button is disabled or has restrictions
-      if (applyButton.disabled || this.checkForLocationRestrictions()) {
-        this.log(
-          "⚠️ Apply button is disabled or restricted - checking for location restrictions"
-        );
-
-        const locationError = this.checkForLocationRestrictions();
-        if (locationError) {
-          this.log("🌍 Location restriction detected");
-          return {
-            success: false,
-            reason: "location_restricted",
-            error: locationError,
-          };
-        }
-
-        return { success: false, reason: "disabled_button" };
-      }
-
-      // Click the button
-      await this.clickElementReliably(applyButton);
-      await this.delay(2000);
-
-      this.log("✅ Apply button clicked successfully");
-      return { success: true };
-    } catch (error) {
-      this.log("❌ Error clicking Apply button:", error.message);
-      return { success: false, reason: "click_error", error: error.message };
     }
   }
 
@@ -148,20 +50,9 @@ export default class WellfoundFormHandler {
     }
   }
 
-  async extractApplicationForm() {
+  async processApplicationForm() {
     try {
       this.log("🔍 Looking for application form...");
-
-      // Check for restrictions first
-      const restriction = this.checkForLocationRestrictions();
-      if (restriction) {
-        this.log("❌ Form is restricted, skipping extraction");
-        return {
-          success: false,
-          reason: "location_restricted",
-          error: restriction,
-        };
-      }
 
       // Wait a bit for form to appear after clicking apply
       await this.delay(1000);
@@ -189,40 +80,492 @@ export default class WellfoundFormHandler {
         }
       }
 
-      // Fallback: look for any form with application-related fields
       if (!applicationForm) {
-        const allForms = document.querySelectorAll("form");
-        for (const form of allForms) {
-          if (this.isApplicationForm(form)) {
-            applicationForm = form;
-            this.log("✅ Found application form via fallback method");
-            break;
+        this.log("❌ No application form found");
+        return { success: false, reason: "no_form_found" };
+      }
+
+      // Check for restrictions first
+      const restriction = this.checkForLocationRestrictions();
+      if (restriction) {
+        this.log("❌ Form is restricted, skipping extraction");
+        return {
+          success: false,
+          reason: "location_restricted",
+          error: restriction,
+        };
+      }
+
+      // Process form fields individually (LinkedIn approach)
+      const success = await this.fillCurrentStep(applicationForm);
+
+      if (success) {
+        const submitSuccess = await this.submitForm(applicationForm);
+        if (submitSuccess) {
+          return {
+            success: true,
+            form: applicationForm,
+            message: "Form processed successfully",
+          };
+        }
+      } else {
+        return {
+          success: false,
+          reason: "form_processing_failed",
+        };
+      }
+    } catch (error) {
+      this.log("❌ Error processing application form:", error.message);
+      return {
+        success: false,
+        reason: "error",
+        error: error.message,
+      };
+    }
+  }
+
+  // LinkedIn-style form processing
+  async fillCurrentStep(form) {
+    try {
+      // Find all form fields in current step
+      const formFields = this.getCurrentStepFields(form);
+
+      this.log(`📝 Processing ${formFields.length} form fields`);
+
+      for (const field of formFields) {
+        if (field.hasAttribute("data-processed")) {
+          continue; // Skip already processed fields
+        }
+
+        await this.handleField(field);
+        field.setAttribute("data-processed", "true");
+      }
+
+      return true;
+    } catch (error) {
+      this.log("❌ Error filling current step:", error.message);
+      return false;
+    }
+  }
+
+  getCurrentStepFields(form) {
+    // Get all input elements that are currently visible and not processed
+    const allInputs = form.querySelectorAll("input, textarea, select");
+    const currentStepFields = [];
+
+    for (const input of allInputs) {
+      // Skip hidden, submit, and search fields
+      if (input.type === "hidden" || input.type === "submit") continue;
+
+      // Skip if not visible
+      if (!this.isElementVisible(input)) continue;
+
+      const fieldName = (input.name || input.id || "").toLowerCase();
+      const fieldPlaceholder = (input.placeholder || "").toLowerCase();
+
+      // Skip search-related fields
+      if (fieldName.includes("search") || fieldPlaceholder.includes("search")) {
+        continue;
+      }
+
+      currentStepFields.push(input);
+    }
+
+    return currentStepFields;
+  }
+
+  async handleField(field) {
+    try {
+      const fieldType = field.type || field.tagName.toLowerCase();
+
+      // Route to appropriate handler based on field type
+      switch (fieldType) {
+        case "select":
+          await this.handleSelectField(field);
+          break;
+        case "radio":
+          await this.handleRadioField(field);
+          break;
+        case "checkbox":
+          await this.handleCheckboxField(field);
+          break;
+        case "textarea":
+          await this.handleTextAreaField(field);
+          break;
+        case "text":
+        case "email":
+        case "tel":
+        case "url":
+          await this.handleTextField(field);
+          break;
+        default:
+          this.log(`⚠️ Unknown field type: ${fieldType}`);
+      }
+    } catch (error) {
+      this.log(`❌ Error handling field: ${error.message}`);
+    }
+  }
+
+  async handleSelectField(select) {
+    const label = this.getFieldLabel(select);
+    const options = this.extractSelectOptions(select);
+
+    if (options.length === 0) {
+      this.log(`⚠️ No options found for select field: ${label}`);
+      return;
+    }
+
+    const answer = await this.getAnswer(label, options);
+
+    // Find matching option and select it
+    const matchingOption = Array.from(select.options).find(
+      (opt) => opt.text.trim() === answer || opt.value === answer
+    );
+
+    if (matchingOption) {
+      select.value = matchingOption.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      this.log(`✅ Selected "${answer}" for: ${label}`);
+    } else {
+      this.log(`⚠️ Could not find matching option "${answer}" for: ${label}`);
+    }
+  }
+
+  async handleRadioField(radio) {
+    const container = radio.closest("fieldset") || radio.closest("div");
+    const label = this.getFieldLabel(radio);
+    const options = this.extractRadioOptions(radio, container);
+
+    if (options.length === 0) {
+      this.log(`⚠️ No options found for radio field: ${label}`);
+      return;
+    }
+
+    const answer = await this.getAnswer(label, options);
+
+    // Find and click the matching radio button
+    const radioInputs = container.querySelectorAll(
+      `input[name="${radio.name}"]`
+    );
+    for (const radioInput of radioInputs) {
+      const radioLabel = this.getFieldLabel(radioInput);
+      if (radioLabel.includes(answer) || radioInput.value === answer) {
+        radioInput.checked = true;
+        radioInput.dispatchEvent(new Event("change", { bubbles: true }));
+        this.log(`✅ Selected "${answer}" for: ${label}`);
+        break;
+      }
+    }
+  }
+
+  async handleCheckboxField(checkbox) {
+    const label = this.getFieldLabel(checkbox);
+    const answer = await this.getAnswer(label, ["Yes", "No"]);
+
+    const shouldCheck =
+      answer.toLowerCase().includes("yes") ||
+      answer.toLowerCase().includes("true");
+    checkbox.checked = shouldCheck;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    this.log(`✅ Set checkbox "${label}" to: ${shouldCheck}`);
+  }
+
+  async handleTextAreaField(textarea) {
+    const label = this.getFieldLabel(textarea);
+    const answer = await this.getAnswer(label);
+
+    textarea.value = answer;
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+    this.log(`✅ Filled textarea "${label}" with ${answer.length} characters`);
+  }
+
+  async handleTextField(textInput) {
+    const label = this.getFieldLabel(textInput);
+    const answer = await this.getAnswer(label);
+
+    // Handle date fields
+    if (this.isDateField(textInput, label)) {
+      const formattedDate = this.formatDateForInput(answer);
+      textInput.value = formattedDate;
+    } else {
+      textInput.value = answer;
+    }
+
+    textInput.dispatchEvent(new Event("input", { bubbles: true }));
+    textInput.dispatchEvent(new Event("change", { bubbles: true }));
+    textInput.dispatchEvent(new Event("blur", { bubbles: true }));
+
+    this.log(`✅ Filled text field "${label}" with: ${answer}`);
+  }
+
+  // LinkedIn-style answer method (individual, with caching)
+  async getAnswer(label, options = []) {
+    const normalizedLabel = label?.toLowerCase()?.trim() || "";
+
+    // Check cache first (like LinkedIn)
+    if (this.answerCache.has(normalizedLabel)) {
+      this.log(`🔄 Using cached answer for: ${label}`);
+      return this.answerCache.get(normalizedLabel);
+    }
+
+    try {
+      this.log(`🤖 Getting AI answer for: "${label}"`);
+
+      // Use AI service for smart answers (same as LinkedIn)
+      const context = {
+        platform: "wellfound",
+        userData: await this.userService.getUserDetails(),
+        jobDescription: this.scrapeJobDescription(),
+      };
+
+      const answer = await this.aiService.getAnswer(label, options, context);
+      const cleanedAnswer = answer.replace(/["*\-]/g, '');
+
+      // Cache the answer (like LinkedIn)
+      this.answerCache.set(normalizedLabel, cleanedAnswer);
+      this.log(`✅ Got AI answer for "${label}": ${cleanedAnswer}`);
+      return cleanedAnswer;
+    } catch (error) {
+      this.log(`❌ AI Answer Error for "${label}": ${error.message}`);
+
+      // Fallback to default answers (like LinkedIn)
+      return this.getFallbackAnswer(normalizedLabel, options);
+    }
+  }
+
+  // LinkedIn-style fallback logic
+  getFallbackAnswer(normalizedLabel, options = []) {
+    const defaultAnswers = {
+      "work authorization": "Yes",
+      "authorized to work": "Yes",
+      "require sponsorship": "No",
+      "require visa": "No",
+      "visa sponsorship": "No",
+      experience: "2 years",
+      "years of experience": "2 years",
+      phone: "555-0123",
+      salary: "80000",
+      "expected salary": "80000",
+      "desired salary": "80000",
+      location: "Remote",
+      "preferred location": "Remote",
+      "willing to relocate": "Yes",
+      "start date": "Immediately",
+      "notice period": "2 weeks",
+      availability: "Immediately",
+    };
+
+    // Check for keyword matches
+    for (const [key, value] of Object.entries(defaultAnswers)) {
+      if (normalizedLabel.includes(key)) {
+        this.log(`🔄 Using fallback answer for "${normalizedLabel}": ${value}`);
+        return value;
+      }
+    }
+
+    // Return first option if available
+    if (options.length > 0) {
+      this.log(`🔄 Using first option for "${normalizedLabel}": ${options[0]}`);
+      return options[0];
+    }
+
+    // Final fallback
+    this.log(`🔄 Using default fallback for "${normalizedLabel}": Yes`);
+    return "Yes";
+  }
+
+  getFieldLabel(field) {
+    try {
+      // Strategy 1: Look for associated label
+      if (field.id) {
+        const label = document.querySelector(`label[for="${field.id}"]`);
+        if (label) {
+          return this.cleanQuestionText(label.textContent);
+        }
+      }
+
+      // Strategy 2: Look for parent label
+      const parentLabel = field.closest("label");
+      if (parentLabel) {
+        const labelText = Array.from(parentLabel.childNodes)
+          .filter(
+            (node) =>
+              node.nodeType === Node.TEXT_NODE ||
+              (node.nodeType === Node.ELEMENT_NODE && node !== field)
+          )
+          .map((node) => node.textContent || "")
+          .join(" ")
+          .trim();
+        if (labelText) return this.cleanQuestionText(labelText);
+      }
+
+      // Strategy 3: Look for preceding div with question text
+      const container = field.closest("div");
+      if (container) {
+        const questionElements = container.querySelectorAll(
+          "div, span, p, label"
+        );
+        for (const element of questionElements) {
+          const text = element.textContent?.trim();
+          if (
+            text &&
+            text.length > 10 &&
+            (text.includes("?") || text.includes(":"))
+          ) {
+            return this.cleanQuestionText(text);
           }
         }
       }
 
-      if (!applicationForm) {
-        this.log("❌ No application form found");
-        return null;
+      // Strategy 4: Look for preceding siblings
+      let sibling = field.previousElementSibling;
+      let attempts = 0;
+      while (sibling && attempts < 3) {
+        const text = sibling.textContent?.trim();
+        if (text && text.length > 5) {
+          return this.cleanQuestionText(text);
+        }
+        sibling = sibling.previousElementSibling;
+        attempts++;
       }
 
-      // Extract form fields
-      const formFields = await this.extractFormFields(applicationForm);
-
-      // Send to AI service if there are fields
-      if (formFields.length > 0) {
-        await this.sendFieldsToAIService(formFields, applicationForm);
-      }
-
-      return {
-        form: applicationForm,
-        fields: formFields,
-        isValid: formFields.length > 0,
-      };
+      // Fallback: use placeholder or name
+      return this.cleanQuestionText(
+        field.placeholder || field.name || "Unknown field"
+      );
     } catch (error) {
-      this.log("❌ Error extracting application form:", error.message);
-      return null;
+      return this.cleanQuestionText(
+        field.placeholder || field.name || "Unknown field"
+      );
     }
+  }
+
+  extractSelectOptions(select) {
+    try {
+      const options = [];
+      const optionElements = select.querySelectorAll("option");
+
+      for (const option of optionElements) {
+        const text = this.cleanQuestionText(option.textContent || option.value);
+        if (text && text !== "Select an option" && !options.includes(text)) {
+          options.push(text);
+        }
+      }
+
+      // Handle React-Select dropdowns
+      if (options.length === 0) {
+        const reactSelect = select.closest(".select__control");
+        if (reactSelect) {
+          const valueContainer = reactSelect.querySelector(
+            ".select__single-value"
+          );
+          if (valueContainer) {
+            const text = this.cleanQuestionText(valueContainer.textContent);
+            if (text) options.push(text);
+          }
+        }
+      }
+
+      return options;
+    } catch (error) {
+      this.log("❌ Error extracting select options:", error.message);
+      return [];
+    }
+  }
+
+  extractRadioOptions(radio, container) {
+    try {
+      const options = [];
+      const name = radio.name;
+      const sameNameInputs = container.querySelectorAll(
+        `input[name="${name}"]`
+      );
+
+      for (const sameInput of sameNameInputs) {
+        const label =
+          document.querySelector(`label[for="${sameInput.id}"]`) ||
+          sameInput.closest("label") ||
+          sameInput.nextElementSibling;
+
+        const optionText = label
+          ? this.cleanQuestionText(label.textContent)
+          : sameInput.value || `Option ${options.length + 1}`;
+
+        if (optionText && !options.includes(optionText)) {
+          options.push(optionText);
+        }
+      }
+      return options;
+    } catch (error) {
+      this.log("❌ Error extracting radio options:", error.message);
+      return [];
+    }
+  }
+
+  isDateField(input, label) {
+    const placeholder = input.placeholder?.toLowerCase() || "";
+    const name = input.name?.toLowerCase() || "";
+    const labelLower = label.toLowerCase();
+
+    return (
+      placeholder.includes("mm/dd/yyyy") ||
+      placeholder.includes("date") ||
+      name.includes("date") ||
+      labelLower.includes("date") ||
+      input.type === "date"
+    );
+  }
+
+  formatDateForInput(dateStr) {
+    try {
+      const date = new Date(dateStr);
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const dd = String(date.getDate()).padStart(2, "0");
+      const yyyy = date.getFullYear();
+      return `${mm}/${dd}/${yyyy}`;
+    } catch (error) {
+      return dateStr;
+    }
+  }
+
+  scrapeJobDescription() {
+    try {
+      // Try multiple selectors for job description
+      const descriptionSelectors = [
+        '[data-test*="job-description"]',
+        ".job-description",
+        ".description",
+        '[class*="description"]',
+      ];
+
+      for (const selector of descriptionSelectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          return element.textContent.trim().substring(0, 500);
+        }
+      }
+
+      return "No job description found";
+    } catch (error) {
+      return "No job description found";
+    }
+  }
+
+  cleanQuestionText(text) {
+    return text.replace(/\*$/, "").replace(/\s+/g, " ").trim();
+  }
+
+  isElementVisible(element) {
+    if (!element) return false;
+
+    const style = window.getComputedStyle(element);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      element.offsetParent !== null
+    );
   }
 
   isApplicationForm(form) {
@@ -281,536 +624,17 @@ export default class WellfoundFormHandler {
     }
   }
 
-  async extractFormFields(form) {
+  async submitForm(form) {
     try {
-      const formFields = [];
-
-      // Get all input elements
-      const allInputs = form.querySelectorAll("input, textarea, select");
-
-      for (const input of allInputs) {
-        // Skip hidden, submit, and search fields
-        if (input.type === "hidden" || input.type === "submit") continue;
-
-        const fieldName = (input.name || input.id || "").toLowerCase();
-        const fieldPlaceholder = (input.placeholder || "").toLowerCase();
-
-        // Skip search-related fields
-        if (
-          fieldName.includes("search") ||
-          fieldPlaceholder.includes("search")
-        ) {
-          this.log(
-            `⚠️ Skipping search field: ${fieldName || fieldPlaceholder}`
-          );
-          continue;
-        }
-
-        // Extract question/label
-        const question = this.extractQuestionForField(input);
-
-        // Extract options for radio, select, and checkbox
-        let options = [];
-        if (input.type === "radio" || input.type === "checkbox") {
-          options = this.extractRadioOrCheckboxOptions(input, form);
-        } else if (input.tagName.toLowerCase() === "select") {
-          options = this.extractSelectOptions(input);
-        }
-
-        const fieldInfo = {
-          element: input,
-          name: input.name || input.id,
-          type: input.type || input.tagName.toLowerCase(),
-          placeholder: input.placeholder || "",
-          required: input.required || input.hasAttribute("required"),
-          disabled: input.disabled,
-          selector: this.generateSelector(input),
-          question: question,
-          value: input.value || "",
-          options: options.length > 0 ? options : undefined,
-        };
-
-        formFields.push(fieldInfo);
-        this.log(
-          `📝 Found application field: "${question}" (${fieldInfo.type}) ${
-            options.length > 0 ? "with options: " + JSON.stringify(options) : ""
-          }`
-        );
-      }
-
-      this.log(`✅ Extracted ${formFields.length} application form fields`);
-      return formFields;
-    } catch (error) {
-      this.log("❌ Error extracting form fields:", error.message);
-      return [];
-    }
-  }
-
-  extractQuestionForField(input) {
-    try {
-      // Strategy 1: Look for associated label
-      if (input.id) {
-        const label = document.querySelector(`label[for="${input.id}"]`);
-        if (label) {
-          return this.cleanQuestionText(label.textContent);
-        }
-      }
-
-      // Strategy 2: Look for parent label
-      const parentLabel = input.closest("label");
-      if (parentLabel) {
-        const labelText = Array.from(parentLabel.childNodes)
-          .filter(
-            (node) =>
-              node.nodeType === Node.TEXT_NODE ||
-              (node.nodeType === Node.ELEMENT_NODE && node !== input)
-          )
-          .map((node) => node.textContent || "")
-          .join(" ")
-          .trim();
-        if (labelText) return this.cleanQuestionText(labelText);
-      }
-
-      // Strategy 3: Look for preceding div with question text
-      const container = input.closest("div");
-      if (container) {
-        const questionElements = container.querySelectorAll(
-          "div, span, p, label"
-        );
-        for (const element of questionElements) {
-          const text = element.textContent?.trim();
-          if (
-            text &&
-            text.length > 10 &&
-            (text.includes("?") || text.includes(":"))
-          ) {
-            return this.cleanQuestionText(text);
-          }
-        }
-      }
-
-      // Strategy 4: Look for preceding siblings
-      let sibling = input.previousElementSibling;
-      let attempts = 0;
-      while (sibling && attempts < 3) {
-        const text = sibling.textContent?.trim();
-        if (text && text.length > 5) {
-          return this.cleanQuestionText(text);
-        }
-        sibling = sibling.previousElementSibling;
-        attempts++;
-      }
-
-      // Fallback: use placeholder or name
-      return this.cleanQuestionText(
-        input.placeholder || input.name || "Unknown field"
-      );
-    } catch (error) {
-      return this.cleanQuestionText(
-        input.placeholder || input.name || "Unknown field"
-      );
-    }
-  }
-
-  extractRadioOrCheckboxOptions(input, form) {
-    try {
-      const options = [];
-      const name = input.name;
-      const sameNameInputs = form.querySelectorAll(`input[name="${name}"]`);
-      for (const sameInput of sameNameInputs) {
-        const label = document.querySelector(`label[for="${sameInput.id}"]`);
-        const optionText = label
-          ? this.cleanQuestionText(label.textContent)
-          : sameInput.value || `Option ${options.length + 1}`;
-        if (optionText && !options.includes(optionText)) {
-          options.push(optionText);
-        }
-      }
-      return options;
-    } catch (error) {
-      this.log("❌ Error extracting radio/checkbox options:", error.message);
-      return [];
-    }
-  }
-
-  extractSelectOptions(select) {
-    try {
-      const options = [];
-      const optionElements = select.querySelectorAll("option");
-      for (const option of optionElements) {
-        const text = this.cleanQuestionText(option.textContent || option.value);
-        if (text && !options.includes(text)) {
-          options.push(text);
-        }
-      }
-      // Handle React-Select dropdowns
-      if (options.length === 0) {
-        const reactSelect = select.closest(".select__control");
-        if (reactSelect) {
-          const valueContainer = reactSelect.querySelector(
-            ".select__single-value"
-          );
-          if (valueContainer) {
-            const text = this.cleanQuestionText(valueContainer.textContent);
-            if (text) options.push(text);
-          }
-        }
-      }
-      return options;
-    } catch (error) {
-      this.log("❌ Error extracting select options:", error.message);
-      return [];
-    }
-  }
-
-  cleanQuestionText(text) {
-    return text.replace(/\*$/, "").replace(/\s+/g, " ").trim();
-  }
-
-  async sendFieldsToAIService(fields, form) {
-    try {
-      const jobDetails = await this.getJobDetails(form);
-      const userDetails = await this.userService.getUserDetails();
-      if (!userDetails) {
-        this.log("❌ No user details available for AI service");
-        return false;
-      }
-
-      const aiRequest = fields.map((field) => ({
-        question: field.question,
-        type: field.type,
-        options: field.options,
-        name: field.name,
-        required: field.required,
-      }));
-
-      this.log("🤖 Sending form fields to AI service:", { fields: aiRequest });
-
-      const aiResponse = await this.aiService.processApplicationFields({
-        fields: aiRequest,
-        userProfile: {
-          name: `${userDetails.firstName} ${userDetails.lastName}`,
-          email: userDetails.email,
-          experience:
-            userDetails.experience || userDetails.resumeText?.substring(0, 300),
-          skills: userDetails.skills || [],
-          linkedIn: userDetails.linkedIn,
-          github: userDetails.github,
-          website: userDetails.website,
-        },
-        jobDetails,
-      });
-
-      if (aiResponse && aiResponse.answers) {
-        this.log("✅ Received AI responses for form fields");
-        await this.fillFormWithAIResponses(form, fields, aiResponse.answers);
-        return true;
-      } else {
-        this.log("⚠️ No valid AI response received");
-        return false;
-      }
-    } catch (error) {
-      this.log("❌ Error sending fields to AI service:", error.message);
-      return false;
-    }
-  }
-
-  async getJobDetails(form) {
-    try {
-      // Extract job details from page (simplified, adjust based on page structure)
-      const jobTitle =
-        document.querySelector("h1")?.textContent || "Unknown Job";
-      const company =
-        document.querySelector('[data-test*="company-name"]')?.textContent ||
-        "Unknown Company";
-      const description =
-        document.querySelector('[data-test*="job-description"]')?.textContent ||
-        "";
-      return {
-        title: jobTitle.trim(),
-        company: company.trim(),
-        description: description.substring(0, 500),
-      };
-    } catch (error) {
-      this.log("❌ Error getting job details:", error.message);
-      return { title: "Unknown", company: "Unknown", description: "" };
-    }
-  }
-
-  async fillFormWithAIResponses(form, fields, aiAnswers) {
-    try {
-      for (const field of fields) {
-        if (field.disabled) {
-          this.log(`⚠️ Skipping disabled field: ${field.question}`);
-          continue;
-        }
-
-        const answer = aiAnswers.find(
-          (a) => a.name === field.name || a.question === field.question
-        );
-        if (!answer || !answer.value) {
-          this.log(`⚠️ No AI answer for field: ${field.question}`);
-          continue;
-        }
-
-        const element = form.querySelector(field.selector);
-        if (!element) {
-          this.log(`⚠️ Field element not found: ${field.question}`);
-          continue;
-        }
-
-        if (field.type === "radio" || field.type === "checkbox") {
-          const optionInput = Array.from(
-            form.querySelectorAll(`input[name="${field.name}"]`)
-          ).find(
-            (input) =>
-              this.cleanQuestionText(
-                input.nextElementSibling?.textContent || ""
-              ) === answer.value
-          );
-          if (optionInput) {
-            optionInput.checked = true;
-            optionInput.dispatchEvent(new Event("change", { bubbles: true }));
-            this.log(
-              `✅ Filled ${field.type} field: "${field.question}" with "${answer.value}"`
-            );
-          }
-        } else if (field.type === "select") {
-          const option = element.querySelector(
-            `option[value="${answer.value}"], option:not([value=""])`
-          );
-          if (option) {
-            element.value = answer.value;
-            element.dispatchEvent(new Event("change", { bubbles: true }));
-            this.log(
-              `✅ Filled select field: "${field.question}" with "${answer.value}"`
-            );
-          }
-        } else {
-          element.value = answer.value;
-          element.dispatchEvent(new Event("input", { bubbles: true }));
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          element.dispatchEvent(new Event("blur", { bubbles: true }));
-          this.log(
-            `✅ Filled field: "${field.question}" with ${answer.value.length} characters`
-          );
-        }
-      }
-    } catch (error) {
-      this.log("❌ Error filling form with AI responses:", error.message);
-    }
-  }
-
-  async fillFormWithAI(formData, jobDetails) {
-    try {
-      if (!formData || !formData.fields || formData.fields.length === 0) {
-        this.log("❌ No form fields to fill");
-        return false;
-      }
-
-      // Get user details
-      const userDetails = await this.userService.getUserDetails();
-      if (!userDetails) {
-        this.log("❌ No user details available");
-        return false;
-      }
-
-      this.log(
-        `🤖 Filling ${formData.fields.length} form fields with AI assistance`
-      );
-
-      // Fill each field
-      for (const field of formData.fields) {
-        if (field.disabled) {
-          this.log(`⚠️ Skipping disabled field: ${field.question}`);
-          continue;
-        }
-
-        await this.fillSingleField(field, userDetails, jobDetails);
-        await this.delay(500);
-      }
-
-      return true;
-    } catch (error) {
-      this.log("❌ Error filling form with AI:", error.message);
-      return false;
-    }
-  }
-
-  async fillSingleField(field, userDetails, jobDetails) {
-    try {
-      const element = document.querySelector(field.selector);
-      if (!element || element.disabled) {
-        this.log(`⚠️ Field not found or disabled: ${field.question}`);
-        return;
-      }
-
-      let value = "";
-
-      // First try standard field mapping
-      value = this.getStandardFieldValue(field, userDetails);
-
-      // If no standard mapping and it's a custom question, use AI
-      if (!value && field.question && field.question.length > 10) {
-        this.log(`🤖 Generating AI answer for: "${field.question}"`);
-        value = await this.generateAIAnswer(
-          field.question,
-          userDetails,
-          jobDetails
-        );
-      }
-
-      // Fill the field if we have a value
-      if (value) {
-        element.focus();
-        element.value = value;
-
-        element.dispatchEvent(new Event("input", { bubbles: true }));
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-        element.dispatchEvent(new Event("blur", { bubbles: true }));
-
-        this.log(
-          `✅ Filled field: "${field.question}" with ${value.length} characters`
-        );
-      } else {
-        this.log(`⚠️ No value generated for field: ${field.question}`);
-      }
-    } catch (error) {
-      this.log(`❌ Error filling field "${field.question}":`, error.message);
-    }
-  }
-
-  getStandardFieldValue(field, userDetails) {
-    const fieldIdentifier = (
-      field.name ||
-      field.placeholder ||
-      field.question ||
-      ""
-    ).toLowerCase();
-
-    if (
-      fieldIdentifier.includes("name") &&
-      !fieldIdentifier.includes("company")
-    ) {
-      return `${userDetails.firstName} ${userDetails.lastName}`;
-    } else if (fieldIdentifier.includes("first")) {
-      return userDetails.firstName;
-    } else if (fieldIdentifier.includes("last")) {
-      return userDetails.lastName;
-    } else if (fieldIdentifier.includes("email")) {
-      return userDetails.email;
-    } else if (fieldIdentifier.includes("phone")) {
-      return userDetails.phoneNumber;
-    } else if (fieldIdentifier.includes("linkedin")) {
-      return userDetails.linkedIn;
-    } else if (
-      fieldIdentifier.includes("website") ||
-      fieldIdentifier.includes("portfolio")
-    ) {
-      return userDetails.website;
-    } else if (fieldIdentifier.includes("github")) {
-      return userDetails.github;
-    }
-
-    return "";
-  }
-
-  async generateAIAnswer(question, userDetails, jobDetails) {
-    try {
-      const context = {
-        question: question,
-        jobTitle: jobDetails.title,
-        company: jobDetails.company,
-        jobDescription: jobDetails.description?.substring(0, 500),
-        userProfile: {
-          name: `${userDetails.firstName} ${userDetails.lastName}`,
-          email: userDetails.email,
-          experience:
-            userDetails.experience || userDetails.resumeText?.substring(0, 300),
-          skills: userDetails.skills || [],
-          linkedIn: userDetails.linkedIn,
-          github: userDetails.github,
-          website: userDetails.website,
-        },
-      };
-
-      const aiResponse = await this.aiService.generateApplicationAnswer(
-        context
-      );
-
-      if (aiResponse && aiResponse.answer) {
-        this.log(
-          `✅ AI generated ${aiResponse.answer.length} character answer`
-        );
-        return aiResponse.answer;
-      } else {
-        return this.generateTemplateAnswer(question, userDetails, jobDetails);
-      }
-    } catch (error) {
-      this.log("❌ Error generating AI answer:", error.message);
-      return this.generateTemplateAnswer(question, userDetails, jobDetails);
-    }
-  }
-
-  generateTemplateAnswer(question, userDetails, jobDetails) {
-    const questionLower = question.toLowerCase();
-
-    if (
-      questionLower.includes("side project") ||
-      questionLower.includes("project")
-    ) {
-      return `I recently developed a web application using modern technologies like React, Node.js, and Express. This project helped me strengthen my full-stack development skills and gave me hands-on experience with database design, API development, and responsive UI creation. The project involved implementing user authentication, real-time data updates, and optimized performance. You can view my work on GitHub: ${
-        userDetails.github || "Available upon request"
-      }`;
-    }
-
-    if (
-      questionLower.includes("reference") ||
-      questionLower.includes("linkedin")
-    ) {
-      return `I can provide professional references from previous colleagues, supervisors, and mentors who can speak to my technical abilities and work ethic. I prefer to coordinate reference sharing directly to respect their time and privacy. My LinkedIn profile where you can see my professional network is: ${
-        userDetails.linkedIn || "Available upon request"
-      }`;
-    }
-
-    if (
-      questionLower.includes("why") ||
-      questionLower.includes("interest") ||
-      questionLower.includes("motivat")
-    ) {
-      return `I am genuinely excited about the ${jobDetails.title} position at ${jobDetails.company} because it aligns perfectly with my technical expertise and career aspirations. The opportunity to work with cutting-edge technologies and contribute to innovative solutions in a collaborative environment is exactly what I'm looking for in my next role.`;
-    }
-
-    if (
-      questionLower.includes("experience") ||
-      questionLower.includes("background") ||
-      questionLower.includes("tell us about")
-    ) {
-      return `I have strong experience in software development with expertise in modern web technologies and frameworks. I'm passionate about writing clean, maintainable code and enjoy collaborating with cross-functional teams to deliver high-quality products. I'm always eager to learn new technologies and take on challenging projects that push my skills forward.`;
-    }
-
-    if (
-      questionLower.includes("cover") ||
-      questionLower.includes("letter") ||
-      questionLower.includes("yourself")
-    ) {
-      return `I am a dedicated software developer with a passion for creating innovative solutions and delivering exceptional user experiences. My technical skills combined with my collaborative approach make me well-suited for the ${jobDetails.title} role at ${jobDetails.company}. I'm excited about the opportunity to contribute to your team's success.`;
-    }
-
-    return `I am very interested in this opportunity and believe my skills and experience make me a strong candidate for the ${jobDetails.title} position. I would welcome the chance to discuss how I can contribute to ${jobDetails.company}'s continued success and growth.`;
-  }
-
-  async submitForm(formData) {
-    try {
-      if (!formData || !formData.form) {
+      if (!form) {
         this.log("❌ No form to submit");
         return false;
       }
 
       const submitButton =
-        formData.form.querySelector('button[type="submit"]') ||
-        formData.form.querySelector('button[data-test*="Submit"]') ||
-        formData.form.querySelector('button[data-test*="Apply"]');
+        form.querySelector('button[type="submit"]') ||
+        form.querySelector('button[data-test*="Submit"]') ||
+        form.querySelector('button[data-test*="Apply"]');
 
       if (!submitButton) {
         this.log("❌ No submit button found in form");
@@ -819,7 +643,7 @@ export default class WellfoundFormHandler {
 
       if (submitButton.disabled) {
         this.log("⚠️ Submit button is disabled - checking for form errors");
-        const errorCheck = await this.checkFormErrors(formData.form);
+        const errorCheck = await this.checkFormErrors(form);
         if (errorCheck.hasErrors) {
           this.log(`❌ Form has errors: ${errorCheck.errors.join(", ")}`);
           return false;
@@ -870,61 +694,6 @@ export default class WellfoundFormHandler {
     }
   }
 
-  async verifySubmissionSuccess() {
-    try {
-      await this.delay(2000);
-
-      const successSelectors = [
-        ".success",
-        ".confirmation",
-        '[class*="success"]',
-        '[class*="confirm"]',
-        ".thank-you",
-      ];
-
-      for (const selector of successSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          this.log("✅ Application success verified via element");
-          return true;
-        }
-      }
-
-      const successTexts = [
-        "application submitted",
-        "thank you",
-        "successfully applied",
-        "application received",
-        "we'll be in touch",
-        "thanks for applying",
-      ];
-
-      const bodyText = document.body.textContent.toLowerCase();
-      for (const text of successTexts) {
-        if (bodyText.includes(text)) {
-          this.log("✅ Application success verified via text");
-          return true;
-        }
-      }
-
-      const currentUrl = window.location.href.toLowerCase();
-      if (
-        currentUrl.includes("thank") ||
-        currentUrl.includes("success") ||
-        currentUrl.includes("applied")
-      ) {
-        this.log("✅ Application success verified via URL");
-        return true;
-      }
-
-      this.log("⚠️ Could not verify success explicitly, assuming success");
-      return true;
-    } catch (error) {
-      this.log("❌ Error verifying submission success:", error.message);
-      return false;
-    }
-  }
-
   async clickElementReliably(element) {
     const strategies = [
       () => element.click(),
@@ -959,18 +728,6 @@ export default class WellfoundFormHandler {
     }
 
     throw new Error("All click strategies failed");
-  }
-
-  generateSelector(element) {
-    if (element.id) return `#${element.id}`;
-    if (element.name) return `[name="${element.name}"]`;
-    if (element.className) {
-      const classes = element.className
-        .split(" ")
-        .filter((c) => c && !c.includes(" "));
-      if (classes.length > 0) return `.${classes[0]}`;
-    }
-    return element.tagName.toLowerCase();
   }
 
   delay(ms) {
