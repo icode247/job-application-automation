@@ -3,9 +3,11 @@ import BasePlatform from "../base-platform.js";
 import AIService from "../../services/ai-service.js";
 import ApplicationTrackerService from "../../services/application-tracker-service.js";
 import UserService from "../../services/user-service.js";
+import WellfoundFormHandler from "./wellfound-form-handler.js";
 import { StatusOverlay } from "../../services/index.js";
 
 export default class WellfoundPlatform extends BasePlatform {
+  // Update AI Service integration for form answers
   constructor(config) {
     super(config);
     this.platform = "wellfound";
@@ -17,18 +19,32 @@ export default class WellfoundPlatform extends BasePlatform {
     this.currentJobIndex = 0;
 
     // Initialize services with proper API host from config
-    const apiHost = config.apiHost || 
-                   config.config?.apiHost || 
-                   config.sessionContext?.apiHost ||
-                   "http://localhost:3000";
+    const apiHost =
+      config.apiHost ||
+      config.config?.apiHost ||
+      config.sessionContext?.apiHost ||
+      "http://localhost:3000";
     this.HOST = apiHost;
 
-    this.aiService = new AIService({ apiHost });
+    // Initialize AI service with enhanced form filling capability
+    this.aiService = new AIService({
+      apiHost,
+      userId: config.userId,
+      platform: "wellfound",
+    });
+
     this.appTracker = new ApplicationTrackerService({
       apiHost,
       userId: config.userId,
     });
     this.userService = new UserService({ apiHost, userId: config.userId });
+
+    // Initialize form handler
+    this.formHandler = new WellfoundFormHandler(
+      this.aiService,
+      this.userService,
+      this
+    );
 
     this.statusOverlay = new StatusOverlay({
       id: "wellfound-chatbot-overlay",
@@ -48,25 +64,31 @@ export default class WellfoundPlatform extends BasePlatform {
 
   async start(params = {}) {
     if (this.hasStarted) {
-      this.log("⚠️ Wellfound automation already started, ignoring duplicate start request");
-      this.statusOverlay.addWarning("Hey! I'm already working on finding you jobs. Let me finish this round first! 😊");
+      this.log(
+        "⚠️ Wellfound automation already started, ignoring duplicate start request"
+      );
+      this.statusOverlay.addWarning(
+        "Hey! I'm already working on finding you jobs. Let me finish this round first! 😊"
+      );
       return;
     }
 
     this.hasStarted = true;
     this.isRunning = true;
     this.log("🚀 Starting Wellfound automation with user preferences");
-    this.statusOverlay.addInfo("Alright, let's get you some amazing job opportunities on Wellfound! Let me start searching based on your preferences...");
+    this.statusOverlay.addInfo(
+      "Alright, let's get you some amazing job opportunities on Wellfound! Let me start searching based on your preferences..."
+    );
 
     try {
       // Setup configuration
-      this.config = { 
-        ...this.config, 
+      this.config = {
+        ...this.config,
         ...params,
         jobsToApply: params.jobsToApply || this.config.jobsToApply || 10,
         userId: params.userId || this.config.userId || this.userId,
         preferences: params.preferences || this.config.preferences || {},
-        apiHost: params.apiHost || this.config.apiHost || this.HOST
+        apiHost: params.apiHost || this.config.apiHost || this.HOST,
       };
 
       // Check user authorization
@@ -87,9 +109,11 @@ export default class WellfoundPlatform extends BasePlatform {
 
       // STEP 5: Process jobs sequentially
       this.automationStarted = true;
-      this.statusOverlay.updateStatus("applying", "Finding perfect matches for you");
+      this.statusOverlay.updateStatus(
+        "applying",
+        "Finding perfect matches for you"
+      );
       await this.processJobsSequentially();
-
     } catch (error) {
       this.hasStarted = false;
       this.reportError(error, { phase: "start" });
@@ -100,7 +124,9 @@ export default class WellfoundPlatform extends BasePlatform {
     const currentUrl = window.location.href.toLowerCase();
     if (!currentUrl.includes("wellfound.com/jobs")) {
       this.log("📍 Navigating to Wellfound Jobs");
-      this.statusOverlay.addInfo("Let me take you to the Wellfound jobs page! ✨");
+      this.statusOverlay.addInfo(
+        "Let me take you to the Wellfound jobs page! ✨"
+      );
       window.location.href = "https://wellfound.com/jobs";
       await this.delay(3000);
       await this.waitForPageLoad();
@@ -113,7 +139,7 @@ export default class WellfoundPlatform extends BasePlatform {
   async openFilterPanel() {
     try {
       this.statusOverlay.addInfo("Opening the filter panel...");
-      
+
       // Check if already open
       if (await this.isFilterPanelOpen()) {
         this.log("✅ Filter panel is already open!");
@@ -141,19 +167,27 @@ export default class WellfoundPlatform extends BasePlatform {
       }
     } catch (error) {
       this.log("⚠️ Failed to open filter panel:", error.message);
-      this.statusOverlay.addWarning("Couldn't open filter panel, but continuing...");
+      this.statusOverlay.addWarning(
+        "Couldn't open filter panel, but continuing..."
+      );
       return false;
     }
   }
 
   async findFiltersButton() {
     const strategies = [
-      () => document.querySelector('button[data-test="SearchBar-FiltersButton"]'),
-      () => document.querySelector('.styles_filtersIcon__WhlNp')?.closest('button'),
-      () => Array.from(document.querySelectorAll('button')).find(btn => 
-        btn.textContent?.toLowerCase().includes('filters')),
-      () => Array.from(document.querySelectorAll('[role="button"]')).find(btn => 
-        btn.textContent?.toLowerCase().includes('filters'))
+      () =>
+        document.querySelector('button[data-test="SearchBar-FiltersButton"]'),
+      () =>
+        document.querySelector(".styles_filtersIcon__WhlNp")?.closest("button"),
+      () =>
+        Array.from(document.querySelectorAll("button")).find((btn) =>
+          btn.textContent?.toLowerCase().includes("filters")
+        ),
+      () =>
+        Array.from(document.querySelectorAll('[role="button"]')).find((btn) =>
+          btn.textContent?.toLowerCase().includes("filters")
+        ),
     ];
 
     for (const strategy of strategies) {
@@ -170,9 +204,12 @@ export default class WellfoundPlatform extends BasePlatform {
     try {
       this.statusOverlay.addInfo("Applying your job preferences...");
       const preferences = this.config.preferences || {};
-      
+
       await this.applyPositionFilters(preferences.positions);
-      await this.applyLocationFilters(preferences.location, preferences.remoteOnly);
+      await this.applyLocationFilters(
+        preferences.location,
+        preferences.remoteOnly
+      );
       await this.applySalaryFilters(preferences.salary);
       await this.applyJobTypeFilters(preferences.jobType);
       await this.applyExperienceFilters(preferences.experience);
@@ -181,14 +218,16 @@ export default class WellfoundPlatform extends BasePlatform {
       this.statusOverlay.addSuccess("All your filters are applied!");
     } catch (error) {
       this.log("⚠️ Failed to apply some filters:", error.message);
-      this.statusOverlay.addWarning("Had trouble with some filters, but main search is working!");
+      this.statusOverlay.addWarning(
+        "Had trouble with some filters, but main search is working!"
+      );
     }
   }
 
   async showJobResults() {
     try {
       this.statusOverlay.addInfo("Loading your job matches...");
-      
+
       // Look for View Results button
       const viewResultsButton = await this.findViewResultsButton();
       if (viewResultsButton) {
@@ -198,11 +237,13 @@ export default class WellfoundPlatform extends BasePlatform {
 
       // Wait for job cards to load
       await this.waitForJobCards();
-      
-      const jobCards = document.querySelectorAll('.styles_component__uTjje');
+
+      const jobCards = document.querySelectorAll(".styles_component__uTjje");
       this.log(`✅ Found ${jobCards.length} job cards`);
-      this.statusOverlay.addSuccess(`Perfect! Found ${jobCards.length} job opportunities!`);
-      
+      this.statusOverlay.addSuccess(
+        `Perfect! Found ${jobCards.length} job opportunities!`
+      );
+
       return jobCards.length > 0;
     } catch (error) {
       this.log("❌ Failed to show job results:", error.message);
@@ -213,11 +254,18 @@ export default class WellfoundPlatform extends BasePlatform {
 
   async findViewResultsButton() {
     const strategies = [
-      () => document.querySelector('button[data-test="SearchBar-ViewResultsButton"]'),
-      () => Array.from(document.querySelectorAll('button')).find(btn => 
-        btn.textContent?.toLowerCase().includes('view results')),
-      () => Array.from(document.querySelectorAll('button')).find(btn => 
-        /\d+\s*results?/i.test(btn.textContent))
+      () =>
+        document.querySelector(
+          'button[data-test="SearchBar-ViewResultsButton"]'
+        ),
+      () =>
+        Array.from(document.querySelectorAll("button")).find((btn) =>
+          btn.textContent?.toLowerCase().includes("view results")
+        ),
+      () =>
+        Array.from(document.querySelectorAll("button")).find((btn) =>
+          /\d+\s*results?/i.test(btn.textContent)
+        ),
     ];
 
     for (const strategy of strategies) {
@@ -236,20 +284,28 @@ export default class WellfoundPlatform extends BasePlatform {
     const targetJobs = this.config.jobsToApply;
 
     try {
-      this.log(`🎯 Starting sequential job processing. Target: ${targetJobs} jobs`);
-      this.statusOverlay.addInfo(`Processing ${targetJobs} jobs sequentially...`);
+      this.log(
+        `🎯 Starting sequential job processing. Target: ${targetJobs} jobs`
+      );
+      this.statusOverlay.addInfo(
+        `Processing ${targetJobs} jobs sequentially...`
+      );
 
       while (appliedCount < targetJobs && this.isRunning) {
         // Get current job cards
         const jobCards = await this.getCurrentJobCards();
-        
+
         if (jobCards.length === 0) {
           this.statusOverlay.addWarning("No more job cards found!");
           break;
         }
 
         // Process each job card in sequence
-        for (let i = this.currentJobIndex; i < jobCards.length && appliedCount < targetJobs; i++) {
+        for (
+          let i = this.currentJobIndex;
+          i < jobCards.length && appliedCount < targetJobs;
+          i++
+        ) {
           if (!this.isRunning) break;
 
           const jobCard = jobCards[i];
@@ -278,14 +334,20 @@ export default class WellfoundPlatform extends BasePlatform {
 
             // STEP 5C: Check if job matches preferences
             if (!this.doesJobMatchPreferences(jobDetails)) {
-              this.log(`❌ Job "${jobDetails.title}" doesn't match preferences`);
-              this.statusOverlay.addInfo(`Skipping "${jobDetails.title}" - doesn't match preferences`);
+              this.log(
+                `❌ Job "${jobDetails.title}" doesn't match preferences`
+              );
+              this.statusOverlay.addInfo(
+                `Skipping "${jobDetails.title}" - doesn't match preferences`
+              );
               await this.returnToJobsList();
               continue;
             }
 
             // STEP 5D: Check if already applied
-            const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(jobDetails.jobId);
+            const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(
+              jobDetails.jobId
+            );
             if (alreadyApplied) {
               this.log(`⚠️ Already applied to "${jobDetails.title}"`);
               await this.returnToJobsList();
@@ -293,8 +355,10 @@ export default class WellfoundPlatform extends BasePlatform {
             }
 
             // STEP 5E: Extract form fields and apply
-            const applicationSuccess = await this.applyToJobWithFormHandling(jobDetails);
-            
+            const applicationSuccess = await this.applyToJobWithFormHandling(
+              jobDetails
+            );
+
             if (applicationSuccess) {
               appliedCount++;
               this.progress.completed = appliedCount;
@@ -303,7 +367,9 @@ export default class WellfoundPlatform extends BasePlatform {
               await this.userService.updateApplicationCount();
               await this.saveAppliedJob(jobDetails);
 
-              this.log(`✅ Successfully applied to job ${appliedCount}/${targetJobs}`);
+              this.log(
+                `✅ Successfully applied to job ${appliedCount}/${targetJobs}`
+              );
               this.statusOverlay.addSuccess(
                 `Applied to "${jobDetails.title}"! (${appliedCount}/${targetJobs})`
               );
@@ -316,13 +382,14 @@ export default class WellfoundPlatform extends BasePlatform {
             } else {
               this.progress.failed++;
               this.updateProgress({ failed: this.progress.failed });
-              this.statusOverlay.addError(`Failed to apply to "${jobDetails.title}"`);
+              this.statusOverlay.addError(
+                `Failed to apply to "${jobDetails.title}"`
+              );
             }
 
             // STEP 5F: Return to jobs list for next iteration
             await this.returnToJobsList();
             await this.delay(2000); // Delay between applications
-
           } catch (error) {
             this.log(`❌ Error processing job ${i + 1}:`, error.message);
             await this.returnToJobsList();
@@ -334,7 +401,9 @@ export default class WellfoundPlatform extends BasePlatform {
         if (appliedCount < targetJobs) {
           const hasMore = await this.loadMoreJobs();
           if (!hasMore) {
-            this.statusOverlay.addInfo("No more jobs available for your criteria");
+            this.statusOverlay.addInfo(
+              "No more jobs available for your criteria"
+            );
             break;
           }
           this.currentJobIndex = 0; // Reset index for new batch
@@ -342,9 +411,10 @@ export default class WellfoundPlatform extends BasePlatform {
       }
 
       // Complete the process
-      const message = appliedCount >= targetJobs
-        ? `🎉 Successfully applied to all ${appliedCount} target jobs!`
-        : `Applied to ${appliedCount} out of ${targetJobs} jobs. No more suitable matches found.`;
+      const message =
+        appliedCount >= targetJobs
+          ? `🎉 Successfully applied to all ${appliedCount} target jobs!`
+          : `Applied to ${appliedCount} out of ${targetJobs} jobs. No more suitable matches found.`;
 
       this.log(message);
       this.statusOverlay.addSuccess(message);
@@ -355,7 +425,6 @@ export default class WellfoundPlatform extends BasePlatform {
         appliedCount,
         processedCount,
       };
-
     } catch (error) {
       this.log("❌ Error in sequential job processing:", error.message);
       this.statusOverlay.addError("Error during job processing");
@@ -365,16 +434,17 @@ export default class WellfoundPlatform extends BasePlatform {
   }
 
   async getCurrentJobCards() {
-    await this.waitForElement('.styles_component__uTjje', 5000);
-    return Array.from(document.querySelectorAll('.styles_component__uTjje'));
+    await this.waitForElement(".styles_component__uTjje", 5000);
+    return Array.from(document.querySelectorAll(".styles_component__uTjje"));
   }
 
   async openJobDetails(jobCard) {
     try {
       // Find the Learn More button or job link
-      const learnMoreButton = jobCard.querySelector('button[data-test="LearnMoreButton"]') ||
-                             jobCard.querySelector('a[href*="/jobs/"]') ||
-                             jobCard.querySelector('.learn-more');
+      const learnMoreButton =
+        jobCard.querySelector('button[data-test="LearnMoreButton"]') ||
+        jobCard.querySelector('a[href*="/jobs/"]') ||
+        jobCard.querySelector(".learn-more");
 
       if (!learnMoreButton) {
         this.log("❌ No Learn More button found in job card");
@@ -386,8 +456,11 @@ export default class WellfoundPlatform extends BasePlatform {
       await this.delay(2000);
 
       // Wait for job details page to load
-      await this.waitForElement('.styles_description__xjvTf, .job-description', 8000);
-      
+      await this.waitForElement(
+        ".styles_description__xjvTf, .job-description",
+        8000
+      );
+
       this.log("✅ Job details page opened");
       return true;
     } catch (error) {
@@ -404,14 +477,14 @@ export default class WellfoundPlatform extends BasePlatform {
       const jobDetails = {
         jobId: this.extractJobIdFromUrl(window.location.href),
         title: this.extractText([
-          'h1.inline.text-xl.font-semibold.text-black',
-          'h1',
-          '.job-title'
+          "h1.inline.text-xl.font-semibold.text-black",
+          "h1",
+          ".job-title",
         ]),
         company: this.extractText([
           'a[rel="noopener noreferrer"] span.text-sm.font-semibold.text-black',
-          '.company-name',
-          '.text-sm.font-semibold.text-black'
+          ".company-name",
+          ".text-sm.font-semibold.text-black",
         ]),
         location: this.extractLocationInfo(),
         jobType: this.extractJobTypeInfo(),
@@ -428,14 +501,15 @@ export default class WellfoundPlatform extends BasePlatform {
       // Generate job ID if not found
       if (!jobDetails.jobId) {
         jobDetails.jobId = `${jobDetails.company}-${jobDetails.title}`
-          .replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+          .replace(/[^a-zA-Z0-9]/g, "")
+          .toLowerCase();
       }
 
       this.currentJobDetails = jobDetails;
       this.log("📋 Complete job details extracted:", {
         title: jobDetails.title,
         company: jobDetails.company,
-        hasFormFields: !!jobDetails.applicationFormFields
+        hasFormFields: !!jobDetails.applicationFormFields,
       });
 
       return jobDetails;
@@ -447,11 +521,13 @@ export default class WellfoundPlatform extends BasePlatform {
 
   extractLocationInfo() {
     try {
-      const locationElements = document.querySelectorAll('ul.block.text-md.text-black li');
+      const locationElements = document.querySelectorAll(
+        "ul.block.text-md.text-black li"
+      );
       for (const element of locationElements) {
         const text = element.textContent.trim();
-        if (text.includes('Remote') || text.includes('Location')) {
-          return text.split('|')[0].trim();
+        if (text.includes("Remote") || text.includes("Location")) {
+          return text.split("|")[0].trim();
         }
       }
       return "Not specified";
@@ -462,11 +538,17 @@ export default class WellfoundPlatform extends BasePlatform {
 
   extractJobTypeInfo() {
     try {
-      const typeElements = document.querySelectorAll('ul.block.text-md.text-black li');
+      const typeElements = document.querySelectorAll(
+        "ul.block.text-md.text-black li"
+      );
       for (const element of typeElements) {
         const text = element.textContent.trim();
-        if (text.includes('Full Time') || text.includes('Part Time') || text.includes('Contract')) {
-          return text.split('|').pop().trim();
+        if (
+          text.includes("Full Time") ||
+          text.includes("Part Time") ||
+          text.includes("Contract")
+        ) {
+          return text.split("|").pop().trim();
         }
       }
       return "Not specified";
@@ -476,18 +558,24 @@ export default class WellfoundPlatform extends BasePlatform {
   }
 
   extractJobDescription() {
-    const descriptionElement = document.querySelector('.styles_description__xjvTf') ||
-                              document.querySelector('#job-description') ||
-                              document.querySelector('.description');
-    return descriptionElement ? descriptionElement.textContent.trim() : "No description available";
+    const descriptionElement =
+      document.querySelector(".styles_description__xjvTf") ||
+      document.querySelector("#job-description") ||
+      document.querySelector(".description");
+    return descriptionElement
+      ? descriptionElement.textContent.trim()
+      : "No description available";
   }
 
   extractJobRequirements() {
     try {
       // Look for requirements section
-      const requirementsSection = Array.from(document.querySelectorAll('h3, h4, strong')).find(el =>
-        el.textContent.toLowerCase().includes('requirement') ||
-        el.textContent.toLowerCase().includes('qualification')
+      const requirementsSection = Array.from(
+        document.querySelectorAll("h3, h4, strong")
+      ).find(
+        (el) =>
+          el.textContent.toLowerCase().includes("requirement") ||
+          el.textContent.toLowerCase().includes("qualification")
       );
 
       if (requirementsSection) {
@@ -505,7 +593,7 @@ export default class WellfoundPlatform extends BasePlatform {
 
   extractSalaryInfo() {
     try {
-      const salaryElements = document.querySelectorAll('span, div, p');
+      const salaryElements = document.querySelectorAll("span, div, p");
       for (const element of salaryElements) {
         const text = element.textContent;
         if (text && /\$[\d,]+/.test(text)) {
@@ -521,9 +609,12 @@ export default class WellfoundPlatform extends BasePlatform {
   extractBenefits() {
     try {
       // Look for benefits section
-      const benefitsSection = Array.from(document.querySelectorAll('h3, h4, strong')).find(el =>
-        el.textContent.toLowerCase().includes('benefit') ||
-        el.textContent.toLowerCase().includes('perk')
+      const benefitsSection = Array.from(
+        document.querySelectorAll("h3, h4, strong")
+      ).find(
+        (el) =>
+          el.textContent.toLowerCase().includes("benefit") ||
+          el.textContent.toLowerCase().includes("perk")
       );
 
       if (benefitsSection) {
@@ -542,59 +633,178 @@ export default class WellfoundPlatform extends BasePlatform {
   // CRITICAL: Extract application form fields
   async extractApplicationFormFields() {
     try {
-      // Look for apply buttons first to see if there's a form
-      const applyButtons = document.querySelectorAll(
-        'button:contains("Apply"), a:contains("Apply"), [class*="apply"]'
+      // Look for apply buttons using proper CSS selectors
+      const applyButtonSelectors = [
+        'button[type="submit"]',
+        'button[data-test*="Apply"]',
+        'button[data-test*="Submit"]',
+        ".apply-button",
+        ".apply-btn",
+      ];
+
+      // Also look for buttons/links with "Apply" text
+      const allButtons = document.querySelectorAll("button, a");
+      const applyButtons = Array.from(allButtons).filter(
+        (btn) =>
+          btn.textContent && btn.textContent.toLowerCase().includes("apply")
       );
 
+      // Check CSS selector buttons
+      for (const selector of applyButtonSelectors) {
+        const buttons = document.querySelectorAll(selector);
+        applyButtons.push(...Array.from(buttons));
+      }
+
       if (applyButtons.length === 0) {
+        this.log("No apply buttons found");
         return null;
       }
 
-      // Click apply button to reveal form (if not external)
-      const applyButton = Array.from(applyButtons).find(btn => 
-        !btn.href && !btn.textContent.includes('website')
+      // Find non-external apply button
+      const internalApplyButton = applyButtons.find(
+        (btn) =>
+          !btn.href &&
+          !btn.textContent.toLowerCase().includes("website") &&
+          !btn.textContent.toLowerCase().includes("external")
       );
 
-      if (!applyButton) {
-        return { type: 'external', fields: [] };
+      if (!internalApplyButton) {
+        return { type: "external", fields: [] };
       }
 
-      // Click apply to reveal form
-      await this.clickElementReliably(applyButton);
-      await this.delay(2000);
+      // Click apply to reveal form (if not already visible)
+      const existingForm = document.querySelector("form");
+      if (
+        !existingForm ||
+        existingForm.querySelectorAll("input, textarea, select").length === 0
+      ) {
+        await this.clickElementReliably(internalApplyButton);
+        await this.delay(3000);
+      }
 
-      // Extract form fields
-      const formFields = [];
-      const form = document.querySelector('form') || document.querySelector('[role="dialog"]');
+      // Extract comprehensive form fields
+      const formFields = await this.extractFormFieldsWithQuestions();
+      const form =
+        document.querySelector("form") ||
+        document.querySelector('[role="dialog"]');
 
-      if (form) {
-        const inputs = form.querySelectorAll('input, textarea, select');
-        
-        for (const input of inputs) {
-          if (input.type === 'hidden' || input.type === 'submit') continue;
-
-          const fieldInfo = {
-            name: input.name || input.id || input.placeholder,
-            type: input.type || input.tagName.toLowerCase(),
-            placeholder: input.placeholder,
-            required: input.required,
-            selector: this.generateSelector(input)
-          };
-
-          formFields.push(fieldInfo);
-        }
+      if (!form || formFields.length === 0) {
+        this.log("No form or form fields found");
+        return null;
       }
 
       return {
-        type: 'form',
+        type: "form",
         fields: formFields,
-        formSelector: form ? this.generateSelector(form) : null
+        formSelector: form ? this.generateSelector(form) : "form",
       };
-
     } catch (error) {
       this.log("❌ Failed to extract form fields:", error.message);
       return null;
+    }
+  }
+
+  async extractFormFieldsWithQuestions() {
+    try {
+      const formFields = [];
+      const form = document.querySelector("form");
+
+      if (!form) return formFields;
+
+      // Get all input elements
+      const inputs = form.querySelectorAll("input, textarea, select");
+
+      for (const input of inputs) {
+        if (input.type === "hidden" || input.type === "submit") continue;
+
+        // Find the associated label/question
+        const fieldInfo = {
+          element: input,
+          name: input.name || input.id,
+          type: input.type || input.tagName.toLowerCase(),
+          placeholder: input.placeholder || "",
+          required: input.required || input.hasAttribute("required"),
+          selector: this.generateSelector(input),
+          question: this.extractQuestionForField(input),
+          value: input.value || "",
+        };
+
+        // Skip if we can't identify the field
+        if (!fieldInfo.name && !fieldInfo.question) continue;
+
+        formFields.push(fieldInfo);
+        this.log(
+          `📝 Found form field: ${fieldInfo.question || fieldInfo.name}`
+        );
+      }
+
+      return formFields;
+    } catch (error) {
+      this.log(
+        "❌ Error extracting form fields with questions:",
+        error.message
+      );
+      return [];
+    }
+  }
+
+  extractQuestionForField(input) {
+    try {
+      // Strategy 1: Look for associated label
+      if (input.id) {
+        const label = document.querySelector(`label[for="${input.id}"]`);
+        if (label) {
+          return label.textContent.trim();
+        }
+      }
+
+      // Strategy 2: Look for parent label
+      const parentLabel = input.closest("label");
+      if (parentLabel) {
+        // Get text content excluding the input itself
+        const labelText = Array.from(parentLabel.childNodes)
+          .filter(
+            (node) =>
+              node.nodeType === Node.TEXT_NODE ||
+              (node.nodeType === Node.ELEMENT_NODE && node !== input)
+          )
+          .map((node) => node.textContent || "")
+          .join(" ")
+          .trim();
+        if (labelText) return labelText;
+      }
+
+      // Strategy 3: Look for preceding text elements
+      const container = input.closest("div") || input.parentElement;
+      if (container) {
+        const textElements = container.querySelectorAll(
+          "div, span, p, h1, h2, h3, h4, h5, h6"
+        );
+        for (const element of textElements) {
+          const text = element.textContent?.trim();
+          if (
+            (text && text.length > 5 && text.includes("?")) ||
+            text.includes(":")
+          ) {
+            return text;
+          }
+        }
+      }
+
+      // Strategy 4: Look for any preceding text
+      let current = input.previousElementSibling;
+      while (current && current !== container) {
+        const text = current.textContent?.trim();
+        if (text && text.length > 5) {
+          return text;
+        }
+        current = current.previousElementSibling;
+      }
+
+      // Strategy 5: Use placeholder or name as fallback
+      return input.placeholder || input.name || "Unknown field";
+    } catch (error) {
+      return input.placeholder || input.name || "Unknown field";
     }
   }
 
@@ -605,15 +815,17 @@ export default class WellfoundPlatform extends BasePlatform {
 
       // If we already extracted form fields, use them
       if (jobDetails.applicationFormFields) {
-        if (jobDetails.applicationFormFields.type === 'external') {
-          this.statusOverlay.addInfo(`"${jobDetails.title}" requires external application`);
+        if (jobDetails.applicationFormFields.type === "external") {
+          this.statusOverlay.addInfo(
+            `"${jobDetails.title}" requires external application`
+          );
           await this.saveExternalJob(jobDetails);
           return false; // Don't count as automated application
         }
 
         // Fill and submit the form
         const success = await this.fillAndSubmitApplicationForm(
-          jobDetails.applicationFormFields, 
+          jobDetails.applicationFormFields,
           jobDetails
         );
 
@@ -621,7 +833,9 @@ export default class WellfoundPlatform extends BasePlatform {
           // Verify application success
           const verified = await this.verifyApplicationSuccess();
           if (verified) {
-            this.statusOverlay.addSuccess(`Successfully applied to "${jobDetails.title}"!`);
+            this.statusOverlay.addSuccess(
+              `Successfully applied to "${jobDetails.title}"!`
+            );
             return true;
           }
         }
@@ -630,9 +844,10 @@ export default class WellfoundPlatform extends BasePlatform {
       // Fallback: try to find and click apply button
       const applyButton = await this.findApplyButton();
       if (applyButton) {
-        const isExternal = applyButton.href || 
-                          applyButton.textContent.includes('website') ||
-                          applyButton.textContent.includes('external');
+        const isExternal =
+          applyButton.href ||
+          applyButton.textContent.includes("website") ||
+          applyButton.textContent.includes("external");
 
         if (isExternal) {
           await this.saveExternalJob(jobDetails);
@@ -650,9 +865,10 @@ export default class WellfoundPlatform extends BasePlatform {
         }
       }
 
-      this.statusOverlay.addWarning(`No applicable form found for "${jobDetails.title}"`);
+      this.statusOverlay.addWarning(
+        `No applicable form found for "${jobDetails.title}"`
+      );
       return false;
-
     } catch (error) {
       this.log("❌ Failed to apply to job:", error.message);
       this.statusOverlay.addError(`Error applying to "${jobDetails.title}"`);
@@ -679,70 +895,329 @@ export default class WellfoundPlatform extends BasePlatform {
         return false;
       }
 
-      // Fill each field
+      this.statusOverlay.addInfo(
+        "🤖 Using AI to generate perfect answers for the application questions..."
+      );
+
+      // Check for form errors before proceeding
+      const initialValidation = await this.validateFormBeforeSubmission(
+        form,
+        formInfo.fields
+      );
+      if (
+        !initialValidation.valid &&
+        initialValidation.error.toLowerCase().includes("location")
+      ) {
+        return await this.handleApplicationError(
+          jobDetails,
+          initialValidation.error
+        );
+      }
+
+      // Fill each field using AI if needed
       for (const fieldInfo of formInfo.fields) {
-        await this.fillFormField(fieldInfo, userDetails, jobDetails);
-        await this.delay(300); // Small delay between fields
+        await this.fillFormFieldWithAI(fieldInfo, userDetails, jobDetails);
+        await this.delay(500); // Delay between fields
+      }
+
+      // Validate form before submission
+      const validation = await this.validateFormBeforeSubmission(
+        form,
+        formInfo.fields
+      );
+      if (!validation.valid) {
+        this.log(`❌ Form validation failed: ${validation.error}`);
+
+        // Check if it's a location error
+        if (
+          validation.error.toLowerCase().includes("location") ||
+          validation.error.toLowerCase().includes("timezone")
+        ) {
+          return await this.handleApplicationError(
+            jobDetails,
+            validation.error
+          );
+        }
+
+        this.statusOverlay.addError(
+          `Form validation failed: ${validation.error}`
+        );
+        return false;
       }
 
       // Submit the form
-      const submitButton = form.querySelector('button[type="submit"], .submit-btn, button:contains("Submit")');
-      if (submitButton) {
+      const submitButton =
+        form.querySelector('button[type="submit"], .submit-btn') ||
+        form.querySelector('button[data-test*="Submit"]');
+
+      if (submitButton && !submitButton.disabled) {
+        this.statusOverlay.addInfo("Submitting your application...");
         await this.clickElementReliably(submitButton);
         await this.delay(3000);
         return true;
       } else {
-        this.log("❌ No submit button found");
+        this.log("❌ No submit button found or button is disabled");
+
+        // Check if it's due to form errors
+        const errorCheck = await this.validateFormBeforeSubmission(
+          form,
+          formInfo.fields
+        );
+        if (!errorCheck.valid) {
+          return await this.handleApplicationError(
+            jobDetails,
+            errorCheck.error
+          );
+        }
+
         return false;
       }
-
     } catch (error) {
       this.log("❌ Error filling and submitting form:", error.message);
       return false;
     }
   }
 
-  async fillFormField(fieldInfo, userDetails, jobDetails) {
+  async fillFormFieldWithAI(fieldInfo, userDetails, jobDetails) {
     try {
       const field = document.querySelector(fieldInfo.selector);
-      if (!field) return;
-
-      let value = "";
-
-      // Map field to user data
-      const fieldName = (fieldInfo.name || fieldInfo.placeholder || "").toLowerCase();
-      
-      if (fieldName.includes('name') && !fieldName.includes('company')) {
-        value = `${userDetails.firstName} ${userDetails.lastName}`;
-      } else if (fieldName.includes('first') || fieldName.includes('fname')) {
-        value = userDetails.firstName;
-      } else if (fieldName.includes('last') || fieldName.includes('lname')) {
-        value = userDetails.lastName;
-      } else if (fieldName.includes('email')) {
-        value = userDetails.email;
-      } else if (fieldName.includes('phone')) {
-        value = userDetails.phoneNumber;
-      } else if (fieldName.includes('linkedin')) {
-        value = userDetails.linkedIn;
-      } else if (fieldName.includes('website') || fieldName.includes('portfolio')) {
-        value = userDetails.website;
-      } else if (fieldName.includes('github')) {
-        value = userDetails.github;
-      } else if (fieldName.includes('cover') || fieldName.includes('letter')) {
-        value = this.generateCoverLetter(userDetails, jobDetails);
-      } else if (fieldName.includes('resume') || fieldName.includes('cv')) {
-        // Handle file upload separately
+      if (!field || field.disabled) {
+        this.log(`⚠️ Field not found or disabled: ${fieldInfo.name}`);
         return;
       }
 
-      if (value) {
-        field.value = value;
-        field.dispatchEvent(new Event('input', { bubbles: true }));
-        field.dispatchEvent(new Event('change', { bubbles: true }));
+      let value = "";
+
+      // First try standard field mapping
+      value = this.getStandardFieldValue(fieldInfo, userDetails, jobDetails);
+
+      // If no standard mapping and it's a question field, use AI
+      if (!value && fieldInfo.question && fieldInfo.question.length > 10) {
+        this.statusOverlay.addInfo(
+          `🤖 Generating AI answer for: "${fieldInfo.question.substring(
+            0,
+            50
+          )}..."`
+        );
+        value = await this.generateAIAnswer(
+          fieldInfo.question,
+          userDetails,
+          jobDetails
+        );
       }
 
+      // Fill the field
+      if (value) {
+        field.focus();
+        field.value = value;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+
+        this.log(
+          `✅ Filled field "${
+            fieldInfo.question || fieldInfo.name
+          }" with AI-generated content`
+        );
+        this.statusOverlay.addInfo(
+          `✅ Generated answer for "${fieldInfo.question?.substring(0, 30)}..."`
+        );
+      }
     } catch (error) {
-      this.log("❌ Error filling field:", error.message);
+      this.log("❌ Error filling field with AI:", error.message);
+    }
+  }
+
+  getStandardFieldValue(fieldInfo, userDetails, jobDetails) {
+    const fieldName = (
+      fieldInfo.name ||
+      fieldInfo.placeholder ||
+      fieldInfo.question ||
+      ""
+    ).toLowerCase();
+
+    // Standard field mappings
+    if (fieldName.includes("name") && !fieldName.includes("company")) {
+      return `${userDetails.firstName} ${userDetails.lastName}`;
+    } else if (fieldName.includes("first")) {
+      return userDetails.firstName;
+    } else if (fieldName.includes("last")) {
+      return userDetails.lastName;
+    } else if (fieldName.includes("email")) {
+      return userDetails.email;
+    } else if (fieldName.includes("phone")) {
+      return userDetails.phoneNumber;
+    } else if (fieldName.includes("linkedin")) {
+      return userDetails.linkedIn;
+    } else if (
+      fieldName.includes("website") ||
+      fieldName.includes("portfolio")
+    ) {
+      return userDetails.website;
+    } else if (fieldName.includes("github")) {
+      return userDetails.github;
+    }
+
+    return "";
+  }
+
+  async generateAIAnswer(question, userDetails, jobDetails) {
+    try {
+      this.log(`🤖 Generating AI answer for question: ${question}`);
+
+      // Prepare context for AI
+      const context = {
+        question: question,
+        jobTitle: jobDetails.title,
+        company: jobDetails.company,
+        jobDescription: jobDetails.description?.substring(0, 500), // Limit description length
+        userProfile: {
+          name: `${userDetails.firstName} ${userDetails.lastName}`,
+          email: userDetails.email,
+          experience:
+            userDetails.experience || userDetails.resumeText?.substring(0, 300),
+          skills: userDetails.skills || [],
+          linkedIn: userDetails.linkedIn,
+          github: userDetails.github,
+          website: userDetails.website,
+        },
+      };
+
+      // Use AI service to generate answer
+      const aiResponse = await this.aiService.generateApplicationAnswer(
+        context
+      );
+
+      if (aiResponse && aiResponse.answer) {
+        this.log(
+          `✅ AI generated answer: ${aiResponse.answer.substring(0, 100)}...`
+        );
+        return aiResponse.answer;
+      } else {
+        // Fallback to generic answer
+        return this.generateFallbackAnswer(question, userDetails, jobDetails);
+      }
+    } catch (error) {
+      this.log("❌ Error generating AI answer:", error.message);
+      // Fallback to generic answer
+      return this.generateFallbackAnswer(question, userDetails, jobDetails);
+    }
+  }
+
+  generateFallbackAnswer(question, userDetails, jobDetails) {
+    const questionLower = question.toLowerCase();
+
+    // Side project question
+    if (questionLower.includes("side project")) {
+      return `I recently developed a web application using modern technologies like React and Node.js. This project helped me improve my full-stack development skills and gave me experience with database design, API development, and user interface optimization. You can view my projects on my GitHub profile: ${
+        userDetails.github || "Available upon request"
+      }`;
+    }
+
+    // Reference question
+    if (
+      questionLower.includes("reference") ||
+      questionLower.includes("linkedin")
+    ) {
+      return `I can provide professional references from previous colleagues and supervisors. Please feel free to reach out to me directly to discuss references, as I prefer to notify my contacts before sharing their information. My LinkedIn profile is: ${
+        userDetails.linkedIn || "Available upon request"
+      }`;
+    }
+
+    // Cover letter style questions
+    if (questionLower.includes("why") || questionLower.includes("interest")) {
+      return `I am excited about the ${jobDetails.title} position at ${jobDetails.company} because it aligns perfectly with my technical skills and career goals. I am passionate about creating innovative solutions and contributing to a team that values technical excellence and growth.`;
+    }
+
+    // Experience questions
+    if (
+      questionLower.includes("experience") ||
+      questionLower.includes("background")
+    ) {
+      return `I have solid experience in software development with expertise in modern technologies and frameworks. I'm passionate about writing clean, efficient code and collaborating with teams to deliver high-quality products. I'm always eager to learn new technologies and take on challenging projects.`;
+    }
+
+    // Generic fallback
+    return `I am very interested in this opportunity and believe my skills and experience make me a strong candidate for the ${jobDetails.title} position. I would welcome the chance to discuss how I can contribute to ${jobDetails.company}'s success.`;
+  }
+
+  // Enhanced error handling for location/timezone constraints
+  async handleApplicationError(jobDetails, errorMessage) {
+    try {
+      // Check for location/timezone constraint errors
+      const isLocationError =
+        errorMessage.toLowerCase().includes("location") ||
+        errorMessage.toLowerCase().includes("timezone") ||
+        errorMessage.toLowerCase().includes("relocation");
+
+      if (isLocationError) {
+        this.log(`⚠️ Location constraint for job: ${jobDetails.title}`);
+        this.statusOverlay.addWarning(
+          `"${jobDetails.title}" has location/timezone restrictions. Saving for manual review.`
+        );
+
+        // Save as external job for manual handling
+        await this.saveExternalJob({
+          ...jobDetails,
+          applicationError: errorMessage,
+          errorType: "location_constraint",
+        });
+
+        return false; // Don't count as failed application
+      }
+
+      // Handle other types of errors
+      this.log(`❌ Application error: ${errorMessage}`);
+      this.statusOverlay.addError(
+        `Error applying to "${jobDetails.title}": ${errorMessage}`
+      );
+      return false;
+    } catch (error) {
+      this.log("❌ Error handling application error:", error.message);
+      return false;
+    }
+  }
+
+  // Enhanced form validation before submission
+  async validateFormBeforeSubmission(form, formFields) {
+    try {
+      // Check for error messages in the form
+      const errorElements = form.querySelectorAll(
+        '.error, .field-error, [class*="error"]'
+      );
+      for (const errorEl of errorElements) {
+        const errorText = errorEl.textContent?.trim();
+        if (errorText && errorText.length > 0) {
+          this.log(`⚠️ Form validation error: ${errorText}`);
+          return { valid: false, error: errorText };
+        }
+      }
+
+      // Check if all required fields are filled
+      const requiredFields = formFields.filter((field) => field.required);
+      for (const field of requiredFields) {
+        const element = document.querySelector(field.selector);
+        if (element && (!element.value || element.value.trim().length === 0)) {
+          this.log(
+            `⚠️ Required field not filled: ${field.question || field.name}`
+          );
+          return {
+            valid: false,
+            error: `Required field not filled: ${field.question || field.name}`,
+          };
+        }
+      }
+
+      // Check if submit button is enabled
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton && submitButton.disabled) {
+        this.log("⚠️ Submit button is disabled");
+        return { valid: false, error: "Submit button is disabled" };
+      }
+
+      return { valid: true };
+    } catch (error) {
+      this.log("❌ Error validating form:", error.message);
+      return { valid: false, error: error.message };
     }
   }
 
@@ -750,44 +1225,23 @@ export default class WellfoundPlatform extends BasePlatform {
     try {
       // Wait for form to appear
       await this.delay(2000);
-      
-      const form = document.querySelector('form') || 
-                  document.querySelector('[role="dialog"] form') ||
-                  document.querySelector('.application-form');
 
-      if (!form) return false;
+      // Use form handler for any dynamic forms that appear
+      const formData = await this.formHandler.extractApplicationForm();
 
-      // Get user details
-      const userDetails = await this.userService.getUserDetails();
-      if (!userDetails) return false;
-
-      // Fill common fields
-      const fieldMappings = {
-        'input[name*="name"], input[placeholder*="name"]': `${userDetails.firstName} ${userDetails.lastName}`,
-        'input[name*="email"], input[placeholder*="email"]': userDetails.email,
-        'input[name*="phone"], input[placeholder*="phone"]': userDetails.phoneNumber,
-        'textarea[name*="cover"], textarea[placeholder*="cover"]': this.generateCoverLetter(userDetails, jobDetails)
-      };
-
-      for (const [selector, value] of Object.entries(fieldMappings)) {
-        const field = form.querySelector(selector);
-        if (field && value) {
-          field.value = value;
-          field.dispatchEvent(new Event('input', { bubbles: true }));
-          field.dispatchEvent(new Event('change', { bubbles: true }));
-          await this.delay(300);
-        }
+      if (!formData || !formData.isValid) {
+        return false;
       }
 
-      // Submit form
-      const submitButton = form.querySelector('button[type="submit"], .submit');
-      if (submitButton) {
-        await this.clickElementReliably(submitButton);
-        await this.delay(3000);
-        return true;
-      }
+      // Fill and submit using form handler
+      const fillSuccess = await this.formHandler.fillFormWithAI(
+        formData,
+        jobDetails
+      );
+      if (!fillSuccess) return false;
 
-      return false;
+      const submitSuccess = await this.formHandler.submitForm(formData);
+      return submitSuccess;
     } catch (error) {
       this.log("❌ Error handling dynamic form:", error.message);
       return false;
@@ -795,49 +1249,8 @@ export default class WellfoundPlatform extends BasePlatform {
   }
 
   async verifyApplicationSuccess() {
-    try {
-      await this.delay(2000);
-
-      // Look for success indicators
-      const successSelectors = [
-        '.success',
-        '.confirmation',
-        '[class*="success"]',
-        '[class*="confirm"]'
-      ];
-
-      for (const selector of successSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          this.log("✅ Application success verified");
-          return true;
-        }
-      }
-
-      // Look for success text
-      const successTexts = [
-        'application submitted',
-        'thank you',
-        'successfully applied',
-        'application received'
-      ];
-
-      const bodyText = document.body.textContent.toLowerCase();
-      for (const text of successTexts) {
-        if (bodyText.includes(text)) {
-          this.log("✅ Application success verified by text");
-          return true;
-        }
-      }
-
-      // If no explicit success, assume success if no error
-      this.log("⚠️ Could not verify success, assuming success");
-      return true;
-
-    } catch (error) {
-      this.log("❌ Error verifying application success:", error.message);
-      return false;
-    }
+    // Use form handler's verification method
+    return await this.formHandler.verifySubmissionSuccess();
   }
 
   async returnToJobsList() {
@@ -847,7 +1260,7 @@ export default class WellfoundPlatform extends BasePlatform {
       await this.delay(2000);
 
       // Verify we're back on jobs list
-      const jobCards = document.querySelectorAll('.styles_component__uTjje');
+      const jobCards = document.querySelectorAll(".styles_component__uTjje");
       if (jobCards.length > 0) {
         this.log("✅ Successfully returned to jobs list");
         return true;
@@ -857,7 +1270,7 @@ export default class WellfoundPlatform extends BasePlatform {
       window.location.href = "https://wellfound.com/jobs";
       await this.delay(3000);
       await this.waitForJobCards();
-      
+
       return true;
     } catch (error) {
       this.log("❌ Error returning to jobs list:", error.message);
@@ -869,19 +1282,24 @@ export default class WellfoundPlatform extends BasePlatform {
   async clickElementReliably(element) {
     const strategies = [
       () => element.click(),
-      () => element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })),
+      () =>
+        element.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true })
+        ),
       () => {
-        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       },
       () => {
         element.focus();
-        element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-      }
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+        );
+      },
     ];
 
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
     await this.delay(500);
 
     for (const strategy of strategies) {
@@ -900,16 +1318,21 @@ export default class WellfoundPlatform extends BasePlatform {
   generateSelector(element) {
     if (element.id) return `#${element.id}`;
     if (element.name) return `[name="${element.name}"]`;
-    if (element.className) return `.${element.className.split(' ')[0]}`;
+    if (element.className) return `.${element.className.split(" ")[0]}`;
     return element.tagName.toLowerCase();
   }
 
   generateCoverLetter(userDetails, jobDetails) {
     return `Dear ${jobDetails.company} team,
 
-I am excited to apply for the ${jobDetails.title} position at ${jobDetails.company}. With my background in software development and passion for innovative solutions, I believe I would be a valuable addition to your team.
+I am excited to apply for the ${jobDetails.title} position at ${
+      jobDetails.company
+    }. With my background in software development and passion for innovative solutions, I believe I would be a valuable addition to your team.
 
-${userDetails.coverLetter || 'I am eager to contribute to your organization and would welcome the opportunity to discuss how my skills align with your needs.'}
+${
+  userDetails.coverLetter ||
+  "I am eager to contribute to your organization and would welcome the opportunity to discuss how my skills align with your needs."
+}
 
 Best regards,
 ${userDetails.firstName} ${userDetails.lastName}`;
@@ -931,18 +1354,19 @@ ${userDetails.firstName} ${userDetails.lastName}`;
     try {
       // Check for filter panel indicators
       const filterPanelSelectors = [
-        '.styles_component__Har6x.styles_filterControlPanel__oOSuu', // From the DOM structure
+        ".styles_component__Har6x.styles_filterControlPanel__oOSuu", // From the DOM structure
         '[class*="filterControlPanel"]',
         '[class*="filter"][class*="panel"]',
-        '.styles_row__yDVEM', // Filter sections
+        ".styles_row__yDVEM", // Filter sections
         'input[placeholder="Minimum salary"]', // Salary filter
         'input[value="full_time"]', // Job type filters
-        '.styles_component__t6wv_' // Filter components
+        ".styles_component__t6wv_", // Filter components
       ];
 
       for (const selector of filterPanelSelectors) {
         const element = document.querySelector(selector);
-        if (element && element.offsetParent !== null) { // Check if visible
+        if (element && element.offsetParent !== null) {
+          // Check if visible
           this.log(`✅ Filter panel detected via selector: ${selector}`);
           return true;
         }
@@ -961,21 +1385,27 @@ ${userDetails.firstName} ${userDetails.lastName}`;
 
     try {
       // Find and click the role selection button from the DOM structure
-      const roleButton = document.querySelector('button[data-test="SearchBar-RoleSelect-FocusButton"]');
+      const roleButton = document.querySelector(
+        'button[data-test="SearchBar-RoleSelect-FocusButton"]'
+      );
       if (roleButton) {
         roleButton.click();
         await this.delay(1000);
 
         // Look for the search input that appears after clicking
-        const searchInput = document.querySelector('input[placeholder*="search" i], input[data-test*="role" i]');
+        const searchInput = document.querySelector(
+          'input[placeholder*="search" i], input[data-test*="role" i]'
+        );
         if (searchInput) {
           searchInput.value = positions.join(", ");
-          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-          searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+          searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+          searchInput.dispatchEvent(new Event("change", { bubbles: true }));
           await this.delay(500);
-          
+
           // Press Enter to confirm
-          searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+          searchInput.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter" })
+          );
           await this.delay(500);
         }
       }
@@ -986,18 +1416,25 @@ ${userDetails.firstName} ${userDetails.lastName}`;
 
   async applyLocationFilters(location, remoteOnly) {
     try {
-      if (remoteOnly || (location?.includes("Remote"))) {
+      if (remoteOnly || location?.includes("Remote")) {
         // Click the remote toggle button that shows "Africa" in the provided DOM
-        const remoteButton = document.querySelector('button[class*="remoteOpen"]');
+        const remoteButton = document.querySelector(
+          'button[class*="remoteOpen"]'
+        );
         if (remoteButton) {
           remoteButton.click();
           await this.delay(1000);
-          
+
           // Select the appropriate region - looking for "Africa" as shown in DOM
-          const regionOptions = document.querySelectorAll('button[class*="component"] .flex .label');
+          const regionOptions = document.querySelectorAll(
+            'button[class*="component"] .flex .label'
+          );
           for (const option of regionOptions) {
-            if (option.textContent.includes('Africa') || option.textContent.includes('Remote')) {
-              option.closest('button').click();
+            if (
+              option.textContent.includes("Africa") ||
+              option.textContent.includes("Remote")
+            ) {
+              option.closest("button").click();
               await this.delay(500);
               break;
             }
@@ -1005,16 +1442,20 @@ ${userDetails.firstName} ${userDetails.lastName}`;
         }
       } else if (location?.length) {
         // Handle specific location selection
-        const locationButton = document.querySelector('button[class*="locationField"]');
+        const locationButton = document.querySelector(
+          'button[class*="locationField"]'
+        );
         if (locationButton) {
           locationButton.click();
           await this.delay(1000);
-          
+
           // Select the appropriate location
-          const locationOptions = document.querySelectorAll('span[class*="label"]');
+          const locationOptions = document.querySelectorAll(
+            'span[class*="label"]'
+          );
           for (const option of locationOptions) {
             if (option.textContent.includes(location[0])) {
-              option.closest('button').click();
+              option.closest("button").click();
               await this.delay(500);
               break;
             }
@@ -1031,26 +1472,34 @@ ${userDetails.firstName} ${userDetails.lastName}`;
 
     try {
       const [minSalary, maxSalary] = salary;
-      
+
       // Based on the DOM structure, find the active salary filter section
-      const salarySection = document.querySelector('.styles_component__t6wv_.styles_active__dGRaC');
-      if (salarySection && salarySection.querySelector('h5')?.textContent?.includes('Salary')) {
-        
+      const salarySection = document.querySelector(
+        ".styles_component__t6wv_.styles_active__dGRaC"
+      );
+      if (
+        salarySection &&
+        salarySection.querySelector("h5")?.textContent?.includes("Salary")
+      ) {
         // Find salary input fields within this section
-        const minSalaryInput = salarySection.querySelector('input[placeholder="Minimum salary"]');
-        const maxSalaryInput = salarySection.querySelector('input[placeholder="Maximum (optional)"]');
-        
+        const minSalaryInput = salarySection.querySelector(
+          'input[placeholder="Minimum salary"]'
+        );
+        const maxSalaryInput = salarySection.querySelector(
+          'input[placeholder="Maximum (optional)"]'
+        );
+
         if (minSalaryInput && minSalary > 0) {
           minSalaryInput.value = minSalary.toString();
-          minSalaryInput.dispatchEvent(new Event('input', { bubbles: true }));
-          minSalaryInput.dispatchEvent(new Event('change', { bubbles: true }));
+          minSalaryInput.dispatchEvent(new Event("input", { bubbles: true }));
+          minSalaryInput.dispatchEvent(new Event("change", { bubbles: true }));
           await this.delay(300);
         }
-        
+
         if (maxSalaryInput && maxSalary > 0) {
           maxSalaryInput.value = maxSalary.toString();
-          maxSalaryInput.dispatchEvent(new Event('input', { bubbles: true }));
-          maxSalaryInput.dispatchEvent(new Event('change', { bubbles: true }));
+          maxSalaryInput.dispatchEvent(new Event("input", { bubbles: true }));
+          maxSalaryInput.dispatchEvent(new Event("change", { bubbles: true }));
           await this.delay(300);
         }
       }
@@ -1064,22 +1513,28 @@ ${userDetails.firstName} ${userDetails.lastName}`;
 
     try {
       // Find the Job Types section in the filter panel
-      const jobTypesSection = document.querySelector('.styles_component__t6wv_.styles_active__dGRaC');
-      if (jobTypesSection && jobTypesSection.querySelector('h5')?.textContent?.includes('Job Types')) {
-        
+      const jobTypesSection = document.querySelector(
+        ".styles_component__t6wv_.styles_active__dGRaC"
+      );
+      if (
+        jobTypesSection &&
+        jobTypesSection.querySelector("h5")?.textContent?.includes("Job Types")
+      ) {
         // Map user job types to the available checkboxes
         const jobTypeMap = {
           "Full-time": "full_time",
-          "Part-time": "part_time", 
-          "Contract": "contract",
-          "Internship": "internship",
-          "Temporary": "cofounder" // This might map differently in Wellfound
+          "Part-time": "part_time",
+          Contract: "contract",
+          Internship: "internship",
+          Temporary: "cofounder", // This might map differently in Wellfound
         };
 
         for (const jobType of jobTypes) {
           const mappedType = jobTypeMap[jobType];
           if (mappedType) {
-            const checkbox = jobTypesSection.querySelector(`input[value="${mappedType}"]`);
+            const checkbox = jobTypesSection.querySelector(
+              `input[value="${mappedType}"]`
+            );
             if (checkbox && !checkbox.checked) {
               checkbox.click();
               await this.delay(300);
@@ -1106,7 +1561,7 @@ ${userDetails.firstName} ${userDetails.lastName}`;
 
   async waitForJobCards() {
     try {
-      await this.waitForElement('.styles_component__uTjje', 10000);
+      await this.waitForElement(".styles_component__uTjje", 10000);
       await this.delay(2000); // Additional wait for cards to fully load
       this.log("✅ Job cards loaded");
     } catch (error) {
@@ -1126,17 +1581,20 @@ ${userDetails.firstName} ${userDetails.lastName}`;
       );
 
       if (!hasMatchingPosition) {
-        this.log(`❌ Job title "${jobDetails.title}" doesn't match required positions`);
+        this.log(
+          `❌ Job title "${jobDetails.title}" doesn't match required positions`
+        );
         return false;
       }
     }
 
     // Check remote preference
     if (preferences.remoteOnly) {
-      const isRemote = jobDetails.location?.toLowerCase().includes('remote') || 
-                      jobDetails.location?.toLowerCase().includes('anywhere') ||
-                      jobDetails.description?.toLowerCase().includes('remote');
-      
+      const isRemote =
+        jobDetails.location?.toLowerCase().includes("remote") ||
+        jobDetails.location?.toLowerCase().includes("anywhere") ||
+        jobDetails.description?.toLowerCase().includes("remote");
+
       if (!isRemote) {
         this.log(`❌ Job "${jobDetails.title}" is not remote`);
         return false;
@@ -1149,19 +1607,15 @@ ${userDetails.firstName} ${userDetails.lastName}`;
   extractJobIdFromUrl(url) {
     try {
       // Try to extract job ID from Wellfound URL patterns
-      const patterns = [
-        /\/jobs\/(\d+)/,
-        /jobId=(\d+)/,
-        /job[_-](\d+)/
-      ];
-      
+      const patterns = [/\/jobs\/(\d+)/, /jobId=(\d+)/, /job[_-](\d+)/];
+
       for (const pattern of patterns) {
         const match = url.match(pattern);
         if (match) {
           return match[1];
         }
       }
-      
+
       return null;
     } catch (error) {
       return null;
@@ -1173,9 +1627,9 @@ ${userDetails.firstName} ${userDetails.lastName}`;
       // Try to scroll to load more jobs
       window.scrollTo(0, document.body.scrollHeight);
       await this.delay(3000);
-      
+
       // Check if new job cards loaded
-      const newJobCards = document.querySelectorAll('.styles_component__uTjje');
+      const newJobCards = document.querySelectorAll(".styles_component__uTjje");
       return newJobCards.length > 0;
     } catch (error) {
       this.log("Failed to load more jobs:", error.message);
@@ -1202,10 +1656,14 @@ ${userDetails.firstName} ${userDetails.lastName}`;
       }
 
       this.log("✅ User authorization check passed");
-      this.statusOverlay.addSuccess("Perfect! You're all authorized and ready to go!");
+      this.statusOverlay.addSuccess(
+        "Perfect! You're all authorized and ready to go!"
+      );
     } catch (error) {
       this.log("❌ User authorization check failed:", error.message);
-      this.statusOverlay.addError("Hmm, there's an issue with your account permissions. " + error.message);
+      this.statusOverlay.addError(
+        "Hmm, there's an issue with your account permissions. " + error.message
+      );
       throw error;
     }
   }
@@ -1216,8 +1674,8 @@ ${userDetails.firstName} ${userDetails.lastName}`;
       'a:contains("Apply")',
       'button[class*="apply"]',
       'a[class*="apply"]',
-      '.apply-button',
-      '.apply-btn'
+      ".apply-button",
+      ".apply-btn",
     ];
 
     for (const selector of selectors) {
@@ -1237,8 +1695,12 @@ ${userDetails.firstName} ${userDetails.lastName}`;
         needsManualApplication: true,
       };
 
-      this.log(`📝 External job saved: ${jobDetails.title} at ${jobDetails.company}`);
-      this.statusOverlay.addInfo(`I saved "${jobDetails.title}" for you to apply to manually later! 📌`);
+      this.log(
+        `📝 External job saved: ${jobDetails.title} at ${jobDetails.company}`
+      );
+      this.statusOverlay.addInfo(
+        `I saved "${jobDetails.title}" for you to apply to manually later! 📌`
+      );
 
       // You could extend this to save to your tracking system
       // await this.appTracker.saveExternalJob(externalJobData);
@@ -1266,7 +1728,9 @@ ${userDetails.firstName} ${userDetails.lastName}`;
       if (success) {
         await this.appTracker.updateApplicationCount();
         this.log(`✅ Job application saved to database: ${jobDetails.title}`);
-        this.statusOverlay.addSuccess(`I've saved "${jobDetails.title}" to your application history! 📝`);
+        this.statusOverlay.addSuccess(
+          `I've saved "${jobDetails.title}" to your application history! 📝`
+        );
         return true;
       } else {
         this.log(`⚠️ Failed to save job application: ${jobDetails.title}`);
@@ -1281,7 +1745,7 @@ ${userDetails.firstName} ${userDetails.lastName}`;
   // Utility methods
   async waitForPageLoad() {
     try {
-      await this.waitForElement('body', 10000);
+      await this.waitForElement("body", 10000);
       await this.delay(2000);
     } catch (error) {
       console.error("Error waiting for page load:", error);
@@ -1313,9 +1777,15 @@ ${userDetails.firstName} ${userDetails.lastName}`;
     this.log(`🔄 Navigation detected: ${oldUrl} → ${newUrl}`);
     this.statusOverlay.addInfo("I noticed we moved to a different page...");
 
-    if (!newUrl.includes("wellfound.com/jobs") && this.automationStarted && this.isRunning) {
+    if (
+      !newUrl.includes("wellfound.com/jobs") &&
+      this.automationStarted &&
+      this.isRunning
+    ) {
       this.log("⚠️ Navigated away from Wellfound Jobs, attempting to return");
-      this.statusOverlay.addWarning("Looks like we went off-track! Let me get us back to the jobs page...");
+      this.statusOverlay.addWarning(
+        "Looks like we went off-track! Let me get us back to the jobs page..."
+      );
       setTimeout(() => {
         if (this.isRunning) {
           this.navigateToWellfoundJobs();
@@ -1329,19 +1799,25 @@ ${userDetails.firstName} ${userDetails.lastName}`;
     await this.delay(3000);
     await this.waitForPageLoad();
     this.log("✅ Navigation to Wellfound Jobs completed");
-    this.statusOverlay.addSuccess("Perfect! Now I'm setting up the search with all your preferences.");
+    this.statusOverlay.addSuccess(
+      "Perfect! Now I'm setting up the search with all your preferences."
+    );
   }
 
   async pause() {
     await super.pause();
     this.log("⏸️ Wellfound automation paused");
-    this.statusOverlay.addWarning("Taking a little break! I'll be here when you're ready to continue. ⏸️");
+    this.statusOverlay.addWarning(
+      "Taking a little break! I'll be here when you're ready to continue. ⏸️"
+    );
   }
 
   async resume() {
     await super.resume();
     this.log("▶️ Wellfound automation resumed");
-    this.statusOverlay.addSuccess("I'm back! Let's continue finding you some great opportunities! 🚀");
+    this.statusOverlay.addSuccess(
+      "I'm back! Let's continue finding you some great opportunities! 🚀"
+    );
   }
 
   async stop() {
@@ -1349,7 +1825,9 @@ ${userDetails.firstName} ${userDetails.lastName}`;
     this.hasStarted = false;
     this.automationStarted = false;
     this.log("⏹️ Wellfound automation stopped");
-    this.statusOverlay.addWarning("All done for now! Thanks for letting me help with your job search. Good luck! 🍀");
+    this.statusOverlay.addWarning(
+      "All done for now! Thanks for letting me help with your job search. Good luck! 🍀"
+    );
   }
 
   cleanup() {

@@ -1,4 +1,4 @@
-//content/content-main.js
+//content/content-main.js - IMPROVED VERSION
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -13,14 +13,19 @@ class ContentScriptManager {
     this.initializationTimeout = null;
     this.sessionContext = null;
     this.userProfile = null;
-    this.maxInitializationAttempts = 3;
+    this.maxInitializationAttempts = 5; // ✅ Increase attempts
     this.initializationAttempts = 0;
 
-    // ADD: Duplicate prevention flags
+    // Duplicate prevention flags
     this.initializationInProgress = false;
     this.startInProgress = false;
     this.lastInitialization = 0;
     this.processedUrls = new Set();
+
+    // ✅ NEW: Context verification flags
+    this.contextVerified = false;
+    this.verificationAttempts = 0;
+    this.maxVerificationAttempts = 10;
   }
 
   async initialize() {
@@ -32,7 +37,8 @@ class ContentScriptManager {
     }
 
     const now = Date.now();
-    if (now - this.lastInitialization < 5000) {
+    if (now - this.lastInitialization < 3000) {
+      // ✅ Reduce from 5000 to 3000
       console.log("🔄 Too soon since last initialization, skipping");
       return;
     }
@@ -46,14 +52,17 @@ class ContentScriptManager {
         `📝 Content script initialization attempt ${this.initializationAttempts}`
       );
 
-      const isAutomationWindow = await this.checkIfAutomationWindow();
-      console.log(isAutomationWindow);
+      // ✅ FIX: Enhanced automation window check with retries
+      const isAutomationWindow = await this.checkIfAutomationWindowWithRetry();
+      console.log("🔍 Automation window check result:", isAutomationWindow);
 
       if (isAutomationWindow) {
         this.automationActive = true;
 
-        const sessionContext = await this.getSessionContext();
-        console.log("Session context retrieved:", sessionContext);
+        // ✅ FIX: Enhanced session context retrieval with verification
+        const sessionContext = await this.getSessionContextWithVerification();
+        console.log("📊 Session context retrieved:", sessionContext);
+
         if (sessionContext) {
           this.sessionContext = sessionContext;
           this.sessionId = sessionContext.sessionId;
@@ -69,7 +78,7 @@ class ContentScriptManager {
             });
           }
 
-          console.log(`🤖 Session context retrieved:`, {
+          console.log(`🤖 Session context established:`, {
             sessionId: this.sessionId,
             platform: this.platform,
             userId: this.userId,
@@ -86,62 +95,206 @@ class ContentScriptManager {
             this.setAutoStartTimeout();
           }
         } else {
-          throw new Error("Failed to retrieve session context");
+          throw new Error("Failed to retrieve or verify session context");
         }
+      } else {
+        console.log("❌ Not an automation window, skipping initialization");
       }
     } catch (error) {
       console.error("❌ Error initializing content script:", error);
 
       if (this.initializationAttempts < this.maxInitializationAttempts) {
-        console.log(`🔄 Retrying initialization in 3 seconds...`);
+        const retryDelay = 2000 + this.initializationAttempts * 1000; // Progressive delay
+        console.log(`🔄 Retrying initialization in ${retryDelay}ms...`);
         setTimeout(() => {
           this.initializationInProgress = false;
           this.initialize();
-        }, 3000);
+        }, retryDelay);
+      } else {
+        console.log("❌ Max initialization attempts reached, giving up");
       }
     } finally {
-      this.initializationInProgress = false;
+      if (
+        this.initializationAttempts >= this.maxInitializationAttempts ||
+        this.isInitialized
+      ) {
+        this.initializationInProgress = false;
+      }
     }
   }
 
-  async checkIfAutomationWindow() {
-    // Method 1: Check window flags set by background script
-    console.log(window.isAutomationWindow, window.automationSessionId);
-    if (window.isAutomationWindow && window.automationSessionId) {
-      console.log("🔍 Automation window detected via window flags");
-      return true;
-    }
+  // ✅ NEW: Enhanced automation window check with retries
+  async checkIfAutomationWindowWithRetry(maxAttempts = 3) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        console.log(`🔍 Automation window check attempt ${attempt + 1}`);
 
-    const sessionId = sessionStorage.getItem("automationSessionId");
-    const platform = sessionStorage.getItem("automationPlatform");
-    const userId = sessionStorage.getItem("automationUserId");
-    console.log(sessionId, platform, userId);
-    if (sessionId && platform) {
-      console.log("🔍 Automation window detected via sessionStorage");
-      window.automationSessionId = sessionId;
-      window.automationPlatform = platform;
-      window.automationUserId = userId;
-      window.isAutomationWindow = true;
-      return true;
-    }
+        // Method 1: Check window flags set by background script
+        if (window.isAutomationWindow && window.automationSessionId) {
+          console.log("✅ Automation window detected via window flags");
+          return true;
+        }
 
-    try {
-      const response = await this.sendMessageToBackground({
-        action: "checkIfAutomationWindow",
-        tabId: await this.getTabId(),
-      });
+        // Method 2: Check sessionStorage
+        const sessionId = sessionStorage.getItem("automationSessionId");
+        const platform = sessionStorage.getItem("automationPlatform");
+        const userId = sessionStorage.getItem("automationUserId");
 
-      console.log(response);
-      if (response && response.isAutomationWindow) {
-        console.log("🔍 Automation window detected via background script");
-        window.isAutomationWindow = true;
-        return true;
+        if (sessionId && platform) {
+          console.log("✅ Automation window detected via sessionStorage");
+          // Set window flags for consistency
+          window.automationSessionId = sessionId;
+          window.automationPlatform = platform;
+          window.automationUserId = userId;
+          window.isAutomationWindow = true;
+          return true;
+        }
+
+        // Method 3: Ask background script
+        try {
+          const response = await this.sendMessageToBackground({
+            action: "checkIfAutomationWindow",
+            tabId: await this.getTabId(),
+            windowId: await this.getWindowId(),
+          });
+
+          if (response && response.isAutomationWindow) {
+            console.log("✅ Automation window detected via background script");
+            window.isAutomationWindow = true;
+            return true;
+          }
+        } catch (error) {
+          console.warn(
+            `⚠️ Background check attempt ${attempt + 1} failed:`,
+            error
+          );
+
+          if (attempt < maxAttempts - 1) {
+            // Wait before retrying
+            await this.delay(1000 * (attempt + 1));
+            continue;
+          }
+        }
+
+        // If not the last attempt, wait before retrying
+        if (attempt < maxAttempts - 1) {
+          await this.delay(1500);
+        }
+      } catch (error) {
+        console.error(
+          `❌ Error in automation window check attempt ${attempt + 1}:`,
+          error
+        );
+        if (attempt < maxAttempts - 1) {
+          await this.delay(1500);
+        }
       }
-    } catch (error) {
-      console.error("Error checking automation window status:", error);
     }
 
+    console.log("❌ All automation window check attempts failed");
     return false;
+  }
+
+  // ✅ NEW: Enhanced session context retrieval with verification
+  async getSessionContextWithVerification(maxAttempts = 5) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        console.log(`📊 Session context retrieval attempt ${attempt + 1}`);
+
+        // First try to get from storage
+        let context = this.getSessionContextFromStorage();
+
+        if (context && context.sessionId) {
+          console.log("📊 Session context found in storage");
+
+          // ✅ Verify context completeness
+          if (this.isSessionContextComplete(context)) {
+            this.contextVerified = true;
+            return await this.enrichSessionContext(context);
+          } else {
+            console.log("⚠️ Session context incomplete, trying to enrich...");
+          }
+        }
+
+        // Try to get from background script
+        try {
+          console.log("📡 Requesting session context from background script");
+          const response = await this.sendMessageToBackground({
+            action: "getSessionContext",
+            tabId: await this.getTabId(),
+            windowId: await this.getWindowId(),
+            url: window.location.href,
+          });
+
+          if (response && response.sessionContext) {
+            console.log("📊 Session context received from background");
+            this.storeSessionContextInStorage(response.sessionContext);
+            this.contextVerified = true;
+            return response.sessionContext;
+          }
+        } catch (error) {
+          console.warn(
+            `⚠️ Background context request attempt ${attempt + 1} failed:`,
+            error
+          );
+        }
+
+        // Try platform detection as fallback
+        const detectedPlatform = this.detectPlatformFromUrl();
+        if (detectedPlatform !== "unknown") {
+          try {
+            console.log(
+              `🔍 Detected platform: ${detectedPlatform}, requesting session assignment`
+            );
+            const response = await this.sendMessageToBackground({
+              action: "assignSessionToTab",
+              platform: detectedPlatform,
+              url: window.location.href,
+              tabId: await this.getTabId(),
+              windowId: await this.getWindowId(),
+            });
+
+            if (response && response.sessionContext) {
+              console.log("📊 Session assigned by background script");
+              this.storeSessionContextInStorage(response.sessionContext);
+              this.contextVerified = true;
+              return response.sessionContext;
+            }
+          } catch (error) {
+            console.warn(
+              `⚠️ Session assignment attempt ${attempt + 1} failed:`,
+              error
+            );
+          }
+        }
+
+        // Wait before next attempt
+        if (attempt < maxAttempts - 1) {
+          await this.delay(2000 + attempt * 1000);
+        }
+      } catch (error) {
+        console.error(
+          `❌ Error in session context retrieval attempt ${attempt + 1}:`,
+          error
+        );
+        if (attempt < maxAttempts - 1) {
+          await this.delay(2000);
+        }
+      }
+    }
+
+    console.log("❌ All session context retrieval attempts failed");
+    return null;
+  }
+
+  // ✅ NEW: Check if session context is complete
+  isSessionContextComplete(context) {
+    return !!(
+      context &&
+      context.sessionId &&
+      context.platform &&
+      context.userId
+    );
   }
 
   async getTabId() {
@@ -159,54 +312,20 @@ class ContentScriptManager {
     });
   }
 
-  async getSessionContext() {
-    let context = this.getSessionContextFromStorage();
-    if (context && context.sessionId) {
-      console.log("📊 Session context found in storage");
-      return await this.enrichSessionContext(context);
-    }
-
-    try {
-      console.log("📡 Requesting session context from background script");
-      const response = await this.sendMessageToBackground({
-        action: "getSessionContext",
-        tabId: await this.getTabId(),
-        url: window.location.href,
-      });
-
-      if (response && response.sessionContext) {
-        console.log("📊 Session context received from background");
-        this.storeSessionContextInStorage(response.sessionContext);
-        return response.sessionContext;
-      }
-    } catch (error) {
-      console.error("Error getting session context from background:", error);
-    }
-
-    const detectedPlatform = this.detectPlatformFromUrl();
-    if (detectedPlatform !== "unknown") {
+  // ✅ NEW: Get window ID
+  async getWindowId() {
+    return new Promise((resolve) => {
       try {
-        console.log(
-          `🔍 Detected platform: ${detectedPlatform}, requesting session assignment`
+        chrome.runtime.sendMessage(
+          { action: "getCurrentWindowId" },
+          (response) => {
+            resolve(response?.windowId || null);
+          }
         );
-        const response = await this.sendMessageToBackground({
-          action: "assignSessionToTab",
-          platform: detectedPlatform,
-          url: window.location.href,
-          tabId: await this.getTabId(),
-        });
-
-        if (response && response.sessionContext) {
-          console.log("📊 Session assigned by background script");
-          this.storeSessionContextInStorage(response.sessionContext);
-          return response.sessionContext;
-        }
       } catch (error) {
-        console.error("Error requesting session assignment:", error);
+        resolve(null);
       }
-    }
-
-    return null;
+    });
   }
 
   getSessionContextFromStorage() {
@@ -227,7 +346,7 @@ class ContentScriptManager {
           window.parentSessionId || sessionStorage.getItem("parentSessionId"),
       };
 
-      // FIXED: Retrieve user profile from storage
+      // ✅ Enhanced user profile retrieval
       let userProfile = null;
       try {
         if (window.automationUserProfile) {
@@ -239,10 +358,10 @@ class ContentScriptManager {
           }
         }
       } catch (error) {
-        console.warn("Error parsing stored user profile:", error);
+        console.warn("⚠️ Error parsing stored user profile:", error);
       }
 
-      // FIXED: Retrieve session config
+      // ✅ Enhanced session config retrieval
       let sessionConfig = null;
       try {
         if (window.automationSessionConfig) {
@@ -256,22 +375,37 @@ class ContentScriptManager {
           }
         }
       } catch (error) {
-        console.warn("Error parsing stored session config:", error);
+        console.warn("⚠️ Error parsing stored session config:", error);
       }
 
-      // FIXED: Get API host
+      // ✅ Enhanced API host retrieval
       const apiHost =
         window.automationApiHost || sessionStorage.getItem("automationApiHost");
 
-      return {
+      const context = {
         ...baseContext,
         userProfile,
         sessionConfig,
         apiHost,
         preferences: sessionConfig?.preferences || {},
+        contextTimestamp: window.automationContextTimestamp || Date.now(),
       };
+
+      // ✅ Additional verification
+      if (context.sessionId && context.platform && context.userId) {
+        console.log("✅ Complete session context found in storage:", {
+          sessionId: context.sessionId,
+          platform: context.platform,
+          hasUserProfile: !!context.userProfile,
+          hasSessionConfig: !!context.sessionConfig,
+        });
+        return context;
+      } else {
+        console.log("⚠️ Incomplete session context in storage:", context);
+        return null;
+      }
     } catch (error) {
-      console.error("Error getting session context from storage:", error);
+      console.error("❌ Error getting session context from storage:", error);
       return null;
     }
   }
@@ -284,8 +418,9 @@ class ContentScriptManager {
       window.automationUserId = context.userId;
       window.isAutomationWindow = true;
       window.isAutomationTab = true;
+      window.automationContextTimestamp = Date.now();
 
-      // FIXED: Store user profile and session config in window
+      // Store enhanced context
       if (context.userProfile) {
         window.automationUserProfile = context.userProfile;
       }
@@ -296,42 +431,45 @@ class ContentScriptManager {
         window.automationApiHost = context.apiHost;
       }
 
-      // Store in sessionStorage
-      sessionStorage.setItem("automationSessionId", context.sessionId);
-      sessionStorage.setItem("automationPlatform", context.platform);
-      sessionStorage.setItem("automationUserId", context.userId);
-      sessionStorage.setItem("isAutomationWindow", "true");
-      sessionStorage.setItem("isAutomationTab", "true");
+      // Store in sessionStorage with error handling
+      try {
+        sessionStorage.setItem("automationSessionId", context.sessionId);
+        sessionStorage.setItem("automationPlatform", context.platform);
+        sessionStorage.setItem("automationUserId", context.userId);
+        sessionStorage.setItem("isAutomationWindow", "true");
+        sessionStorage.setItem("isAutomationTab", "true");
 
-      // FIXED: Store additional context in sessionStorage
-      if (context.userProfile) {
-        sessionStorage.setItem(
-          "automationUserProfile",
-          JSON.stringify(context.userProfile)
-        );
-      }
-      if (context.sessionConfig) {
-        sessionStorage.setItem(
-          "automationSessionConfig",
-          JSON.stringify(context.sessionConfig)
-        );
-      }
-      if (context.apiHost) {
-        sessionStorage.setItem("automationApiHost", context.apiHost);
-      }
-      if (context.parentSessionId) {
-        window.parentSessionId = context.parentSessionId;
-        sessionStorage.setItem("parentSessionId", context.parentSessionId);
+        if (context.userProfile) {
+          sessionStorage.setItem(
+            "automationUserProfile",
+            JSON.stringify(context.userProfile)
+          );
+        }
+        if (context.sessionConfig) {
+          sessionStorage.setItem(
+            "automationSessionConfig",
+            JSON.stringify(context.sessionConfig)
+          );
+        }
+        if (context.apiHost) {
+          sessionStorage.setItem("automationApiHost", context.apiHost);
+        }
+        if (context.parentSessionId) {
+          window.parentSessionId = context.parentSessionId;
+          sessionStorage.setItem("parentSessionId", context.parentSessionId);
+        }
+      } catch (storageError) {
+        console.warn("⚠️ Failed to store in sessionStorage:", storageError);
       }
 
-      console.log("💾 Enhanced session context stored in storage");
+      console.log("💾 Enhanced session context stored successfully");
     } catch (error) {
-      console.error("Error storing session context:", error);
+      console.error("❌ Error storing session context:", error);
     }
   }
 
   async enrichSessionContext(basicContext) {
-    // Get additional context data from background script
+    // Try to get additional context data from background script
     try {
       const response = await this.sendMessageToBackground({
         action: "getFullSessionContext",
@@ -339,14 +477,73 @@ class ContentScriptManager {
       });
 
       if (response && response.sessionContext) {
-        return { ...basicContext, ...response.sessionContext };
+        const enrichedContext = { ...basicContext, ...response.sessionContext };
+        this.storeSessionContextInStorage(enrichedContext);
+        return enrichedContext;
       }
     } catch (error) {
-      console.error("Error enriching session context:", error);
+      console.warn("⚠️ Failed to enrich session context:", error);
     }
 
     return basicContext;
   }
+
+  // ... rest of the methods remain mostly the same but with enhanced error handling
+
+  addAutomationIndicator() {
+    const existing = document.getElementById("automation-indicator");
+    if (existing) existing.remove();
+
+    const indicator = document.createElement("div");
+    indicator.id = "automation-indicator";
+
+    const profileStatus = this.userProfile ? "✓" : "✗";
+    const profileText = this.userProfile
+      ? this.userProfile.name || this.userProfile.firstName || "Unknown"
+      : "No Profile";
+
+    // ✅ Enhanced indicator with more status info
+    indicator.innerHTML = `
+      <div style="
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background: linear-gradient(135deg, #4CAF50, #45a049);
+        color: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        z-index: 999999;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        border: 1px solid rgba(255,255,255,0.2);
+        backdrop-filter: blur(10px);
+        cursor: pointer;
+        transition: all 0.3s ease;
+      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">🤖</span>
+          <div>
+            <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
+            <div style="font-size: 11px; opacity: 0.9;">
+              ${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
+      -6
+    )}<br/>
+              Profile: ${profileStatus} ${profileText}<br/>
+              Context: ${this.contextVerified ? "✅ Verified" : "⚠️ Pending"}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    indicator.addEventListener("click", () => this.showAutomationStatus());
+    document.documentElement.appendChild(indicator);
+    this.indicator = indicator;
+  }
+
+  // ... rest of methods remain the same ...
 
   getSessionId() {
     return (
@@ -738,57 +935,6 @@ class ContentScriptManager {
         this.log("🔄 Skipping auto-start - conditions not met");
       }
     }, 10000);
-  }
-
-  addAutomationIndicator() {
-    const existing = document.getElementById("automation-indicator");
-    if (existing) existing.remove();
-
-    const indicator = document.createElement("div");
-    indicator.id = "automation-indicator";
-
-    const profileStatus = this.userProfile ? "✓" : "✗";
-    const profileText = this.userProfile
-      ? this.userProfile.name || this.userProfile.firstName || "Unknown"
-      : "No Profile";
-
-    indicator.innerHTML = `
-      <div style="
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        background: linear-gradient(135deg, #4CAF50, #45a049);
-        color: white;
-        padding: 12px 16px;
-        border-radius: 8px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-        font-size: 13px;
-        font-weight: 600;
-        z-index: 999999;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        border: 1px solid rgba(255,255,255,0.2);
-        backdrop-filter: blur(10px);
-        cursor: pointer;
-        transition: all 0.3s ease;
-      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 16px;">🤖</span>
-          <div>
-            <div style="font-weight: 700;">AUTOMATION ACTIVE</div>
-            <div style="font-size: 11px; opacity: 0.9;">
-              ${this.platform?.toUpperCase()} • ${this.sessionId?.slice(
-      -6
-    )}<br/>
-              Profile: ${profileStatus} ${profileText}
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    indicator.addEventListener("click", () => this.showAutomationStatus());
-    document.documentElement.appendChild(indicator);
-    this.indicator = indicator;
   }
 
   notifyBackgroundReady() {
@@ -1215,6 +1361,9 @@ class ContentScriptManager {
         <p><strong>Status:</strong> ${
           this.automationActive ? "Active" : "Inactive"
         }</p>
+        <p><strong>Context Verified:</strong> ${
+          this.contextVerified ? "✅ Yes" : "⚠️ No"
+        }</p>
         <button onclick="this.closest('div').remove()" style="
           background: #4CAF50; color: white; border: none; padding: 8px 16px;
           border-radius: 4px; cursor: pointer; margin-top: 16px;
@@ -1229,17 +1378,19 @@ class ContentScriptManager {
     document.body.appendChild(modal);
   }
 
-  delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
   log(message, data = {}) {
     console.log(`🤖 [ContentScript-${this.platform}] ${message}`, data);
+  }
+
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   cleanup() {
     this.initializationInProgress = false;
     this.startInProgress = false;
+    this.contextVerified = false;
+    this.verificationAttempts = 0;
     this.processedUrls.clear();
 
     if (this.initializationTimeout) {
@@ -1252,13 +1403,11 @@ class ContentScriptManager {
       this.indicator = null;
     }
 
-    // Disconnect DOM observer
     if (this.domObserver) {
       this.domObserver.disconnect();
       this.domObserver = null;
     }
 
-    // Stop platform automation
     if (this.platformAutomation && this.platformAutomation.cleanup) {
       this.platformAutomation.cleanup();
     }
@@ -1268,41 +1417,78 @@ class ContentScriptManager {
   }
 }
 
-// FIXED: Single initialization with better control
+// ✅ Enhanced initialization with better timing
 const contentManager = new ContentScriptManager();
 console.log("📝 Content script manager created");
 
-// FIXED: Use only one initialization path
+// ✅ Improved single initialization with multiple triggers
 const initializeOnce = (() => {
   let initialized = false;
+  let scheduledInit = false;
 
-  return () => {
-    if (initialized) {
-      console.log("🔄 Initialization already attempted, skipping");
+  return (delay = 1000) => {
+    if (initialized || scheduledInit) {
+      console.log("🔄 Initialization already attempted or scheduled, skipping");
       return;
     }
-    initialized = true;
 
-    console.log("📝 Initializing content script manager...");
-    setTimeout(() => contentManager.initialize(), 1000);
+    scheduledInit = true;
+    console.log(`📝 Scheduling content script initialization in ${delay}ms...`);
+
+    setTimeout(() => {
+      initialized = true;
+      contentManager.initialize();
+    }, delay);
   };
 })();
 
-// FIXED: Single initialization trigger
+// ✅ Multiple initialization triggers for reliability
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initializeOnce);
+  document.addEventListener("DOMContentLoaded", () => initializeOnce(500));
+} else if (document.readyState === "interactive") {
+  initializeOnce(1000);
 } else {
-  initializeOnce();
+  initializeOnce(500);
 }
 
-// FIXED: Only re-initialize on pageshow if completely new session
+// ✅ Enhanced pageshow handler
 window.addEventListener("pageshow", (event) => {
-  // Only reinitialize if it's a new page load (not back/forward cache)
+  console.log("📄 Page show event:", {
+    persisted: event.persisted,
+    readyState: document.readyState,
+  });
+
+  // Only reinitialize if it's a new page load or if we haven't initialized yet
   if (!event.persisted && !contentManager.isInitialized) {
-    console.log("📝 New page detected, initializing...");
-    setTimeout(initializeOnce, 1000);
+    console.log("📝 New page detected, scheduling initialization...");
+    setTimeout(() => initializeOnce(1000), 500);
+  } else if (event.persisted && contentManager.isInitialized) {
+    // Page came from cache, just verify context is still valid
+    setTimeout(() => {
+      if (!contentManager.contextVerified) {
+        console.log(
+          "🔄 Page from cache but context not verified, reinitializing..."
+        );
+        contentManager.isInitialized = false;
+        initializeOnce(1000);
+      }
+    }, 500);
   }
 });
 
+// ✅ Additional safety net for missed initializations
+setTimeout(() => {
+  if (
+    !contentManager.isInitialized &&
+    !contentManager.initializationInProgress
+  ) {
+    console.log("🚨 Safety net: Content script not initialized, attempting...");
+    initializeOnce(0);
+  }
+}, 5000);
+
 // Cleanup on page unload
-window.addEventListener("beforeunload", () => contentManager.cleanup());
+window.addEventListener("beforeunload", () => {
+  console.log("🧹 Page unloading, cleaning up content script");
+  contentManager.cleanup();
+});

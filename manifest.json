@@ -31,7 +31,7 @@
   ],
   "content_scripts": [
     {
-     "matches": [
+      "matches": [
         "<all_urls>"
       ],
       "js": [
@@ -87,7 +87,7 @@
         "platforms/workable/workable-form-handler.js",
         "platforms/workable/workable-file-handler.js",
         "platforms/wellfound/wellfound.js",
-        "platforms/wellfound/wellfound-automation.js",
+        "platforms/wellfound/wellfound-form-handler.js",
         "utils/utils.js"
       ],
       "matches": [

@@ -1,13 +1,13 @@
 // core/automation-orchestrator.js
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
-//03:21:15 PMSkipping job " NodeJs Developer" - doesn't match preferences
 
 export default class AutomationOrchestrator {
   constructor() {
     this.windowManager = new WindowManager();
     this.logger = new Logger();
     this.activeAutomations = new Map();
+    this.windowSessions = new Map();
   }
 
   async startAutomation(params) {
@@ -28,10 +28,6 @@ export default class AutomationOrchestrator {
         preferences,
       });
 
-      // Pass preferences as-is without modification
-      this.logger.info(`📋 Using user preferences:`, preferences);
-
-      // Create automation window with user preferences
       const automationWindow = await this.createAutomationWindow(
         platform,
         sessionId,
@@ -45,11 +41,10 @@ export default class AutomationOrchestrator {
 
       const fullParams = {
         ...params,
-        preferences: preferences, // Pass through user preferences unchanged
+        preferences: preferences,
         apiHost: apiHost || "http://localhost:3000",
       };
 
-      // Create automation session
       const automationSession = new AutomationSession({
         sessionId,
         platform,
@@ -59,8 +54,9 @@ export default class AutomationOrchestrator {
         orchestrator: this,
       });
 
-      // Store active automation
       this.activeAutomations.set(sessionId, automationSession);
+
+      this.windowSessions.set(automationWindow.id, sessionId);
 
       this.logger.info(`✅ Automation started successfully`, {
         sessionId,
@@ -92,7 +88,6 @@ export default class AutomationOrchestrator {
 
   async createAutomationWindow(platform, sessionId, userId, preferences) {
     try {
-      // Get platform-specific starting URL with user preferences
       const startUrl = this.buildStartingUrl(platform, preferences);
 
       const window = await chrome.windows.create({
@@ -103,7 +98,6 @@ export default class AutomationOrchestrator {
         height: 800,
       });
 
-      // Register as automation window
       await this.windowManager.registerAutomationWindow(window.id, {
         sessionId,
         platform,
@@ -112,49 +106,314 @@ export default class AutomationOrchestrator {
         createdAt: Date.now(),
       });
 
-      // Inject automation context with preferences
-      setTimeout(async () => {
-        try {
-          if (window.tabs && window.tabs[0]) {
-            await chrome.scripting.executeScript({
-              target: { tabId: window.tabs[0].id },
-              func: (sessionId, platform, userId, preferences) => {
-                // Set window properties
-                window.automationSessionId = sessionId;
-                window.automationPlatform = platform;
-                window.automationUserId = userId;
-                window.automationPreferences = preferences;
-                window.isAutomationWindow = true;
+      this.windowSessions.set(window.id, sessionId);
 
-                // Set session storage
-                sessionStorage.setItem("automationSessionId", sessionId);
-                sessionStorage.setItem("automationPlatform", platform);
-                sessionStorage.setItem("automationUserId", userId);
-                sessionStorage.setItem(
-                  "automationPreferences",
-                  JSON.stringify(preferences)
-                );
-                sessionStorage.setItem("automationWindow", "true");
-
-                console.log("🚀 Automation context injected with preferences", {
-                  sessionId,
-                  platform,
-                  userId,
-                  preferences,
-                });
-              },
-              args: [sessionId, platform, userId, preferences],
-            });
-          }
-        } catch (error) {
-          console.error("Error injecting automation context:", error);
-        }
-      }, 500);
+      await this.injectAutomationContextWithRetry(
+        window,
+        sessionId,
+        platform,
+        userId,
+        preferences
+      );
 
       return window;
     } catch (error) {
       throw new Error(`Failed to create automation window: ${error.message}`);
     }
+  }
+
+  async injectAutomationContextWithRetry(
+    window,
+    sessionId,
+    platform,
+    userId,
+    preferences,
+    maxRetries = 3
+  ) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Wait longer for tab to be ready
+        await this.delay(1000 + attempt * 500);
+
+        if (window.tabs && window.tabs[0]) {
+          await chrome.scripting.executeScript({
+            target: { tabId: window.tabs[0].id },
+            func: (sessionId, platform, userId, preferences) => {
+              // Set window properties
+              window.automationSessionId = sessionId;
+              window.automationPlatform = platform;
+              window.automationUserId = userId;
+              window.automationPreferences = preferences;
+              window.isAutomationWindow = true;
+              window.isAutomationTab = true;
+
+              // Set session storage
+              sessionStorage.setItem("automationSessionId", sessionId);
+              sessionStorage.setItem("automationPlatform", platform);
+              sessionStorage.setItem("automationUserId", userId);
+              sessionStorage.setItem(
+                "automationPreferences",
+                JSON.stringify(preferences)
+              );
+              sessionStorage.setItem("automationWindow", "true");
+              sessionStorage.setItem("isAutomationWindow", "true");
+              sessionStorage.setItem("isAutomationTab", "true");
+
+              console.log("🚀 Automation context injected successfully", {
+                sessionId,
+                platform,
+                userId,
+                preferences,
+                attempt: window.injectionAttempt || "unknown",
+              });
+
+              // Signal successful injection
+              window.automationContextInjected = true;
+            },
+            args: [sessionId, platform, userId, preferences],
+          });
+
+          // Verify injection worked
+          const verification = await chrome.scripting.executeScript({
+            target: { tabId: window.tabs[0].id },
+            func: () => window.automationContextInjected === true,
+          });
+
+          if (verification[0]?.result) {
+            console.log(
+              `✅ Context injection verified on attempt ${attempt + 1}`
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Context injection attempt ${attempt + 1} failed:`,
+          error
+        );
+
+        if (attempt === maxRetries - 1) {
+          throw new Error(
+            `Failed to inject automation context after ${maxRetries} attempts`
+          );
+        }
+      }
+    }
+  }
+
+  async handleTabCreated(tabId, windowId) {
+    const sessionId = this.windowSessions.get(windowId);
+
+    if (sessionId) {
+      console.log(
+        `🆕 New tab ${tabId} created in automation window ${windowId}`
+      );
+
+      // Wait for tab to load before injecting context
+      setTimeout(async () => {
+        try {
+          const automation = this.activeAutomations.get(sessionId);
+          if (automation) {
+            await this.injectAutomationContextIntoTab(tabId, {
+              sessionId,
+              platform: automation.platform,
+              userId: automation.userId,
+              preferences: automation.params.preferences || {},
+              userProfile: automation.userProfile,
+              sessionConfig: automation.sessionConfig,
+              apiHost: automation.params.apiHost,
+            });
+          }
+        } catch (error) {
+          console.error(
+            `❌ Failed to inject context into new tab ${tabId}:`,
+            error
+          );
+        }
+      }, 1500);
+    }
+  }
+
+  async injectAutomationContextIntoTab(tabId, context) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (context) => {
+          // Set all automation flags
+          window.automationSessionId = context.sessionId;
+          window.automationPlatform = context.platform;
+          window.automationUserId = context.userId;
+          window.automationPreferences = context.preferences;
+          window.isAutomationWindow = true;
+          window.isAutomationTab = true;
+
+          if (context.userProfile) {
+            window.automationUserProfile = context.userProfile;
+          }
+          if (context.sessionConfig) {
+            window.automationSessionConfig = context.sessionConfig;
+          }
+          if (context.apiHost) {
+            window.automationApiHost = context.apiHost;
+          }
+
+          // Set session storage
+          sessionStorage.setItem("automationSessionId", context.sessionId);
+          sessionStorage.setItem("automationPlatform", context.platform);
+          sessionStorage.setItem("automationUserId", context.userId);
+          sessionStorage.setItem(
+            "automationPreferences",
+            JSON.stringify(context.preferences)
+          );
+          sessionStorage.setItem("isAutomationWindow", "true");
+          sessionStorage.setItem("isAutomationTab", "true");
+
+          if (context.userProfile) {
+            sessionStorage.setItem(
+              "automationUserProfile",
+              JSON.stringify(context.userProfile)
+            );
+          }
+          if (context.sessionConfig) {
+            sessionStorage.setItem(
+              "automationSessionConfig",
+              JSON.stringify(context.sessionConfig)
+            );
+          }
+          if (context.apiHost) {
+            sessionStorage.setItem("automationApiHost", context.apiHost);
+          }
+
+          console.log(
+            "✅ Automation context injected into tab",
+            context.sessionId
+          );
+        },
+        args: [context],
+      });
+
+      console.log(
+        `✅ Context injected into tab ${tabId} for session ${context.sessionId}`
+      );
+    } catch (error) {
+      console.error(`❌ Failed to inject context into tab ${tabId}:`, error);
+    }
+  }
+
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  getSessionForWindow(windowId) {
+    return this.windowSessions.get(windowId);
+  }
+  isAutomationWindow(windowId) {
+    return this.windowSessions.has(windowId);
+  }
+
+  async handleWindowClosed(windowId) {
+    const sessionId = this.windowSessions.get(windowId);
+
+    if (sessionId) {
+      const automation = this.activeAutomations.get(sessionId);
+      if (automation) {
+        await automation.stop();
+        this.activeAutomations.delete(sessionId);
+      }
+
+      // Clean up tracking
+      this.windowSessions.delete(windowId);
+
+      this.logger.info(`🧹 Cleaned up automation for closed window`, {
+        sessionId,
+        windowId,
+      });
+    }
+  }
+
+  buildStartingUrl(platform, preferences) {
+    switch (platform) {
+      case "linkedin":
+        return this.buildLinkedInUrl(preferences);
+      case "indeed":
+        return this.buildIndeedUrl(preferences);
+      case "ziprecruiter":
+        return this.buildZipRecruiterUrl(preferences);
+      case "glassdoor":
+        return this.buildGlassdoorUrl(preferences);
+      case "workday":
+        return this.buildWorkdayUrl(preferences);
+      case "recruitee":
+        return this.buildRecruiteeUrl(preferences);
+      case "lever":
+        return this.buildLeverUrl(preferences);
+      case "breezy":
+        return this.buildBreezyUrl(preferences);
+      case "ashby":
+        return this.buildAshbyUrl(preferences);
+      case "wellfound":
+        return this.buildWellfoundUrl(preferences);
+      case "workable":
+        return this.buildWorkableUrl(preferences);
+      default:
+        return this.buildGenericSearchUrl(preferences);
+    }
+  }
+
+  buildGlassdoorUrl(preferences) {
+    const params = new URLSearchParams();
+
+    // Keywords
+    if (preferences.positions?.length) {
+      const keywords = preferences.positions.join(" ");
+      params.set("sc.keyword", keywords);
+      params.set("typedKeyword", keywords);
+    }
+
+    // Location
+    if (preferences.location?.length && !preferences.remoteOnly) {
+      params.set("locT", "C");
+      params.set("locId", preferences.location[0]);
+    }
+
+    // Job type
+    const jobTypeMap = {
+      "Full-time": "full-time",
+      "Part-time": "part-time",
+      Contract: "contract",
+      Internship: "internship",
+    };
+
+    if (preferences.jobType?.length) {
+      const glassdoorJobType = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean)[0];
+
+      if (glassdoorJobType) {
+        params.set("jobType", glassdoorJobType);
+      }
+    }
+
+    // Default params
+    params.set("suggestCount", "0");
+    params.set("suggestChosen", "false");
+    params.set("clickSource", "searchBtn");
+
+    return `https://www.glassdoor.com/Job/jobs.htm?${params.toString()}`;
+  }
+
+  buildGenericSearchUrl(preferences) {
+    const keywords = preferences.positions?.length
+      ? preferences.positions.join(" OR ") + " jobs"
+      : "software engineer jobs";
+    const location =
+      preferences.location?.length && !preferences.remoteOnly
+        ? ` ${preferences.location[0]}`
+        : "";
+
+    return `https://www.google.com/search?q=${encodeURIComponent(
+      keywords + location
+    )}`;
   }
 
   buildWellfoundUrl(preferences) {
@@ -233,35 +492,6 @@ export default class AutomationOrchestrator {
     return `https://www.ziprecruiter.com/jobs-search?${params.toString()}`;
   }
 
-  buildStartingUrl(platform, preferences) {
-    switch (platform) {
-      case "linkedin":
-        return this.buildLinkedInUrl(preferences);
-      case "indeed":
-        return this.buildIndeedUrl(preferences);
-      case "ziprecruiter":
-        return this.buildZipRecruiterUrl(preferences);
-      case "glassdoor":
-        return this.buildGlassdoorUrl(preferences);
-      case "workday":
-        return this.buildWorkdayUrl(preferences);
-      case "recruitee":
-        return this.buildRecruiteeUrl(preferences);
-      case "lever":
-        return this.buildLeverUrl(preferences);
-      case "breezy":
-        return this.buildBreezyUrl(preferences);
-      case "ashby":
-        return this.buildAshbyUrl(preferences);
-      case "wellfound":
-        return this.buildWellfoundUrl(preferences);
-      case "workable":
-        return this.buildWorkableUrl(preferences);
-      default:
-        return this.buildGenericSearchUrl(preferences);
-    }
-  }
-
   buildWorkableUrl(preferences) {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
@@ -311,9 +541,9 @@ export default class AutomationOrchestrator {
         ? " remote"
         : "";
 
-    return `https://www.google.com/search?q=site:breezy.hr+"${encodeURIComponent(
-      keywords
-    )}"${location}${remoteKeyword}`;
+    // ✅ FIX: Properly encode the entire search query
+    const fullQuery = `site:breezy.hr "${keywords}"${location}${remoteKeyword}`;
+    return `https://www.google.com/search?q=${encodeURIComponent(fullQuery)}`;
   }
 
   buildLinkedInUrl(preferences) {
@@ -327,7 +557,6 @@ export default class AutomationOrchestrator {
       params.append("keywords", joinWithOR(preferences.positions));
     }
 
-    // Handle location with GeoId mapping (fixed: treat as single value, not array)
     if (preferences.location) {
       const geoIdMap = {
         Nigeria: "105365761",
@@ -517,48 +746,6 @@ export default class AutomationOrchestrator {
     return `https://www.indeed.com/jobs?${params.toString()}`;
   }
 
-  buildGlassdoorUrl(preferences) {
-    const params = new URLSearchParams();
-
-    // Keywords
-    if (preferences.positions?.length) {
-      const keywords = preferences.positions.join(" ");
-      params.set("sc.keyword", keywords);
-      params.set("typedKeyword", keywords);
-    }
-
-    // Location
-    if (preferences.location?.length && !preferences.remoteOnly) {
-      params.set("locT", "C");
-      params.set("locId", preferences.location[0]);
-    }
-
-    // Job type
-    const jobTypeMap = {
-      "Full-time": "full-time",
-      "Part-time": "part-time",
-      Contract: "contract",
-      Internship: "internship",
-    };
-
-    if (preferences.jobType?.length) {
-      const glassdoorJobType = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean)[0];
-
-      if (glassdoorJobType) {
-        params.set("jobType", glassdoorJobType);
-      }
-    }
-
-    // Default params
-    params.set("suggestCount", "0");
-    params.set("suggestChosen", "false");
-    params.set("clickSource", "searchBtn");
-
-    return `https://www.glassdoor.com/Job/jobs.htm?${params.toString()}`;
-  }
-
   buildWorkdayUrl(preferences) {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
@@ -599,20 +786,6 @@ export default class AutomationOrchestrator {
     return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(
       keywords
     )}"${location}`;
-  }
-
-  buildGenericSearchUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ") + " jobs"
-      : "software engineer jobs";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` ${preferences.location[0]}`
-        : "";
-
-    return `https://www.google.com/search?q=${encodeURIComponent(
-      keywords + location
-    )}`;
   }
 
   async stopAutomation(sessionId) {
@@ -656,20 +829,6 @@ export default class AutomationOrchestrator {
   getAutomationStatus(sessionId) {
     const automation = this.activeAutomations.get(sessionId);
     return automation ? automation.getStatus() : null;
-  }
-
-  async handleWindowClosed(windowId) {
-    for (const [sessionId, automation] of this.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        await automation.stop();
-        this.activeAutomations.delete(sessionId);
-        this.logger.info(`🧹 Cleaned up automation for closed window`, {
-          sessionId,
-          windowId,
-          userId: automation.userId,
-        });
-      }
-    }
   }
 }
 
