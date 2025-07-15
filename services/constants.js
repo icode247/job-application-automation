@@ -6,4 +6,4 @@ export const PLAN_LIMITS = {
 };
 
 export const API_HOST_URL = "http://localhost:3000";
-export const AI_BASE_URL = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
+export const AI_BASE_URL = "https://resumify.fastapply.co/api";

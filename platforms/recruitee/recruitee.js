@@ -264,12 +264,12 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       apiHost: this.getApiHost(),
     });
 
-    this.formHandler = new RecruiteeFormHandler({
-      logger: (message) => this.statusOverlay.addInfo(message),
-      host: this.getApiHost(),
-      userData: this.userProfile || {},
-      jobDescription: "",
-    });
+    // this.formHandler = new RecruiteeFormHandler({
+    //   logger: (message) => this.statusOverlay.addInfo(message),
+    //   host: this.getApiHost(),
+    //   userData: this.userProfile || {},
+    //   jobDescription: "",
+    // });
 
     this.statusOverlay.addSuccess("Recruitee-specific components initialized");
   }
@@ -618,19 +618,13 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       "Found Recruitee application form, beginning to fill out"
     );
 
+    console.log("this.userService", this.userService);
     try {
-      // Initialize/update form handler
-      if (!this.formHandler) {
-        this.formHandler = new RecruiteeFormHandler({
-          logger: (message) => this.statusOverlay.addInfo(message),
-          host: this.getApiHost(),
-          userData: profile,
-          jobDescription,
-        });
-      } else {
-        this.formHandler.userData = profile;
-        this.formHandler.jobDescription = jobDescription;
-      }
+      this.formHandler = new RecruiteeFormHandler(
+        this.aiService, // AI service for getting answers
+        this.userService, // User service for profile data
+        (message) => this.statusOverlay.addInfo(message) // Logger function
+      );
 
       // Handle multi-step form if present (Recruitee-specific)
       const isMultiStep = form.querySelector(".c-step, .steps-indicator");
@@ -638,17 +632,23 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
         return await this.handleMultiStepForm(form, profile, jobDescription);
       }
 
-      // Handle file uploads (resume)
+      // Handle file uploads (resume) - do this first
+      this.statusOverlay.addInfo("Handling file uploads...");
       await this.fileHandler.handleResumeUpload(profile, form);
 
-      // Fill out form fields using AI-enhanced RecruiteeFormHandler
-      await this.formHandler.fillFormWithProfile(form, profile);
+      // Use the new form handler's main method
+      this.statusOverlay.addInfo("Processing form fields...");
+      const result = await this.formHandler.processApplicationForm();
 
-      // Handle required checkboxes
-      await this.formHandler.handleRequiredCheckboxes(form);
-
-      // Submit the form
-      return await this.formHandler.submitForm(form);
+      if (result.success) {
+        this.statusOverlay.addSuccess(
+          "Successfully filled and submitted application form"
+        );
+        return true;
+      } else {
+        this.statusOverlay.addError(`Form processing failed: ${result.reason}`);
+        return false;
+      }
     } catch (error) {
       console.error("Error processing Recruitee application form:", error);
       this.statusOverlay.addError(
