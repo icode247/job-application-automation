@@ -8,8 +8,7 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     this.platformConfig = {
       domains: ["https://wellfound.com"],
       searchLinkPattern: /^https:\/\/wellfound\.com\/jobs\/(\d+)/,
-      applyUrlPattern: /^https:\/\/wellfound\.com\/jobs\/(\d+)\/apply/,
-      searchPagePattern: /^https:\/\/wellfound\.com\/jobs(\?.*)?$/,
+      jobsPagePattern: /^https:\/\/wellfound\.com\/jobs(\?.*)?$/,
     };
 
     this.applicationTimeouts = new Map();
@@ -31,6 +30,15 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     );
 
     switch (type) {
+      case "GET_SEARCH_TASK":
+        await this.handleGetSearchTask(port, data);
+        break;
+
+      case "GET_SEND_CV_TASK":
+      case "GET_APPLICATION_TASK":
+        await this.handleGetSendCvTask(port, data);
+        break;
+
       case "START_APPLICATION":
         await this.handleStartApplication(
           port,
@@ -74,16 +82,197 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
+  async handleGetSearchTask(port, data) {
+    const tabId = port.sender?.tab?.id;
+    const windowId = port.sender?.tab?.windowId;
+
+    console.log(
+      `🔍 GET_SEARCH_TASK request from Wellfound tab ${tabId}, window ${windowId}`
+    );
+
+    let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
+    for (const [
+      sessionId,
+      auto,
+    ] of this.messageHandler.activeAutomations.entries()) {
+      if (auto.windowId === windowId) {
+        automation = auto;
+        console.log(`✅ Found Wellfound automation session: ${sessionId}`);
+        break;
+      }
+    }
+
+    if (automation) {
+      const platformState = automation.platformState;
+
+      // Add safety check for searchLinkPattern
+      let searchLinkPatternString = "";
+      try {
+        if (platformState.searchData.searchLinkPattern) {
+          searchLinkPatternString =
+            platformState.searchData.searchLinkPattern.toString();
+        } else {
+          console.warn("⚠️ searchLinkPattern is null, using empty string");
+          searchLinkPatternString = "";
+        }
+      } catch (error) {
+        console.error(
+          "❌ Error converting searchLinkPattern to string:",
+          error
+        );
+        searchLinkPatternString = "";
+      }
+
+      sessionData = {
+        tabId: tabId,
+        limit: platformState.searchData.limit,
+        current: platformState.searchData.current,
+        domain: platformState.searchData.domain,
+        submittedLinks: platformState.submittedLinks || [],
+        searchLinkPattern: searchLinkPatternString,
+      };
+
+      // Update search tab ID
+      platformState.searchTabId = tabId;
+      console.log(`📊 Wellfound session data prepared:`, sessionData);
+    } else {
+      console.warn(`⚠️ No Wellfound automation found for window ${windowId}`);
+      console.log(
+        `Active automations:`,
+        Array.from(this.messageHandler.activeAutomations.keys())
+      );
+      
+      // Provide default data structure to prevent empty data
+      sessionData = {
+        tabId: tabId,
+        limit: 10,
+        current: 0,
+        domain: ["https://wellfound.com"],
+        submittedLinks: [],
+        searchLinkPattern: "",
+      };
+    }
+
+    // Send response with proper data structure
+    const sent = this.safePortSend(port, {
+      type: "SEARCH_TASK_DATA", // Use specific type instead of generic SUCCESS
+      data: sessionData,
+    });
+
+    if (!sent) {
+      console.error(
+        `❌ Failed to send Wellfound search task data to port ${port.name}`
+      );
+    } else {
+      console.log(
+        `✅ Wellfound search task data sent successfully to tab ${tabId}`
+      );
+    }
+  }
+
   /**
-   * Handle application start request
+   * Handle CV task request - Wellfound specific data structure
+   */
+  async handleGetSendCvTask(port, data) {
+    const tabId = port.sender?.tab?.id;
+    const windowId = port.sender?.tab?.windowId;
+
+    console.log(
+      `🔍 GET_SEND_CV_TASK request from Wellfound tab ${tabId}, window ${windowId}`
+    );
+
+    let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
+    for (const [
+      sessionId,
+      auto,
+    ] of this.messageHandler.activeAutomations.entries()) {
+      if (auto.windowId === windowId) {
+        automation = auto;
+        console.log(`✅ Found Wellfound automation session: ${sessionId}`);
+        break;
+      }
+    }
+
+    if (automation) {
+      // Ensure we have user profile data
+      let userProfile = automation.userProfile;
+
+      // If no user profile in automation, try to fetch from user service
+      if (!userProfile && automation.userId) {
+        try {
+          console.log(
+            `📡 Fetching user profile for Wellfound user ${automation.userId}`
+          );
+          const { default: UserService } = await import(
+            "../../services/user-service.js"
+          );
+          const userService = new UserService({ userId: automation.userId });
+          userProfile = await userService.getUserDetails();
+
+          // Cache it in automation for future use
+          automation.userProfile = userProfile;
+          console.log(`✅ User profile fetched and cached for Wellfound`);
+        } catch (error) {
+          console.error(`❌ Failed to fetch user profile for Wellfound:`, error);
+        }
+      }
+
+      sessionData = {
+        devMode: automation.params?.devMode || false,
+        profile: userProfile || null,
+        session: automation.sessionConfig || null,
+        avatarUrl: userProfile?.avatarUrl || null,
+        userId: automation.userId,
+        sessionId: automation.sessionId || null,
+      };
+
+      console.log(`📊 Wellfound session data prepared:`, {
+        hasProfile: !!sessionData.profile,
+        hasSession: !!sessionData.session,
+        userId: sessionData.userId,
+        devMode: sessionData.devMode,
+      });
+    } else {
+      console.warn(`⚠️ No Wellfound automation found for window ${windowId}`);
+      
+      // Provide default data structure
+      sessionData = {
+        devMode: false,
+        profile: null,
+        session: null,
+        avatarUrl: null,
+        userId: null,
+        sessionId: null,
+      };
+    }
+
+    // Send response with specific type
+    const sent = this.safePortSend(port, {
+      type: "APPLICATION_TASK_DATA", // Use specific type instead of generic SUCCESS
+      data: sessionData,
+    });
+
+    if (!sent) {
+      console.error(
+        `❌ Failed to send Wellfound CV task data to port ${port.name}`
+      );
+    } else {
+      console.log(`✅ Wellfound CV task data sent successfully to tab ${tabId}`);
+    }
+  }
+
+  /**
+   * Handle application start request - Wellfound specific logic
    */
   async handleStartApplication(port, data, sessionId, windowId, tabId) {
     try {
-      const { url, title } = data;
-
-      if (!url) {
-        throw new Error("No URL provided for application");
-      }
+      const { url, title, location, compensation } = data;
 
       console.log(
         `🎯 Starting Wellfound application for: ${title} (${url}) in tab ${tabId}`
@@ -342,6 +531,17 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         this.applicationTimeouts.delete(data.url);
       }
 
+      // Close the application tab if it exists
+      const tabId = port.sender?.tab?.id;
+      if (tabId) {
+        try {
+          await chrome.tabs.remove(tabId);
+          console.log(`✅ Closed Wellfound application tab ${tabId}`);
+        } catch (error) {
+          console.warn(`⚠️ Error closing application tab ${tabId}:`, error);
+        }
+      }
+
       // Call parent method for common completion logic
       await super.handleTaskCompletion(port, data, status);
     } catch (error) {
@@ -362,11 +562,7 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
       }
 
       // Check if it matches job URL pattern
-      return (
-        this.platformConfig.searchLinkPattern.test(url) ||
-        this.platformConfig.applyUrlPattern.test(url) ||
-        url.includes("/jobs/")
-      );
+      return this.platformConfig.searchLinkPattern.test(url);
     } catch (error) {
       console.error("Error validating Wellfound URL:", error);
       return false;
@@ -390,6 +586,35 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
       }
     }
     return null;
+  }
+
+  /**
+   * Override base class method to provide Wellfound-specific continuation logic
+   */
+  async continueOrComplete(automation, windowId, status, data) {
+    if (status === "SUCCESS") {
+      automation.platformState.searchData.current++;
+    }
+
+    const oldUrl = automation.platformState.currentJobUrl;
+
+    // Wellfound-specific delay logic
+    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
+
+    setTimeout(async () => {
+      await this.sendSearchNextMessage(windowId, {
+        url: oldUrl,
+        status: status,
+        data: data,
+        message:
+          typeof data === "string"
+            ? data
+            : status === "ERROR"
+            ? "Application error"
+            : undefined,
+      });
+    }, delay);
   }
 
   /**

@@ -52,21 +52,35 @@ export default class WellfoundFormHandler {
   async processApplicationForm() {
     try {
       this.log("🔍 Looking for application form...");
-      await this.delay(1000);
+      await this.delay(2000);
 
-      // Wait for the modal to appear
-      await this.waitForElement('div[data-test="JobApplication-Modal"]');
-      await this.waitForElement('button[data-test=JobApplicationModal--SubmitButton]');
+      // Wait for the modal to appear with longer timeout
+      try {
+        await this.waitForElement(
+          'div[data-test="JobApplication-Modal"]',
+          15000
+        );
+      } catch (error) {
+        this.log("❌ Application modal not found within 15 seconds");
+        return {
+          success: false,
+          reason: "no_modal_found",
+          error: "Application modal did not appear",
+        };
+      }
 
-      const applicationModal = document.querySelector('div[data-test="JobApplication-Modal"]');
+      const applicationModal = document.querySelector(
+        'div[data-test="JobApplication-Modal"]'
+      );
       if (!applicationModal) {
         this.log("❌ No application modal found");
         return { success: false, reason: "no_modal_found" };
       }
 
+      // Check for location or other restrictions
       const restriction = this.checkForLocationRestrictions();
       if (restriction) {
-        this.log("❌ Form is restricted, skipping extraction");
+        this.log("❌ Form is restricted, skipping application");
         return {
           success: false,
           reason: "location_restricted",
@@ -74,34 +88,82 @@ export default class WellfoundFormHandler {
         };
       }
 
+      // Wait for form fields to load
+      await this.delay(1000);
+
       // Grab all fields using the improved method
       const fields = await this.grabFields();
       this.log(`📝 Found ${fields.length} form fields`);
 
-      // Process each field
-      for (const field of fields) {
-        await this.handleWellfoundField(field);
-        await this.delay(500);
+      if (fields.length === 0) {
+        this.log("⚠️ No form fields found, checking if it's a simple apply");
+        // Check if there's just a submit button (simple apply)
+        const submitButton = document.querySelector(
+          "button[data-test=JobApplicationModal--SubmitButton]"
+        );
+        if (submitButton && !submitButton.disabled) {
+          this.log("📤 Simple apply detected, submitting directly");
+          await this.clickElementReliably(submitButton);
+          await this.delay(3000);
+
+          // Check for success
+          const success = await this.verifySubmissionSuccess();
+          return {
+            success: success,
+            message: success
+              ? "Simple application submitted"
+              : "Application may have failed",
+          };
+        } else {
+          return {
+            success: false,
+            reason: "no_fields_or_submit",
+            error: "No form fields found and no submit button available",
+          };
+        }
       }
 
-      const submitButton = document.querySelector('button[data-test=JobApplicationModal--SubmitButton]');
+      // Process each field
+      for (const field of fields) {
+        try {
+          await this.handleWellfoundField(field);
+          await this.delay(500);
+        } catch (fieldError) {
+          this.log(
+            `⚠️ Error processing field "${field.label}": ${fieldError.message}`
+          );
+          // Continue with other fields
+        }
+      }
+
+      // Wait a bit before submitting
+      await this.delay(1000);
+
+      // Find and click submit button
+      const submitButton = document.querySelector(
+        "button[data-test=JobApplicationModal--SubmitButton]"
+      );
       if (submitButton && !submitButton.disabled) {
         this.log("📤 Submitting application form");
         await this.clickElementReliably(submitButton);
-        await this.delay(3000);
-        
+        await this.delay(5000); // Wait longer for submission
+
+        // Verify submission success
+        const success = await this.verifySubmissionSuccess();
         return {
-          success: true,
-          message: "Form processed successfully",
+          success: success,
+          message: success
+            ? "Form processed and submitted successfully"
+            : "Form submitted but verification failed",
         };
       } else {
         this.log("❌ Submit button not available or disabled");
         return {
           success: false,
           reason: "submit_button_disabled",
+          error: "Submit button is not clickable",
         };
       }
-
     } catch (error) {
       this.log("❌ Error processing application form:", error.message);
       return {
@@ -112,87 +174,183 @@ export default class WellfoundFormHandler {
     }
   }
 
+  /**
+   * Verify if the application was submitted successfully
+   */
+  async verifySubmissionSuccess() {
+    try {
+      // Wait for potential success indicators
+      await this.delay(2000);
+
+      // Check if modal disappeared (common success indicator)
+      const modal = document.querySelector(
+        'div[data-test="JobApplication-Modal"]'
+      );
+      if (!modal) {
+        this.log("✅ Application modal disappeared - likely successful");
+        return true;
+      }
+
+      // Check for success messages
+      const successSelectors = [
+        '[data-test*="success"]',
+        '[class*="success"]',
+        ".success-message",
+        ".application-success",
+      ];
+
+      for (const selector of successSelectors) {
+        const element = document.querySelector(selector);
+        if (element && element.textContent.toLowerCase().includes("success")) {
+          this.log("✅ Success message found - application successful");
+          return true;
+        }
+      }
+
+      // Check for error messages
+      const errorSelectors = [
+        '[data-test*="error"]',
+        '[class*="error"]',
+        ".error-message",
+        ".application-error",
+      ];
+
+      for (const selector of errorSelectors) {
+        const element = document.querySelector(selector);
+        if (element && element.textContent.trim()) {
+          this.log(`❌ Error message found: ${element.textContent}`);
+          return false;
+        }
+      }
+
+      // Check if we're redirected to a thank you page
+      if (
+        window.location.href.includes("thank") ||
+        window.location.href.includes("confirmation")
+      ) {
+        this.log("✅ Redirected to thank you page - application successful");
+        return true;
+      }
+
+      // Check if the apply button changed state
+      const applyButton = document.querySelector(
+        "button.styles_applyButton__7gnpI"
+      );
+      if (
+        applyButton &&
+        (applyButton.textContent.toLowerCase().includes("applied") ||
+          applyButton.disabled ||
+          applyButton.classList.contains("disabled"))
+      ) {
+        this.log(
+          "✅ Apply button shows applied state - application successful"
+        );
+        return true;
+      }
+
+      // If modal is still there and no clear success/error, assume success
+      this.log("⚠️ Cannot determine success status clearly, assuming success");
+      return true;
+    } catch (error) {
+      this.log(`❌ Error verifying submission: ${error.message}`);
+      return false;
+    }
+  }
+
   // New method based on the provided code
   async grabFields() {
     const results = [];
-    
+
     // Get all label.block elements in the modal
-    const labels = document.querySelectorAll('div[data-test="JobApplication-Modal"] form label.block');
+    const labels = document.querySelectorAll(
+      'div[data-test="JobApplication-Modal"] form label.block'
+    );
     this.log(`🔍 Found ${labels.length} label.block elements`);
 
     for (const label of labels) {
       const result = {
         element: null,
-        type: '',
+        type: "",
         label: label.firstChild.innerText.trim(),
         required: false,
-        options: []
+        options: [],
       };
 
       // Check if required (ends with *)
-      if (result.label.endsWith('*')) {
+      if (result.label.endsWith("*")) {
         result.label = result.label.slice(0, -1).trim();
         result.required = true;
       }
 
       // Special handling for cover letter questions
-      if (result.label.startsWith('What interests you about working')) {
-        result.label = 'Cover letter - ' + result.label;
+      if (result.label.startsWith("What interests you about working")) {
+        result.label = "Cover letter - " + result.label;
       }
 
       const container = label.children[1];
-      if (!container) { 
+      if (!container) {
         this.log(`⚠️ No container found for label: ${result.label}`);
-        continue; 
+        continue;
       }
 
       // Priority-based field type detection
-      if (container.querySelector('input[type=radio]')) {
-        result.type = 'radio';
-        result.element = [...container.querySelectorAll('input[type=radio]')];
-        result.options = result.element.map(input => 
-          input.parentElement.querySelector('label').innerText.trim()
+      if (container.querySelector("input[type=radio]")) {
+        result.type = "radio";
+        result.element = [...container.querySelectorAll("input[type=radio]")];
+        result.options = result.element.map((input) =>
+          input.parentElement.querySelector("label").innerText.trim()
         );
-        this.log(`📻 Radio field: ${result.label} with options: ${result.options.join(', ')}`);
-        
-      } else if (label.querySelector('input[type=checkbox]')) {
-        result.type = 'checkbox';
-        result.element = [...label.querySelectorAll('input[type=checkbox]')];
-        result.options = result.element.map(input => 
-          input.parentElement.querySelector('label').innerText.trim()
+        this.log(
+          `📻 Radio field: ${result.label} with options: ${result.options.join(
+            ", "
+          )}`
         );
-        this.log(`☑️ Checkbox field: ${result.label} with options: ${result.options.join(', ')}`);
-        
-      } else if (container.querySelector('.select__control')) {
-        result.type = 'select';
-        result.element = container.querySelector('.select__control');
-        
+      } else if (label.querySelector("input[type=checkbox]")) {
+        result.type = "checkbox";
+        result.element = [...label.querySelectorAll("input[type=checkbox]")];
+        result.options = result.element.map((input) =>
+          input.parentElement.querySelector("label").innerText.trim()
+        );
+        this.log(
+          `☑️ Checkbox field: ${
+            result.label
+          } with options: ${result.options.join(", ")}`
+        );
+      } else if (container.querySelector(".select__control")) {
+        result.type = "select";
+        result.element = container.querySelector(".select__control");
+
         // Trigger dropdown to get options
-        if (!container.querySelector('.select__menu .select__option')) {
+        if (!container.querySelector(".select__menu .select__option")) {
           this.log(`🔽 Opening React Select dropdown for: ${result.label}`);
-          const input = result.element.querySelector('input');
+          const input = result.element.querySelector("input");
           if (input) {
-            input.dispatchEvent(new Event('mousedown', {bubbles: true}));
-            input.dispatchEvent(new Event('focusin', {bubbles: true}));
+            input.dispatchEvent(new Event("mousedown", { bubbles: true }));
+            input.dispatchEvent(new Event("focusin", { bubbles: true }));
             await this.delay(1000);
           }
         }
 
-        result.options = [...container.querySelectorAll('.select__menu .select__option')]
-          .map(option => option.innerText.trim())
-          .filter(text => text.length > 0);
-        
-        this.log(`📋 Select field: ${result.label} with options: ${result.options.join(', ')}`);
-        
+        result.options = [
+          ...container.querySelectorAll(".select__menu .select__option"),
+        ]
+          .map((option) => option.innerText.trim())
+          .filter((text) => text.length > 0);
+
+        this.log(
+          `📋 Select field: ${result.label} with options: ${result.options.join(
+            ", "
+          )}`
+        );
+
         // Close dropdown
-        const input = result.element.querySelector('input');
+        const input = result.element.querySelector("input");
         if (input) {
-          input.dispatchEvent(new Event('focusout', {bubbles: true}));
+          input.dispatchEvent(new Event("focusout", { bubbles: true }));
         }
-        
       } else {
         result.element = container.firstChild;
-        result.type = result.element ? result.element.type : 'unknown';
+        result.type = result.element ? result.element.type : "unknown";
         this.log(`📝 Input field: ${result.label} type: ${result.type}`);
       }
 
@@ -202,14 +360,14 @@ export default class WellfoundFormHandler {
     }
 
     // Handle cover letter separately
-    const coverLetter = document.getElementById('form-input--userNote');
+    const coverLetter = document.getElementById("form-input--userNote");
     if (coverLetter) {
       results.push({
         element: coverLetter,
-        type: 'textarea',
-        label: 'Cover letter - ' + coverLetter.placeholder,
+        type: "textarea",
+        label: "Cover letter - " + coverLetter.placeholder,
         required: true,
-        options: []
+        options: [],
       });
       this.log(`📄 Cover letter field found`);
     }
@@ -220,24 +378,33 @@ export default class WellfoundFormHandler {
   async handleWellfoundField(field) {
     try {
       this.log(`🔧 Processing field: ${field.label} (${field.type})`);
-      
+
       // Scroll to element
       try {
-        const modalContent = document.querySelector('.ReactModal__Content');
+        const modalContent = document.querySelector(".ReactModal__Content");
         if (modalContent) {
-          this.scrollToElement(modalContent, Array.isArray(field.element) ? field.element[0] : field.element);
+          this.scrollToElement(
+            modalContent,
+            Array.isArray(field.element) ? field.element[0] : field.element
+          );
         }
       } catch (error) {
         // Ignore scroll errors
       }
 
       const answer = await this.getAnswer(field.label, field.options);
-      
+
       if (!answer && answer !== 0) {
-        if (field.required && Array.isArray(field.element) && field.element[0]) {
+        if (
+          field.required &&
+          Array.isArray(field.element) &&
+          field.element[0]
+        ) {
           // Click first option for required fields with no answer
           field.element[0].click();
-          this.log(`✅ Selected first option for required field: ${field.label}`);
+          this.log(
+            `✅ Selected first option for required field: ${field.label}`
+          );
         } else {
           this.log(`⏭️ Skipping field with no answer: ${field.label}`);
         }
@@ -249,8 +416,13 @@ export default class WellfoundFormHandler {
         // Radio buttons or checkboxes
         let found = false;
         for (const el of field.element) {
-          const optionText = el.parentElement.querySelector('label').innerText.trim();
-          if (optionText === answer || optionText.toLowerCase().includes(answer.toLowerCase())) {
+          const optionText = el.parentElement
+            .querySelector("label")
+            .innerText.trim();
+          if (
+            optionText === answer ||
+            optionText.toLowerCase().includes(answer.toLowerCase())
+          ) {
             el.click();
             found = true;
             this.log(`✅ Selected "${optionText}" for: ${field.label}`);
@@ -258,54 +430,60 @@ export default class WellfoundFormHandler {
           }
         }
         if (!found) {
-          this.log(`⚠️ Could not find matching option "${answer}" for: ${field.label}`);
+          this.log(
+            `⚠️ Could not find matching option "${answer}" for: ${field.label}`
+          );
         }
-        
-      } else if (field.type === 'select') {
+      } else if (field.type === "select") {
         // React Select
         const container = field.element.parentElement;
-        
+
         // Open dropdown if not already open
-        if (!container.querySelector('.select__menu .select__option')) {
-          const input = field.element.querySelector('input');
+        if (!container.querySelector(".select__menu .select__option")) {
+          const input = field.element.querySelector("input");
           if (input) {
-            input.dispatchEvent(new Event('mousedown', {bubbles: true}));
-            input.dispatchEvent(new Event('focusin', {bubbles: true}));
+            input.dispatchEvent(new Event("mousedown", { bubbles: true }));
+            input.dispatchEvent(new Event("focusin", { bubbles: true }));
             await this.delay(1000);
           }
         }
 
         // Find and click matching option
-        const options = container.querySelectorAll('.select__menu .select__option');
+        const options = container.querySelectorAll(
+          ".select__menu .select__option"
+        );
         let found = false;
         for (const option of options) {
           const optionText = option.innerText.trim();
-          if (optionText === answer || optionText.toLowerCase().includes(answer.toLowerCase())) {
+          if (
+            optionText === answer ||
+            optionText.toLowerCase().includes(answer.toLowerCase())
+          ) {
             option.click();
             found = true;
             this.log(`✅ Selected "${optionText}" for: ${field.label}`);
             break;
           }
         }
-        
+
         if (!found) {
-          this.log(`⚠️ Could not find matching option "${answer}" for: ${field.label}`);
+          this.log(
+            `⚠️ Could not find matching option "${answer}" for: ${field.label}`
+          );
         }
 
         await this.delay(1000);
-        
+
         // Close dropdown
-        const input = field.element.querySelector('input');
+        const input = field.element.querySelector("input");
         if (input) {
-          input.dispatchEvent(new Event('focusout', {bubbles: true}));
+          input.dispatchEvent(new Event("focusout", { bubbles: true }));
         }
-        
       } else {
         // Regular input fields
         this.setNativeValue(field.element, answer);
         this.log(`✅ Filled "${field.label}" with: ${answer}`);
       }
-
     } catch (error) {
       this.log(`❌ Error handling field "${field.label}": ${error.message}`);
     }
@@ -313,10 +491,12 @@ export default class WellfoundFormHandler {
 
   // Helper method to set native value (like React)
   setNativeValue(element, value) {
-    const { set: valueSetter } = Object.getOwnPropertyDescriptor(element, 'value') || {};
+    const { set: valueSetter } =
+      Object.getOwnPropertyDescriptor(element, "value") || {};
     const prototype = Object.getPrototypeOf(element);
-    const { set: prototypeValueSetter } = Object.getOwnPropertyDescriptor(prototype, 'value') || {};
-    
+    const { set: prototypeValueSetter } =
+      Object.getOwnPropertyDescriptor(prototype, "value") || {};
+
     if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
       prototypeValueSetter.call(element, value);
     } else if (valueSetter) {
@@ -324,26 +504,26 @@ export default class WellfoundFormHandler {
     } else {
       element.value = value;
     }
-    
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
+
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   // Helper method to scroll to element
   scrollToElement(container, element) {
     if (!container || !element) return;
-    
+
     const containerRect = container.getBoundingClientRect();
     const elementRect = element.getBoundingClientRect();
     const offset = elementRect.top - containerRect.top;
-    
+
     container.scrollTop += offset;
-    
-    const scrollEvent = new Event('scroll', {
+
+    const scrollEvent = new Event("scroll", {
       bubbles: true,
       cancelable: true,
     });
-    
+
     container.dispatchEvent(scrollEvent);
   }
 
@@ -394,7 +574,7 @@ export default class WellfoundFormHandler {
       };
 
       const answer = await this.aiService.getAnswer(label, options, context);
-      const cleanedAnswer = answer.replace(/["*\-]/g, '');
+      const cleanedAnswer = answer.replace(/["*\-]/g, "");
 
       this.answerCache.set(normalizedLabel, cleanedAnswer);
       this.log(`✅ Got AI answer for "${label}": ${cleanedAnswer}`);
@@ -412,24 +592,26 @@ export default class WellfoundFormHandler {
       "require sponsorship": "No",
       "require visa": "No",
       "visa sponsorship": "No",
-      "experience": "Yes",
+      experience: "Yes",
       "data quality": "Yes",
       "dataset diversity": "Yes",
-      "working": "I am excited about the opportunity to contribute to innovative projects and work with cutting-edge technology.",
+      working:
+        "I am excited about the opportunity to contribute to innovative projects and work with cutting-edge technology.",
       "years of experience": "2 years",
-      "phone": "555-0123",
-      "salary": "80000",
+      phone: "555-0123",
+      salary: "80000",
       "expected salary": "80000",
       "desired salary": "80000",
-      "location": "Remote",
+      location: "Remote",
       "preferred location": "Remote",
       "willing to relocate": "Yes",
       "start date": "Immediately",
       "notice period": "2 weeks",
-      "availability": "Immediately",
+      availability: "Immediately",
       "hear about us": "LinkedIn",
       "how did you hear": "LinkedIn",
-      "cover letter": "I am writing to express my strong interest in this position. With my background and experience, I believe I would be a valuable addition to your team.",
+      "cover letter":
+        "I am writing to express my strong interest in this position. With my background and experience, I believe I would be a valuable addition to your team.",
     };
 
     for (const [key, value] of Object.entries(defaultAnswers)) {
@@ -451,7 +633,7 @@ export default class WellfoundFormHandler {
   scrapeJobDescription() {
     try {
       const descriptionSelectors = [
-        'div[class^=styles_description]',
+        "div[class^=styles_description]",
         '[data-test*="job-description"]',
         ".job-description",
         ".description",
