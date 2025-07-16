@@ -1,12 +1,12 @@
-// platforms/wellfound/wellfound.js - ENHANCED VERSION with Background Communication
+// platforms/wellfound/wellfound.js
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import WellfoundFormHandler from "./wellfound-form-handler.js";
-import { UrlUtils, DomUtils } from "../../shared/utilities/index.js";
 import {
   AIService,
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
+import { WellfoundFilters } from "./wellfound-filter-handler.js";
 
 export default class WellfoundPlatform extends BasePlatformAutomation {
   constructor(config) {
@@ -14,12 +14,19 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.platform = "wellfound";
     this.baseUrl = "https://wellfound.com";
 
+    this.jobQueue = []; 
+    this.currentJobIndex = 0; 
+    this.isLoadingMore = false; 
+    this.queueInitialized = false; 
+
     // Initialize Wellfound-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
       userId: this.userId,
     });
     this.userService = new UserService({ userId: this.userId });
+
+    this.filters = new WellfoundFilters();
 
     this.formHandler = null;
 
@@ -40,10 +47,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   isValidJobPage(url) {
-    return (
-      url.includes("wellfound.com/jobs/") &&
-      /\/jobs\/\d+/.test(url)
-    );
+    return url.includes("wellfound.com/jobs/") && /\/jobs\/\d+/.test(url);
   }
 
   async setSessionContext(sessionContext) {
@@ -225,7 +229,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   async findJobs() {
-    return this.findAllLinksElements();
+    // ✅ UPDATED: Return jobs from queue instead of DOM search
+    return this.jobQueue.slice(this.currentJobIndex);
   }
 
   async applyToJob(jobElement) {
@@ -267,6 +272,308 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     );
 
     this.statusOverlay.addSuccess("Wellfound-specific components initialized");
+  }
+
+  // ========================================
+  // QUEUE-BASED JOB MANAGEMENT
+  // ========================================
+
+  async buildJobQueue() {
+    try {
+      this.log("🏗️ Building job queue from company cards...");
+      this.statusOverlay.addInfo("Discovering all available jobs...");
+
+      // Reset queue
+      this.jobQueue = [];
+      this.currentJobIndex = 0;
+
+      // Wait for company cards to load
+      await this.waitForPageLoad();
+      await this.delay(2000); // Give extra time for dynamic content
+
+      // Get all company cards currently visible
+      const companyCards = document.querySelectorAll(
+        ".styles_component__uTjje"
+      );
+      this.log(`🔍 Found ${companyCards.length} company cards on page`);
+
+      for (const companyCard of companyCards) {
+        try {
+          const jobs = this.extractJobsFromCompanyCard(companyCard);
+
+          // Filter out already processed jobs
+          const newJobs = jobs.filter((job) => {
+            const normalizedUrl = this.normalizeUrl(job.url);
+            return !this.searchData.submittedLinks.some(
+              (link) => this.normalizeUrl(link.url) === normalizedUrl
+            );
+          });
+
+          this.jobQueue.push(...newJobs);
+
+          if (newJobs.length > 0) {
+            this.log(
+              `➕ Added ${newJobs.length} jobs from ${
+                newJobs[0]?.company || "company"
+              }`
+            );
+          }
+        } catch (error) {
+          this.log(`❌ Error processing company card:`, error);
+          continue;
+        }
+      }
+
+      this.queueInitialized = true;
+      this.log(`✅ Job queue built with ${this.jobQueue.length} jobs`);
+      this.statusOverlay.addSuccess(
+        `Found ${this.jobQueue.length} jobs to process!`
+      );
+
+      // Log some sample jobs for debugging
+      this.jobQueue.slice(0, 3).forEach((job, index) => {
+        this.log(
+          `📋 Job ${index + 1}: ${job.title} at ${job.company} (${
+            job.location
+          })`
+        );
+      });
+
+      return this.jobQueue.length > 0;
+    } catch (error) {
+      this.log("❌ Error building job queue:", error);
+      this.statusOverlay.addError("Error building job queue: " + error.message);
+      return false;
+    }
+  }
+
+  extractJobsFromCompanyCard(companyCard) {
+    const jobs = [];
+
+    try {
+      // Method 1: Jobs within job listing sections
+      const jobListingsSection = companyCard.querySelector(
+        ".styles_jobListingList__YGDNO"
+      );
+
+      if (jobListingsSection) {
+        // Find all job links within this company's listings
+        const jobLinksInCompany = jobListingsSection.querySelectorAll(
+          "a.styles_component__UCLp3.styles_defaultLink__eZMqw.styles_jobLink__US40J"
+        );
+
+        for (const jobLink of jobLinksInCompany) {
+          if (jobLink && jobLink.href) {
+            const href = jobLink.href;
+
+            // Validate the URL matches Wellfound job pattern
+            if (this.getSearchLinkPattern().test(href)) {
+              const jobInfo = this.createJobInfoFromLink(jobLink, companyCard);
+              jobs.push(jobInfo);
+              this.log(
+                `📋 Found job: ${jobInfo.title} at ${jobInfo.company} (${jobInfo.location})`
+              );
+            } else {
+              this.log(`⚠️ Job URL doesn't match pattern: ${href}`);
+            }
+          }
+        }
+      } else {
+        // Method 2: Direct job links in company cards
+        const directJobLink = companyCard.querySelector(
+          "a.styles_component__UCLp3.styles_defaultLink__eZMqw.styles_jobLink__US40J"
+        );
+        if (
+          directJobLink &&
+          directJobLink.href &&
+          this.getSearchLinkPattern().test(directJobLink.href)
+        ) {
+          const jobInfo = this.createJobInfoFromLink(
+            directJobLink,
+            companyCard
+          );
+          jobs.push(jobInfo);
+          this.log(
+            `📋 Found direct job: ${jobInfo.title} at ${jobInfo.company}`
+          );
+        }
+      }
+    } catch (error) {
+      this.log(`❌ Error extracting jobs from company card:`, error);
+    }
+
+    return jobs;
+  }
+
+  createJobInfoFromLink(jobLink, companyCard) {
+    const jobContainer = jobLink.closest(".styles_component__Ey28k") || jobLink;
+    const titleElement = jobContainer.querySelector(".styles_title__xpQDw");
+    const locationElement = jobContainer.querySelector(
+      ".styles_location__O9Z62"
+    );
+    const compensationElement = jobContainer.querySelector(
+      ".styles_compensation__3JnvU"
+    );
+
+    // Also get company info from the parent company card
+    const companyNameElement = companyCard.querySelector(
+      "h2.inline.text-md.font-semibold"
+    );
+
+    return {
+      url: jobLink.href,
+      title: titleElement?.textContent?.trim() || "Unknown Title",
+      location: locationElement?.textContent?.trim() || "Unknown Location",
+      compensation: compensationElement?.textContent?.trim() || "Not specified",
+      company: companyNameElement?.textContent?.trim() || "Unknown Company",
+      element: jobLink,
+      originalElement: jobContainer,
+      companyCard: companyCard,
+      queueIndex: this.jobQueue.length, // For debugging
+      extractedAt: Date.now(),
+    };
+  }
+
+  async processNextJobFromQueue() {
+    try {
+      // Check if we need to load more jobs (when only 2-3 jobs left)
+      if (
+        this.jobQueue.length - this.currentJobIndex <= 3 &&
+        !this.isLoadingMore
+      ) {
+        this.log("🔄 Queue running low, attempting to load more jobs...");
+        await this.loadMoreJobsIntoQueue();
+      }
+
+      // Check if we've reached the application limit
+      if (this.searchData.current >= this.searchData.limit) {
+        this.log("🏁 Reached job application limit");
+        this.statusOverlay.addSuccess("Reached target number of applications!");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+        return;
+      }
+
+      // Check if queue is empty
+      if (this.currentJobIndex >= this.jobQueue.length) {
+        this.log("📭 Job queue exhausted");
+        this.statusOverlay.addWarning("No more jobs available in queue");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+        return;
+      }
+
+      // Get next job from queue
+      const nextJob = this.jobQueue[this.currentJobIndex];
+      this.currentJobIndex++;
+
+      this.log(
+        `🎯 Processing job ${this.currentJobIndex}/${this.jobQueue.length}: ${nextJob.title}`
+      );
+      this.statusOverlay.addInfo(
+        `Processing job ${this.currentJobIndex}/${this.jobQueue.length}: ${nextJob.title}`
+      );
+
+      // Send job to background for processing in new tab
+      const success = await this.processJobLink(nextJob);
+
+      if (!success) {
+        // If processing failed, mark as failed and try next
+        this.searchData.submittedLinks.push({
+          url: nextJob.url,
+          status: "FAILED",
+          message: "Failed to process job link",
+          timestamp: Date.now(),
+        });
+
+        this.log(`❌ Failed to process job, moving to next in queue`);
+
+        // Move to next job immediately
+        setTimeout(() => this.processNextJobFromQueue(), 1000);
+      }
+
+      // If success, the background script will send SEARCH_NEXT when done
+    } catch (error) {
+      this.log("❌ Error in processNextJobFromQueue:", error);
+      this.statusOverlay.addError(
+        "Error processing job queue: " + error.message
+      );
+      this.reportError(error, { action: "processNextJobFromQueue" });
+    }
+  }
+
+  async loadMoreJobsIntoQueue() {
+    if (this.isLoadingMore) {
+      this.log("⚠️ Already loading more jobs, skipping duplicate request");
+      return false;
+    }
+
+    this.isLoadingMore = true;
+
+    try {
+      this.log("🔄 Loading more jobs into queue...");
+      this.statusOverlay.addInfo("Loading more jobs...");
+
+      const initialJobCount = this.jobQueue.length;
+
+      // Use existing scroll/pagination logic to load more content
+      const loadedMore = await this.loadMoreJobs();
+
+      if (loadedMore) {
+        // Wait for new content to load
+        await this.delay(3000);
+
+        // Extract jobs from new company cards
+        const newCompanyCards = document.querySelectorAll(
+          ".styles_component__uTjje"
+        );
+
+        // Only process cards we haven't seen before
+        const unseenCards = Array.from(newCompanyCards).slice(initialJobCount);
+
+        for (const companyCard of unseenCards) {
+          try {
+            const jobs = this.extractJobsFromCompanyCard(companyCard);
+
+            // Filter out already processed jobs
+            const newJobs = jobs.filter((job) => {
+              const normalizedUrl = this.normalizeUrl(job.url);
+              return !this.searchData.submittedLinks.some(
+                (link) => this.normalizeUrl(link.url) === normalizedUrl
+              );
+            });
+
+            this.jobQueue.push(...newJobs);
+
+            if (newJobs.length > 0) {
+              this.log(
+                `➕ Added ${newJobs.length} new jobs from ${
+                  newJobs[0]?.company || "company"
+                }`
+              );
+            }
+          } catch (error) {
+            this.log(`❌ Error processing new company card:`, error);
+          }
+        }
+
+        const newJobCount = this.jobQueue.length - initialJobCount;
+        this.log(
+          `✅ Added ${newJobCount} new jobs to queue (total: ${this.jobQueue.length})`
+        );
+        this.statusOverlay.addSuccess(`Loaded ${newJobCount} more jobs!`);
+
+        return newJobCount > 0;
+      } else {
+        this.log("❌ No more jobs available to load");
+        this.statusOverlay.addWarning("No more jobs available");
+        return false;
+      }
+    } catch (error) {
+      this.log("❌ Error loading more jobs:", error);
+      this.statusOverlay.addError("Error loading more jobs: " + error.message);
+      return false;
+    } finally {
+      this.isLoadingMore = false;
+    }
   }
 
   // ========================================
@@ -339,8 +646,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.log("✅ Wellfound search data initialized:", this.searchData);
       this.statusOverlay.addSuccess("Search initialization complete");
 
-      // Start search process
-      setTimeout(() => this.searchNext(), 1000);
+      // ✅ NEW: Start building job queue and processing
+      setTimeout(() => this.startQueueBasedSearch(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
       this.statusOverlay.addError(
@@ -349,20 +656,46 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
+  async startQueueBasedSearch() {
+    try {
+      this.log("🚀 Starting queue-based job search");
+
+      // Build initial job queue
+      const queueBuilt = await this.buildJobQueue();
+
+      if (!queueBuilt || this.jobQueue.length === 0) {
+        this.log("❌ No jobs found to process");
+        this.statusOverlay.addError("No jobs found on current page");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+        return;
+      }
+
+      // Start processing jobs from queue
+      await this.processNextJobFromQueue();
+    } catch (error) {
+      this.log("❌ Error starting queue-based search:", error);
+      this.statusOverlay.addError(
+        "Error starting job search: " + error.message
+      );
+    }
+  }
+
   handleSuccessMessage(data) {
     // Legacy handler for backward compatibility
     console.log("🔄 Handling legacy SUCCESS message with data:", data);
-    
+
     if (data && Object.keys(data).length === 0) {
-      this.log("⚠️ Received empty SUCCESS data - this might indicate an issue with automation setup");
+      this.log(
+        "⚠️ Received empty SUCCESS data - this might indicate an issue with automation setup"
+      );
       return;
     }
-    
+
     if (data && data.submittedLinks !== undefined) {
       // This is search task data
       this.handleSearchTaskData(data);
     } else if (data && data.profile !== undefined && !this.userProfile) {
-      // This is application task data  
+      // This is application task data
       this.handleApplicationTaskData(data);
     } else {
       this.log("⚠️ SUCCESS message with unrecognized data structure:", data);
@@ -416,7 +749,34 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.applicationState.isApplicationInProgress = false;
       this.applicationState.applicationStartTime = null;
       this.statusOverlay.addInfo("No active application, resuming search");
-      setTimeout(() => this.searchNext(), 1000);
+      setTimeout(() => this.processNextJobFromQueue(), 1000);
+    }
+  }
+
+  // ✅ UPDATED: Simple next job handler using queue
+  handleSearchNext(data) {
+    try {
+      this.log("🔄 Received search next signal:", data);
+
+      // Update local data with completed job info
+      if (data && data.submittedLinks) {
+        this.searchData.submittedLinks = data.submittedLinks;
+        this.log(
+          `📊 Updated submitted links: ${data.submittedLinks.length} jobs processed`
+        );
+      }
+      if (data && data.current !== undefined) {
+        this.searchData.current = data.current;
+        this.log(`📊 Updated current count: ${data.current}`);
+      }
+
+      this.statusOverlay.addInfo("Moving to next job in queue...");
+
+      // ✅ NEW: Process next job from queue instead of searching DOM
+      setTimeout(() => this.processNextJobFromQueue(), 1000);
+    } catch (error) {
+      this.log("❌ Error handling search next:", error);
+      this.statusOverlay.addError("Error continuing search: " + error.message);
     }
   }
 
@@ -477,121 +837,57 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Enhanced job search using the specific job link selector
-   * Note: Wellfound has company cards (.styles_component__uTjje) that contain job listings
+   * Send job to background for processing in new tab
    */
-  async findAllLinksElements() {
+  async processJobLink(jobInfo) {
     try {
-      // Wait for company cards to load
-      await this.waitForPageLoad();
-      await this.wait(2000); // Give extra time for dynamic content
-      
-      const companyCards = document.querySelectorAll(".styles_component__uTjje");
-      this.log(`🔍 Found ${companyCards.length} company cards on Wellfound`);
+      this.log(`🎯 Processing job: ${jobInfo.title} - ${jobInfo.url}`);
+      this.statusOverlay.addInfo(`Processing: ${jobInfo.title}`);
 
-      const jobLinks = [];
+      // Send to background script to open in new tab
+      const success = this.safeSendPortMessage({
+        type: "START_APPLICATION",
+        data: {
+          url: jobInfo.url,
+          title: jobInfo.title,
+          location: jobInfo.location,
+          compensation: jobInfo.compensation,
+        },
+      });
 
-      for (const companyCard of companyCards) {
-        try {
-          // Each company card can contain multiple job listings
-          // Look for job links within the job listing section
-          const jobListingsSection = companyCard.querySelector(".styles_jobListingList__YGDNO");
-          
-          if (jobListingsSection) {
-            // Find all job links within this company's listings
-            const jobLinksInCompany = jobListingsSection.querySelectorAll("a.styles_component__UCLp3.styles_defaultLink__eZMqw.styles_jobLink__US40J");
-            
-            for (const jobLink of jobLinksInCompany) {
-              if (jobLink && jobLink.href) {
-                const href = jobLink.href;
-                
-                // Validate the URL matches Wellfound job pattern
-                if (this.getSearchLinkPattern().test(href)) {
-                  // Extract job info from the job link container
-                  const jobContainer = jobLink.closest(".styles_component__Ey28k") || jobLink;
-                  const titleElement = jobContainer.querySelector(".styles_title__xpQDw");
-                  const locationElement = jobContainer.querySelector(".styles_location__O9Z62");
-                  const compensationElement = jobContainer.querySelector(".styles_compensation__3JnvU");
-                  
-                  // Also get company info from the parent company card
-                  const companyNameElement = companyCard.querySelector("h2.inline.text-md.font-semibold");
-                  
-                  const jobInfo = {
-                    url: href,
-                    title: titleElement?.textContent?.trim() || "Unknown Title",
-                    location: locationElement?.textContent?.trim() || "Unknown Location", 
-                    compensation: compensationElement?.textContent?.trim() || "Not specified",
-                    company: companyNameElement?.textContent?.trim() || "Unknown Company",
-                    element: jobLink,
-                    originalElement: jobContainer,
-                    companyCard: companyCard
-                  };
-
-                  jobLinks.push(jobInfo);
-                  this.log(`📋 Found job: ${jobInfo.title} at ${jobInfo.company} (${jobInfo.location})`);
-                } else {
-                  this.log(`⚠️ Job URL doesn't match pattern: ${href}`);
-                }
-              }
-            }
-          } else {
-            // Some company cards might not have job listings, check for direct job links
-            const directJobLink = companyCard.querySelector("a.styles_component__UCLp3.styles_defaultLink__eZMqw.styles_jobLink__US40J");
-            if (directJobLink && directJobLink.href && this.getSearchLinkPattern().test(directJobLink.href)) {
-              const titleElement = companyCard.querySelector(".styles_title__xpQDw");
-              const locationElement = companyCard.querySelector(".styles_location__O9Z62");
-              const compensationElement = companyCard.querySelector(".styles_compensation__3JnvU");
-              const companyNameElement = companyCard.querySelector("h2.inline.text-md.font-semibold");
-              
-              const jobInfo = {
-                url: directJobLink.href,
-                title: titleElement?.textContent?.trim() || "Unknown Title",
-                location: locationElement?.textContent?.trim() || "Unknown Location",
-                compensation: compensationElement?.textContent?.trim() || "Not specified", 
-                company: companyNameElement?.textContent?.trim() || "Unknown Company",
-                element: directJobLink,
-                originalElement: companyCard,
-                companyCard: companyCard
-              };
-
-              jobLinks.push(jobInfo);
-              this.log(`📋 Found direct job: ${jobInfo.title} at ${jobInfo.company}`);
-            }
-          }
-        } catch (error) {
-          this.log(`❌ Error processing company card:`, error);
-          continue;
-        }
+      if (!success) {
+        throw new Error("Failed to send job to background script");
       }
 
-      this.log(`✅ Successfully found ${jobLinks.length} valid job links`);
-      return jobLinks;
+      return true;
     } catch (error) {
-      this.log("❌ Error finding job links:", error);
-      this.statusOverlay?.addError("Error finding job links: " + error.message);
-      return [];
+      this.log(`❌ Error processing job link: ${error.message}`);
+      this.statusOverlay.addError(
+        `Error processing ${jobInfo.title}: ${error.message}`
+      );
+      return false;
     }
   }
 
   /**
-   * Wait for page elements to load (inherited from base class)
+   * Wait for page elements to load
    */
   async waitForPageLoad() {
     try {
       // Wait for initial page load
-      if (document.readyState !== 'complete') {
-        await new Promise(resolve => {
-          if (document.readyState === 'complete') {
+      if (document.readyState !== "complete") {
+        await new Promise((resolve) => {
+          if (document.readyState === "complete") {
             resolve();
           } else {
-            window.addEventListener('load', resolve, { once: true });
+            window.addEventListener("load", resolve, { once: true });
           }
         });
       }
 
       // Wait for company cards to appear
       await this.waitForElementWithTimeout(".styles_component__uTjje", 15000);
-      
+
       this.log("✅ Page load completed");
     } catch (error) {
       this.log("⚠️ Page load timeout, continuing anyway");
@@ -627,37 +923,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         reject(new Error(`Element ${selector} not found within ${timeout}ms`));
       }, timeout);
     });
-  }
-
-  /**
-   * Send job to background for processing in new tab
-   */
-  async processJobLink(jobInfo) {
-    try {
-      this.log(`🎯 Processing job: ${jobInfo.title} - ${jobInfo.url}`);
-      this.statusOverlay.addInfo(`Processing: ${jobInfo.title}`);
-
-      // Send to background script to open in new tab
-      const success = this.safeSendPortMessage({
-        type: "START_APPLICATION", 
-        data: {
-          url: jobInfo.url,
-          title: jobInfo.title,
-          location: jobInfo.location,
-          compensation: jobInfo.compensation
-        }
-      });
-
-      if (!success) {
-        throw new Error("Failed to send job to background script");
-      }
-
-      return true;
-    } catch (error) {
-      this.log(`❌ Error processing job link: ${error.message}`);
-      this.statusOverlay.addError(`Error processing ${jobInfo.title}: ${error.message}`);
-      return false;
-    }
   }
 
   // ========================================
@@ -776,8 +1041,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // Fallback: look for any button with "Apply" text
       const allButtons = document.querySelectorAll("button");
       for (const button of allButtons) {
-        if (button.textContent?.toLowerCase().includes("apply") && 
-            !button.textContent?.toLowerCase().includes("applied")) {
+        if (
+          button.textContent?.toLowerCase().includes("apply") &&
+          !button.textContent?.toLowerCase().includes("applied")
+        ) {
           return button;
         }
       }
@@ -805,21 +1072,26 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // Try multiple click strategies
       const clickStrategies = [
         () => button.click(),
-        () => button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+        () =>
+          button.dispatchEvent(
+            new MouseEvent("click", { bubbles: true, cancelable: true })
+          ),
         () => {
           button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
           button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
           button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        }
+        },
       ];
 
       for (const strategy of clickStrategies) {
         try {
           strategy();
           await this.delay(1000);
-          
+
           // Check if modal appeared
-          const modal = document.querySelector('div[data-test="JobApplication-Modal"]');
+          const modal = document.querySelector(
+            'div[data-test="JobApplication-Modal"]'
+          );
           if (modal) {
             this.log("✅ Apply button clicked successfully, modal appeared");
             return true;
@@ -838,7 +1110,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async handleSuccessfulApplication(jobId) {
     // Get job details from page
-    const jobTitle = this.extractJobTitle() || document.title.split(" - ")[0] || "Job on Wellfound";
+    const jobTitle =
+      this.extractJobTitle() ||
+      document.title.split(" - ")[0] ||
+      "Job on Wellfound";
     const companyName = this.extractCompanyName() || "Company on Wellfound";
     const location = this.extractJobLocation() || "Not specified";
 
@@ -867,29 +1142,37 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.statusOverlay.updateStatus("success");
   }
 
+  // ========================================
+  // JOB DATA EXTRACTION METHODS
+  // ========================================
+
   /**
    * Extract job description from Wellfound job page
    */
   extractJobDescription() {
     const descriptionSelectors = [
-      '.styles_description__xjvTf',
+      ".styles_description__xjvTf",
       '[data-test*="job-description"]',
-      '.job-description',
-      '.description',
-      '[class*="description"]'
+      ".job-description",
+      ".description",
+      '[class*="description"]',
     ];
 
     let description = this.extractTextFromSelectors(descriptionSelectors);
 
     if (!description) {
       // Fallback to main content
-      const mainContent = document.querySelector("main, .content, [role='main']");
+      const mainContent = document.querySelector(
+        "main, .content, [role='main']"
+      );
       if (mainContent) {
         description = mainContent.textContent.trim();
       }
     }
 
-    console.log(`📋 Extracted job description (${description.length} characters)`);
+    console.log(
+      `📋 Extracted job description (${description.length} characters)`
+    );
     return description || "No description available";
   }
 
@@ -901,7 +1184,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       "h1.inline.text-xl.font-semibold.text-black",
       "h1",
       ".job-title",
-      ".styles_title__xpQDw"
+      ".styles_title__xpQDw",
     ]);
   }
 
@@ -912,7 +1195,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return this.extractTextFromSelectors([
       'a[rel="noopener noreferrer"] span.text-sm.font-semibold.text-black',
       ".company-name",
-      ".text-sm.font-semibold.text-black"
+      ".text-sm.font-semibold.text-black",
     ]);
   }
 
@@ -923,7 +1206,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return this.extractTextFromSelectors([
       ".styles_location__O9Z62",
       ".location",
-      "[data-testid='location']"
+      "[data-testid='location']",
     ]);
   }
 
@@ -934,7 +1217,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return this.extractTextFromSelectors([
       ".styles_compensation__3JnvU",
       ".compensation",
-      ".salary"
+      ".salary",
     ]);
   }
 
@@ -952,99 +1235,20 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Normalize URL for comparison
-   */
-  normalizeUrl(url) {
-    try {
-      if (!url) return "";
-      
-      // Remove protocol and trailing slashes for comparison
-      return url.toLowerCase()
-        .replace(/^https?:\/\//, "")
-        .replace(/\/+$/, "")
-        .trim();
-    } catch (error) {
-      return url;
-    }
-  }
-
-  /**
    * Extract job ID from Wellfound URL
    */
-  /**
-   * Override search next to process job links through background script
-   */
-  async searchNext() {
+  extractJobIdFromUrl(url) {
     try {
-      if (!this.searchData) {
-        this.log("⚠️ No search data available");
-        return;
-      }
-
-      // Check if we've reached the limit
-      if (this.searchData.current >= this.searchData.limit) {
-        this.log("🏁 Reached job application limit");
-        this.statusOverlay.addSuccess("Reached target number of applications!");
-        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
-        return;
-      }
-
-      // Find job links on current page
-      const jobLinks = await this.findAllLinksElements();
-      
-      if (jobLinks.length === 0) {
-        this.log("❌ No job links found on page");
-        this.statusOverlay.addWarning("No more jobs found on current page");
-        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
-        return;
-      }
-
-      // Filter out already processed jobs
-      const unprocessedJobs = jobLinks.filter(job => {
-        const normalizedUrl = this.normalizeUrl(job.url);
-        return !this.searchData.submittedLinks.some(
-          link => this.normalizeUrl(link.url) === normalizedUrl
-        );
-      });
-
-      if (unprocessedJobs.length === 0) {
-        this.log("⚠️ All jobs on page already processed");
-        this.statusOverlay.addInfo("All visible jobs already processed");
-        // Try to load more jobs or complete
-        const loadedMore = await this.loadMoreJobs();
-        if (!loadedMore) {
-          this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
-        } else {
-          // Retry with new jobs
-          setTimeout(() => this.searchNext(), 2000);
-        }
-        return;
-      }
-
-      // Get the next job to process
-      const nextJob = unprocessedJobs[0];
-      this.log(`🎯 Processing next job: ${nextJob.title}`);
-
-      // Send job to background for processing
-      const success = await this.processJobLink(nextJob);
-      
-      if (!success) {
-        // Skip this job and try next
-        this.searchData.submittedLinks.push({
-          url: nextJob.url,
-          status: "SKIPPED",
-          message: "Failed to process job link",
-          timestamp: Date.now()
-        });
-        setTimeout(() => this.searchNext(), 1000);
-      }
-
+      const match = url.match(/\/jobs\/(\d+)/);
+      return match ? match[1] : null;
     } catch (error) {
-      this.log("❌ Error in searchNext:", error);
-      this.statusOverlay.addError("Error processing jobs: " + error.message);
-      this.reportError(error, { action: "searchNext" });
+      return null;
     }
   }
+
+  // ========================================
+  // PAGINATION AND LOADING UTILITIES
+  // ========================================
 
   /**
    * Try to load more jobs by scrolling or pagination
@@ -1052,22 +1256,28 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   async loadMoreJobs() {
     try {
       this.log("🔄 Attempting to load more jobs");
-      
+
       // Method 1: Scroll to bottom to trigger infinite scroll
-      const initialJobCount = document.querySelectorAll(".styles_component__uTjje").length;
-      
+      const initialJobCount = document.querySelectorAll(
+        ".styles_component__uTjje"
+      ).length;
+
       window.scrollTo({
         top: document.body.scrollHeight,
-        behavior: 'smooth'
+        behavior: "smooth",
       });
-      
+
       // Wait for potential new jobs to load
       await this.delay(3000);
-      
-      const newJobCount = document.querySelectorAll(".styles_component__uTjje").length;
-      
+
+      const newJobCount = document.querySelectorAll(
+        ".styles_component__uTjje"
+      ).length;
+
       if (newJobCount > initialJobCount) {
-        this.log(`✅ Loaded ${newJobCount - initialJobCount} more jobs via scroll`);
+        this.log(
+          `✅ Loaded ${newJobCount - initialJobCount} more jobs via scroll`
+        );
         return true;
       }
 
@@ -1078,8 +1288,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         'button:contains("Load More")',
         'button:contains("Show More")',
         'button:contains("See More")',
-        '.load-more-button',
-        '.show-more-button'
+        ".load-more-button",
+        ".show-more-button",
       ];
 
       for (const selector of loadMoreSelectors) {
@@ -1089,10 +1299,14 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
             this.log("🔘 Found load more button, clicking");
             await this.clickElementReliably(button);
             await this.delay(3000);
-            
-            const finalJobCount = document.querySelectorAll(".styles_component__uTjje").length;
+
+            const finalJobCount = document.querySelectorAll(
+              ".styles_component__uTjje"
+            ).length;
             if (finalJobCount > newJobCount) {
-              this.log(`✅ Load more button added ${finalJobCount - newJobCount} jobs`);
+              this.log(
+                `✅ Load more button added ${finalJobCount - newJobCount} jobs`
+              );
               return true;
             }
           }
@@ -1104,18 +1318,24 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         'a[aria-label="Next"]',
         'a[data-test*="next"]',
         'button[aria-label="Next"]',
-        '.pagination .next:not(.disabled)',
-        'a[rel="next"]'
+        ".pagination .next:not(.disabled)",
+        'a[rel="next"]',
       ];
 
       for (const selector of nextPageSelectors) {
         const nextButton = document.querySelector(selector);
-        if (nextButton && !nextButton.disabled && !nextButton.classList.contains('disabled')) {
+        if (
+          nextButton &&
+          !nextButton.disabled &&
+          !nextButton.classList.contains("disabled")
+        ) {
           this.log("🔘 Found next page button, clicking");
           await this.clickElementReliably(nextButton);
           await this.delay(4000); // Wait longer for page navigation
-          
-          const pageJobCount = document.querySelectorAll(".styles_component__uTjje").length;
+
+          const pageJobCount = document.querySelectorAll(
+            ".styles_component__uTjje"
+          ).length;
           if (pageJobCount > 0) {
             this.log(`✅ Next page loaded with ${pageJobCount} jobs`);
             return true;
@@ -1125,7 +1345,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       this.log("❌ No more jobs available to load");
       return false;
-
     } catch (error) {
       this.log("❌ Error loading more jobs:", error);
       return false;
@@ -1140,7 +1359,11 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
     try {
       const style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0"
+      ) {
         return false;
       }
 
@@ -1152,56 +1375,15 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Delay utility method (inherited from base class)
-   */
-  async delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Wait utility method alias
-   */
-  async wait(ms) {
-    return this.delay(ms);
-  }
-
-  /**
-   * Scroll element into view
-   */
-  scrollToElement(element) {
-    if (!element) return;
-    
-    try {
-      element.scrollIntoView({ 
-        behavior: "smooth", 
-        block: "center",
-        inline: "nearest" 
-      });
-    } catch (error) {
-      // Fallback for older browsers
-      element.scrollIntoView();
-    }
-  }
-
-  /**
-   * Extract job ID from Wellfound URL
-   */
-  extractJobIdFromUrl(url) {
-    try {
-      const match = url.match(/\/jobs\/(\d+)/);
-      return match ? match[1] : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  /**
    * Enhanced click element method with multiple strategies
    */
   async clickElementReliably(element) {
     const strategies = [
       () => element.click(),
-      () => element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+      () =>
+        element.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true })
+        ),
       () => {
         element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
@@ -1209,7 +1391,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       },
       () => {
         element.focus();
-        element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+        );
       },
     ];
 
@@ -1227,6 +1411,60 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
 
     throw new Error("All click strategies failed");
+  }
+
+  // ========================================
+  // UTILITY METHODS
+  // ========================================
+
+  /**
+   * Normalize URL for comparison
+   */
+  normalizeUrl(url) {
+    try {
+      if (!url) return "";
+
+      // Remove protocol and trailing slashes for comparison
+      return url
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/\/+$/, "")
+        .trim();
+    } catch (error) {
+      return url;
+    }
+  }
+
+  /**
+   * Delay utility method
+   */
+  async delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Wait utility method alias
+   */
+  async wait(ms) {
+    return this.delay(ms);
+  }
+
+  /**
+   * Scroll element into view
+   */
+  scrollToElement(element) {
+    if (!element) return;
+
+    try {
+      element.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "nearest",
+      });
+    } catch (error) {
+      // Fallback for older browsers
+      element.scrollIntoView();
+    }
   }
 
   async waitForValidPage(timeout = 30000) {
@@ -1259,15 +1497,15 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     try {
       const urlObj = new URL(url);
       // Keep only essential parameters
-      const essentialParams = ['utm_source']; // Add any params you want to keep
+      const essentialParams = ["utm_source"]; // Add any params you want to keep
       const newSearchParams = new URLSearchParams();
-      
+
       for (const param of essentialParams) {
         if (urlObj.searchParams.has(param)) {
           newSearchParams.set(param, urlObj.searchParams.get(param));
         }
       }
-      
+
       urlObj.search = newSearchParams.toString();
       return urlObj.toString();
     } catch (error) {
@@ -1283,7 +1521,13 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     // Base class handles most cleanup
     super.cleanup();
 
-    // Wellfound-specific cleanup if needed
+    // Wellfound-specific cleanup
+    this.jobQueue = [];
+    this.currentJobIndex = 0;
+    this.isLoadingMore = false;
+    this.queueInitialized = false;
+    this.searchProcessStarted = false;
+
     this.log("🧹 Wellfound-specific cleanup completed");
   }
 }

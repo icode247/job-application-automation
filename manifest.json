@@ -88,6 +88,7 @@
         "platforms/workable/workable-file-handler.js",
         "platforms/wellfound/wellfound.js",
         "platforms/wellfound/wellfound-form-handler.js",
+        "platforms/wellfound/wellfound-filter-handler.js",
         "utils/utils.js"
       ],
       "matches": [

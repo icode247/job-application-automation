@@ -1,6 +1,6 @@
 // background/platforms/wellfound.js
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
-
+//continueOrComplete
 export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     super(messageHandler, "wellfound");
@@ -135,16 +135,19 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         searchLinkPattern: searchLinkPatternString,
       };
 
-      // Update search tab ID
-      platformState.searchTabId = tabId;
+      // ✅ FIX: Store the search tab ID properly in both places
+      platformState.searchTabId = tabId; // This is the /jobs tab that coordinates search
+      automation.searchTabId = tabId; // Also store on automation object for easy access
+
       console.log(`📊 Wellfound session data prepared:`, sessionData);
+      console.log(`📌 Search tab ID stored: ${tabId}`); // Log for debugging
     } else {
       console.warn(`⚠️ No Wellfound automation found for window ${windowId}`);
       console.log(
         `Active automations:`,
         Array.from(this.messageHandler.activeAutomations.keys())
       );
-      
+
       // Provide default data structure to prevent empty data
       sessionData = {
         tabId: tabId,
@@ -219,7 +222,10 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
           automation.userProfile = userProfile;
           console.log(`✅ User profile fetched and cached for Wellfound`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile for Wellfound:`, error);
+          console.error(
+            `❌ Failed to fetch user profile for Wellfound:`,
+            error
+          );
         }
       }
 
@@ -240,7 +246,7 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
       });
     } else {
       console.warn(`⚠️ No Wellfound automation found for window ${windowId}`);
-      
+
       // Provide default data structure
       sessionData = {
         devMode: false,
@@ -263,7 +269,9 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         `❌ Failed to send Wellfound CV task data to port ${port.name}`
       );
     } else {
-      console.log(`✅ Wellfound CV task data sent successfully to tab ${tabId}`);
+      console.log(
+        `✅ Wellfound CV task data sent successfully to tab ${tabId}`
+      );
     }
   }
 
@@ -597,26 +605,46 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
 
     const oldUrl = automation.platformState.currentJobUrl;
-
-    // Wellfound-specific delay logic
     const errorCount = this.errorCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
-      await this.sendSearchNextMessage(windowId, {
-        url: oldUrl,
-        status: status,
-        data: data,
-        message:
-          typeof data === "string"
-            ? data
-            : status === "ERROR"
-            ? "Application error"
-            : undefined,
-      });
+      const searchTabId =
+        automation.searchTabId || automation.platformState.searchTabId;
+
+      if (searchTabId) {
+        try {
+          await chrome.tabs.sendMessage(searchTabId, {
+            action: "platformMessage",
+            type: "SEARCH_NEXT",
+            data: {
+              url: oldUrl,
+              status: status,
+              data: data,
+              message:
+                typeof data === "string"
+                  ? data
+                  : status === "ERROR"
+                  ? "Application error"
+                  : undefined,
+              submittedLinks: automation.platformState.submittedLinks || [],
+              current: automation.platformState.searchData.current || 0,
+            },
+          });
+          console.log(
+            `✅ Sent SEARCH_NEXT with updated data to search tab ${searchTabId}`
+          );
+        } catch (error) {
+          console.error(
+            `❌ Failed to send SEARCH_NEXT to tab ${searchTabId}:`,
+            error
+          );
+        }
+      } else {
+        console.error("❌ No search tab ID available");
+      }
     }, delay);
   }
-
   /**
    * Enhanced cleanup for Wellfound-specific resources
    */

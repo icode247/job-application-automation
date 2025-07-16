@@ -1,4 +1,5 @@
 //content/content-main.js - IMPROVED VERSION
+//handleMessage
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -804,6 +805,16 @@ class ContentScriptManager {
 
         case "extractJobData":
           this.handleExtractJobData(sendResponse);
+          break;
+
+        case "platformMessage":
+          if (
+            this.platformAutomation &&
+            this.platformAutomation.handlePortMessage
+          ) {
+            this.platformAutomation.handlePortMessage(request);
+          }
+          sendResponse({ success: true });
           break;
 
         default:
