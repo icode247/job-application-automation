@@ -83,9 +83,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
           console.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
-          this.statusOverlay?.addError(
-            "Failed to fetch user profile: " + error.message
-          );
         }
       }
 
@@ -116,9 +113,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       });
     } catch (error) {
       console.error("❌ Error setting Wellfound session context:", error);
-      this.statusOverlay?.addError(
-        "❌ Error setting session context: " + error.message
-      );
     }
   }
 
@@ -181,7 +175,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       switch (type) {
         case "CONNECTION_ESTABLISHED":
           this.log("✅ Port connection established with background script");
-          this.statusOverlay?.addSuccess("Connection established");
           break;
 
         case "SEARCH_TASK_DATA":
@@ -233,10 +226,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return this.jobQueue.slice(this.currentJobIndex);
   }
 
-  async applyToJob(jobElement) {
-    return await this.apply();
-  }
-
   getApiHost() {
     return (
       this.sessionApiHost ||
@@ -270,8 +259,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.userService,
       this
     );
-
-    this.statusOverlay.addSuccess("Wellfound-specific components initialized");
   }
 
   // ========================================
@@ -281,7 +268,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   async buildJobQueue() {
     try {
       this.log("🏗️ Building job queue from company cards...");
-      this.statusOverlay.addInfo("Discovering all available jobs...");
 
       // Reset queue
       this.jobQueue = [];
@@ -326,9 +312,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       this.queueInitialized = true;
       this.log(`✅ Job queue built with ${this.jobQueue.length} jobs`);
-      this.statusOverlay.addSuccess(
-        `Found ${this.jobQueue.length} jobs to process!`
-      );
 
       // Log some sample jobs for debugging
       this.jobQueue.slice(0, 3).forEach((job, index) => {
@@ -342,7 +325,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       return this.jobQueue.length > 0;
     } catch (error) {
       this.log("❌ Error building job queue:", error);
-      this.statusOverlay.addError("Error building job queue: " + error.message);
       return false;
     }
   }
@@ -448,7 +430,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // Check if we've reached the application limit
       if (this.searchData.current >= this.searchData.limit) {
         this.log("🏁 Reached job application limit");
-        this.statusOverlay.addSuccess("Reached target number of applications!");
         this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
         return;
       }
@@ -456,7 +437,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // Check if queue is empty
       if (this.currentJobIndex >= this.jobQueue.length) {
         this.log("📭 Job queue exhausted");
-        this.statusOverlay.addWarning("No more jobs available in queue");
         this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
         return;
       }
@@ -464,14 +444,11 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // Get next job from queue
       const nextJob = this.jobQueue[this.currentJobIndex];
       this.currentJobIndex++;
-
       this.log(
         `🎯 Processing job ${this.currentJobIndex}/${this.jobQueue.length}: ${nextJob.title}`
       );
-      this.statusOverlay.addInfo(
-        `Processing job ${this.currentJobIndex}/${this.jobQueue.length}: ${nextJob.title}`
-      );
 
+      await this.delay(3000);
       // Send job to background for processing in new tab
       const success = await this.processJobLink(nextJob);
 
@@ -493,9 +470,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // If success, the background script will send SEARCH_NEXT when done
     } catch (error) {
       this.log("❌ Error in processNextJobFromQueue:", error);
-      this.statusOverlay.addError(
-        "Error processing job queue: " + error.message
-      );
       this.reportError(error, { action: "processNextJobFromQueue" });
     }
   }
@@ -510,7 +484,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
     try {
       this.log("🔄 Loading more jobs into queue...");
-      this.statusOverlay.addInfo("Loading more jobs...");
 
       const initialJobCount = this.jobQueue.length;
 
@@ -559,17 +532,14 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         this.log(
           `✅ Added ${newJobCount} new jobs to queue (total: ${this.jobQueue.length})`
         );
-        this.statusOverlay.addSuccess(`Loaded ${newJobCount} more jobs!`);
 
         return newJobCount > 0;
       } else {
         this.log("❌ No more jobs available to load");
-        this.statusOverlay.addWarning("No more jobs available");
         return false;
       }
     } catch (error) {
       this.log("❌ Error loading more jobs:", error);
-      this.statusOverlay.addError("Error loading more jobs: " + error.message);
       return false;
     } finally {
       this.isLoadingMore = false;
@@ -644,15 +614,11 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       }
 
       this.log("✅ Wellfound search data initialized:", this.searchData);
-      this.statusOverlay.addSuccess("Search initialization complete");
 
       // ✅ NEW: Start building job queue and processing
       setTimeout(() => this.startQueueBasedSearch(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
-      this.statusOverlay.addError(
-        "Error processing search task data: " + error.message
-      );
     }
   }
 
@@ -665,7 +631,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (!queueBuilt || this.jobQueue.length === 0) {
         this.log("❌ No jobs found to process");
-        this.statusOverlay.addError("No jobs found on current page");
         this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
         return;
       }
@@ -674,9 +639,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       await this.processNextJobFromQueue();
     } catch (error) {
       this.log("❌ Error starting queue-based search:", error);
-      this.statusOverlay.addError(
-        "Error starting job search: " + error.message
-      );
     }
   }
 
@@ -716,15 +678,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      this.statusOverlay.addSuccess("Application initialization complete");
-
       // Start application process
       setTimeout(() => this.startApplicationProcess(), 1000);
     } catch (error) {
       this.log("❌ Error processing application task data:", error);
-      this.statusOverlay.addError(
-        "Error processing application task data: " + error.message
-      );
     }
   }
 
@@ -732,7 +689,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.log("🎯 Wellfound application starting:", data);
     this.applicationState.isApplicationInProgress = true;
     this.applicationState.applicationStartTime = Date.now();
-    this.statusOverlay.addInfo("Application starting...");
   }
 
   handleApplicationStatus(data) {
@@ -741,19 +697,16 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     if (data.inProgress && !this.applicationState.isApplicationInProgress) {
       this.applicationState.isApplicationInProgress = true;
       this.applicationState.applicationStartTime = Date.now();
-      this.statusOverlay.addInfo("Application in progress, waiting...");
     } else if (
       !data.inProgress &&
       this.applicationState.isApplicationInProgress
     ) {
       this.applicationState.isApplicationInProgress = false;
       this.applicationState.applicationStartTime = null;
-      this.statusOverlay.addInfo("No active application, resuming search");
       setTimeout(() => this.processNextJobFromQueue(), 1000);
     }
   }
 
-  // ✅ UPDATED: Simple next job handler using queue
   handleSearchNext(data) {
     try {
       this.log("🔄 Received search next signal:", data);
@@ -770,13 +723,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         this.log(`📊 Updated current count: ${data.current}`);
       }
 
-      this.statusOverlay.addInfo("Moving to next job in queue...");
-
-      // ✅ NEW: Process next job from queue instead of searching DOM
       setTimeout(() => this.processNextJobFromQueue(), 1000);
     } catch (error) {
       this.log("❌ Error handling search next:", error);
-      this.statusOverlay.addError("Error continuing search: " + error.message);
     }
   }
 
@@ -790,11 +739,11 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
     if (url.includes("wellfound.com/jobs") && !this.isValidJobPage(url)) {
       this.log("📊 Wellfound jobs search page detected");
-      this.statusOverlay.addInfo("Wellfound jobs search page detected");
+
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
       this.log("📋 Wellfound job page detected");
-      this.statusOverlay.addInfo("Wellfound job page detected");
+
       await this.startApplicationProcess();
     } else {
       this.log("❓ Unknown page type, waiting for navigation");
@@ -830,10 +779,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (captchaFound) {
         this.log("🚫 Captcha/verification detected, pausing automation");
-        this.statusOverlay.addWarning(
-          "Captcha detected - please solve it to continue"
-        );
-        this.statusOverlay.updateStatus("paused");
 
         // Pause automation and wait for user to solve captcha
         await this.waitForCaptchaResolution();
@@ -874,10 +819,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (!captchaStillPresent) {
         this.log("✅ Captcha resolved, continuing automation");
-        this.statusOverlay.addSuccess(
-          "Captcha resolved - continuing automation"
-        );
-        this.statusOverlay.updateStatus("searching");
+
         return;
       }
 
@@ -907,8 +849,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (loginButton || signupButton) {
         this.log("🚫 User not logged in, pausing automation");
-        this.statusOverlay.addWarning("Please log in to Wellfound to continue");
-        this.statusOverlay.updateStatus("paused");
 
         // Wait for user to log in
         await this.waitForUserLogin();
@@ -941,8 +881,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (!loginButton && !signupButton) {
         this.log("✅ User logged in, continuing automation");
-        this.statusOverlay.addSuccess("Login detected - continuing automation");
-        this.statusOverlay.updateStatus("searching");
+
         return;
       }
 
@@ -962,28 +901,46 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         return;
       }
 
+      this.statusOverlay.addMessage(
+        "Checking if you're signed in to Wellfound in this browser"
+      );
+
+      await this.delay(2000);
       // Check if user is logged in
       await this.checkLoginStatus();
 
+      this.statusOverlay.addMessage(
+        "Login confirmed! Opening the Wellfound job search filter."
+      );
+
+      await this.delay(2000);
       // Check for captcha/verification blocks
       await this.checkCaptchaStatus();
 
       this.searchProcessStarted = true;
-      this.statusOverlay.addInfo("Starting job search process");
-      this.statusOverlay.updateStatus("searching");
 
       // Get user preferences
       const preferences =
         this.sessionContext?.preferences || this.config.preferences || {};
 
-      console.log("preferences", this.sessionContext);
       // Add job titles from user preferences
       const jobTitles = preferences.positions || ["Software Engineer"];
+      const locations = preferences.location || ["United States"];
+      this.statusOverlay
+        .addFormattedMessage(`Looking for jobs matching your preferences:
+        
+        Job titles: ${jobTitles.join(", ")}
+        Locations: ${locations.join(", ")}`);
+      //wait
+      await this.delay(2000);
       await this.filters.addJobTitles(jobTitles);
 
       // Add locations from user preferences
-      const locations = preferences.location;
       await this.filters.addLocations(locations);
+
+      this.statusOverlay.addMessage(
+        "I have applied your job filters... I will now start applying to jobs."
+      );
 
       // Get search task data from background
       await this.fetchSearchTaskData();
@@ -995,7 +952,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async fetchSearchTaskData() {
     this.log("📡 Fetching Wellfound search task data from background");
-    this.statusOverlay.addInfo("Fetching search task data...");
 
     const success = this.safeSendPortMessage({ type: "GET_SEARCH_TASK" });
     if (!success) {
@@ -1008,8 +964,14 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
    */
   async processJobLink(jobInfo) {
     try {
+      this.statusOverlay.addFormattedMessage(`I'm processing the job: 
+        Title: ${jobInfo.title} 
+        Location: ${jobInfo.location}
+        Compensation: ${jobInfo.compensation}
+        URL: ${jobInfo.url}
+        `);
+
       this.log(`🎯 Processing job: ${jobInfo.title} - ${jobInfo.url}`);
-      this.statusOverlay.addInfo(`Processing: ${jobInfo.title}`);
 
       // Send to background script to open in new tab
       const success = this.safeSendPortMessage({
@@ -1029,9 +991,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       return true;
     } catch (error) {
       this.log(`❌ Error processing job link: ${error.message}`);
-      this.statusOverlay.addError(
-        `Error processing ${jobInfo.title}: ${error.message}`
-      );
+
       return false;
     }
   }
@@ -1099,9 +1059,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   async startApplicationProcess() {
     try {
       console.log("📝 Starting Wellfound application process");
-      this.statusOverlay.addInfo("Starting application process");
-      this.statusOverlay.updateStatus("applying");
-
       // Validate user profile
       if (!this.userProfile) {
         console.log("⚠️ No user profile available, attempting to fetch...");
@@ -1109,12 +1066,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       }
 
       if (!this.userProfile) {
-        this.statusOverlay.addError(
-          "No user profile available - automation may fail"
-        );
         console.error("❌ Failed to obtain user profile");
       } else {
-        this.statusOverlay.addSuccess("User profile loaded successfully");
         console.log("✅ User profile available for Wellfound");
       }
 
@@ -1130,7 +1083,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   handleApplicationError(error) {
-    this.statusOverlay.addError("Application error: " + error.message);
     this.safeSendPortMessage({
       type: "APPLICATION_ERROR",
       data: this.errorToString(error),
@@ -1140,7 +1092,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async fetchApplicationTaskData() {
     this.log("📡 Fetching Wellfound application task data from background");
-    this.statusOverlay.addInfo("Fetching application data...");
 
     const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
     if (!success) {
@@ -1150,18 +1101,18 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async apply() {
     try {
-      this.statusOverlay.addInfo("Starting to apply for Wellfound job");
+      this.statusOverlay.automationState = "searching";
+      this.statusOverlay.updateControls();
 
+      // Show what we're about to do
+      this.statusOverlay.addFormattedMessage(
+        "I'm starting the application process"
+      );
       // Extract job ID from URL
       const jobId = this.extractJobIdFromUrl(window.location.href);
-      console.log("Extracted Wellfound job ID:", jobId);
 
       // Wait for page to fully load
       await this.delay(3000);
-
-      // Extract job description
-      const jobDescription = this.extractJobDescription();
-      this.statusOverlay.addInfo("Job description extracted");
 
       // Find and click the apply button
       const applyButton = await this.findApplyButton();
@@ -1169,12 +1120,15 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         throw new Error("Cannot find Wellfound apply button");
       }
 
-      this.statusOverlay.addInfo("Found apply button, clicking...");
       await this.clickApplyButton(applyButton);
 
       // Wait for application modal/form to appear
       await this.delay(2000);
 
+      this.statusOverlay.addFormattedMessage(
+        "I'm collecting the application fields and questions to answer them."
+      );
+      await this.delay(2000);
       // Process the application form using the form handler
       const result = await this.formHandler.processApplicationForm();
 
@@ -1305,8 +1259,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.applicationState.applicationStartTime = null;
 
     console.log("Wellfound application completed successfully");
-    this.statusOverlay.addSuccess("Application completed successfully");
-    this.statusOverlay.updateStatus("success");
   }
 
   // ========================================

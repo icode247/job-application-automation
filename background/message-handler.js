@@ -12,7 +12,7 @@ import IndeedAutomationHandler from "./platforms/indeed.js";
 import GlassdoorAutomationHandler from "./platforms/glassdoor.js";
 import WorkableAutomationHandler from "./platforms/workable.js";
 import WellfoundAutomationHandler from "./platforms/wellfound.js";
-
+//handleExternalMessage
 export default class MessageHandler {
   constructor() {
     this.orchestrator = new AutomationOrchestrator();
@@ -50,9 +50,11 @@ export default class MessageHandler {
   handleTabCreated(tab) {
     // ✅ FIX: Use orchestrator's window session mapping
     const sessionId = this.orchestrator.getSessionForWindow(tab.windowId);
-    
+
     if (sessionId) {
-      console.log(`🆕 New tab ${tab.id} created in automation window ${tab.windowId}`);
+      console.log(
+        `🆕 New tab ${tab.id} created in automation window ${tab.windowId}`
+      );
 
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
@@ -88,17 +90,19 @@ export default class MessageHandler {
   async handleTabUpdated(tab) {
     // ✅ FIX: Enhanced context injection with better timing
     const sessionData = this.tabSessions.get(tab.id);
-    const isAutomationWindow = this.orchestrator.isAutomationWindow(tab.windowId);
-    
+    const isAutomationWindow = this.orchestrator.isAutomationWindow(
+      tab.windowId
+    );
+
     if ((sessionData || isAutomationWindow) && tab.url) {
       try {
         // If we don't have session data but it's an automation window, try to get it
         let contextToInject = sessionData;
-        
+
         if (!contextToInject && isAutomationWindow) {
           const sessionId = this.orchestrator.getSessionForWindow(tab.windowId);
           const automation = this.activeAutomations.get(sessionId);
-          
+
           if (automation) {
             contextToInject = {
               sessionId: sessionId,
@@ -111,7 +115,7 @@ export default class MessageHandler {
               apiHost: automation.sessionConfig?.apiHost,
               preferences: automation.sessionConfig?.preferences || {},
             };
-            
+
             // Store for future reference
             this.tabSessions.set(tab.id, contextToInject);
           }
@@ -122,17 +126,30 @@ export default class MessageHandler {
           setTimeout(async () => {
             try {
               await this.injectEnhancedSessionContext(tab.id, contextToInject);
-              console.log(`✅ Enhanced session context injected into tab ${tab.id}`);
+              console.log(
+                `✅ Enhanced session context injected into tab ${tab.id}`
+              );
             } catch (error) {
-              console.warn(`⚠️ Failed to inject session context into tab ${tab.id}:`, error);
-              
+              console.warn(
+                `⚠️ Failed to inject session context into tab ${tab.id}:`,
+                error
+              );
+
               // ✅ FIX: Retry injection once more
               setTimeout(async () => {
                 try {
-                  await this.injectEnhancedSessionContext(tab.id, contextToInject);
-                  console.log(`✅ Session context injected on retry for tab ${tab.id}`);
+                  await this.injectEnhancedSessionContext(
+                    tab.id,
+                    contextToInject
+                  );
+                  console.log(
+                    `✅ Session context injected on retry for tab ${tab.id}`
+                  );
                 } catch (retryError) {
-                  console.error(`❌ Final injection attempt failed for tab ${tab.id}:`, retryError);
+                  console.error(
+                    `❌ Final injection attempt failed for tab ${tab.id}:`,
+                    retryError
+                  );
                 }
               }, 2000);
             }
@@ -175,13 +192,22 @@ export default class MessageHandler {
           sessionStorage.setItem("automationUserId", sessionData.userId);
           sessionStorage.setItem("isAutomationWindow", "true");
           sessionStorage.setItem("isAutomationTab", "true");
-          sessionStorage.setItem("parentSessionId", sessionData.parentSessionId);
+          sessionStorage.setItem(
+            "parentSessionId",
+            sessionData.parentSessionId
+          );
 
           if (sessionData.userProfile) {
-            sessionStorage.setItem("automationUserProfile", JSON.stringify(sessionData.userProfile));
+            sessionStorage.setItem(
+              "automationUserProfile",
+              JSON.stringify(sessionData.userProfile)
+            );
           }
           if (sessionData.sessionConfig) {
-            sessionStorage.setItem("automationSessionConfig", JSON.stringify(sessionData.sessionConfig));
+            sessionStorage.setItem(
+              "automationSessionConfig",
+              JSON.stringify(sessionData.sessionConfig)
+            );
           }
           if (sessionData.apiHost) {
             sessionStorage.setItem("automationApiHost", sessionData.apiHost);
@@ -195,7 +221,7 @@ export default class MessageHandler {
           platform: sessionData.platform,
           hasUserProfile: !!sessionData.userProfile,
           hasSessionConfig: !!sessionData.sessionConfig,
-          url: window.location.href
+          url: window.location.href,
         });
 
         // Signal successful injection
@@ -307,8 +333,13 @@ export default class MessageHandler {
         // ✅ FIX: Store in message handler's tracking
         this.activeAutomations.set(sessionId, automationInstance);
 
-        console.log(`🪟 Window ${result.windowId} mapped to session ${sessionId}`);
-        console.log(`👤 User profile stored in automation:`, !!automationInstance.userProfile);
+        console.log(
+          `🪟 Window ${result.windowId} mapped to session ${sessionId}`
+        );
+        console.log(
+          `👤 User profile stored in automation:`,
+          !!automationInstance.userProfile
+        );
 
         sendResponse({
           status: "started",
@@ -381,26 +412,36 @@ export default class MessageHandler {
       // Check multiple sources
       if (sender.tab) {
         // Method 1: Check window manager
-        const windowManagerCheck = this.windowManager.isAutomationWindow(sender.tab.windowId);
-        
+        const windowManagerCheck = this.windowManager.isAutomationWindow(
+          sender.tab.windowId
+        );
+
         // Method 2: Check orchestrator
-        const orchestratorCheck = this.orchestrator.isAutomationWindow(sender.tab.windowId);
-        
+        const orchestratorCheck = this.orchestrator.isAutomationWindow(
+          sender.tab.windowId
+        );
+
         // Method 3: Check if we have session data for this tab
         const hasTabSession = this.tabSessions.has(sender.tab.id);
 
-        isAutomationWindow = windowManagerCheck || orchestratorCheck || hasTabSession;
+        isAutomationWindow =
+          windowManagerCheck || orchestratorCheck || hasTabSession;
 
-        console.log(`🔍 Automation window check for window ${sender.tab.windowId}, tab ${sender.tab.id}:`, {
-          windowManagerCheck,
-          orchestratorCheck,
-          hasTabSession,
-          isAutomationWindow
-        });
+        console.log(
+          `🔍 Automation window check for window ${sender.tab.windowId}, tab ${sender.tab.id}:`,
+          {
+            windowManagerCheck,
+            orchestratorCheck,
+            hasTabSession,
+            isAutomationWindow,
+          }
+        );
 
         // If it's an automation window but we don't have tab session, create one
         if (isAutomationWindow && !hasTabSession) {
-          const sessionId = this.orchestrator.getSessionForWindow(sender.tab.windowId);
+          const sessionId = this.orchestrator.getSessionForWindow(
+            sender.tab.windowId
+          );
           if (sessionId) {
             const automation = this.activeAutomations.get(sessionId);
             if (automation) {
@@ -415,9 +456,11 @@ export default class MessageHandler {
                 apiHost: automation.sessionConfig?.apiHost,
                 preferences: automation.sessionConfig?.preferences || {},
               };
-              
+
               this.tabSessions.set(sender.tab.id, sessionContext);
-              console.log(`✅ Created missing tab session for tab ${sender.tab.id}`);
+              console.log(
+                `✅ Created missing tab session for tab ${sender.tab.id}`
+              );
             }
           }
         }
@@ -434,13 +477,17 @@ export default class MessageHandler {
 
   handleContentScriptReady(request, sender, sendResponse) {
     const { sessionId, platform, url, userId } = request;
-    console.log(`📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`);
+    console.log(
+      `📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`
+    );
 
     // Store or update tab session if not already stored
     if (sender.tab && !this.tabSessions.has(sender.tab.id)) {
       // Try to find the automation session
-      const automation = this.activeAutomations.get(sessionId) || this.findAutomationByWindow(sender.tab.windowId);
-      
+      const automation =
+        this.activeAutomations.get(sessionId) ||
+        this.findAutomationByWindow(sender.tab.windowId);
+
       if (automation) {
         const sessionContext = {
           sessionId: sessionId || automation.sessionId,
@@ -460,8 +507,10 @@ export default class MessageHandler {
       }
     }
 
-    const automation = this.activeAutomations.get(sessionId) || this.findAutomationByWindow(sender.tab?.windowId);
-    
+    const automation =
+      this.activeAutomations.get(sessionId) ||
+      this.findAutomationByWindow(sender.tab?.windowId);
+
     if (automation && sender.tab) {
       setTimeout(async () => {
         try {
@@ -482,9 +531,14 @@ export default class MessageHandler {
             sessionContext: sessionContext,
           });
 
-          console.log(`📤 Sent start message with full context to content script for session ${sessionContext.sessionId}`);
+          console.log(
+            `📤 Sent start message with full context to content script for session ${sessionContext.sessionId}`
+          );
         } catch (error) {
-          console.error(`❌ Failed to send start message to content script:`, error);
+          console.error(
+            `❌ Failed to send start message to content script:`,
+            error
+          );
         }
       }, 1000);
     }
@@ -495,12 +549,12 @@ export default class MessageHandler {
   // ✅ NEW: Find automation by window ID
   findAutomationByWindow(windowId) {
     if (!windowId) return null;
-    
+
     const sessionId = this.orchestrator.getSessionForWindow(windowId);
     if (sessionId) {
       return this.activeAutomations.get(sessionId);
     }
-    
+
     return null;
   }
 
@@ -529,11 +583,13 @@ export default class MessageHandler {
 
     // Use orchestrator's tracking
     const sessionId = this.orchestrator.getSessionForWindow(windowId);
-    
+
     if (sessionId) {
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        console.log(`🛑 Stopping automation ${sessionId} for closed window ${windowId}`);
+        console.log(
+          `🛑 Stopping automation ${sessionId} for closed window ${windowId}`
+        );
 
         const platform = automation.platform;
         const userId = automation.userId;
@@ -578,8 +634,6 @@ export default class MessageHandler {
 
     console.log(`✅ Cleanup completed for window ${windowId}`);
   }
-
-  // ... rest of the methods remain the same but ensure they use orchestrator's window tracking
 
   initializePlatformHandler(platform) {
     if (this.platformHandlers.has(platform)) {
@@ -800,6 +854,18 @@ export default class MessageHandler {
         this.handleGetStatus(request, sendResponse);
         break;
 
+      case "pauseAutomation":
+        this.handlePauseApplying(request, sendResponse);
+        break;
+
+      case "resumeAutomation":
+        this.handleResumeApplying(request, sendResponse);
+        break;
+
+      case "stopAutomation":
+        this.handleStopApplying(request, sendResponse);
+        break;
+
       default:
         sendResponse({
           status: "error",
@@ -808,6 +874,73 @@ export default class MessageHandler {
     }
 
     return true;
+  }
+
+  async handleResumeApplying(request, sendResponse) {
+    const { sessionId } = request;
+
+    if (this.activeAutomations.has(sessionId)) {
+      const automation = this.activeAutomations.get(sessionId);
+      automation.isPaused = false;
+
+      // Send resume message to all tabs in the automation window
+      try {
+        const tabs = await chrome.tabs.query({ windowId: automation.windowId });
+        for (const tab of tabs) {
+          chrome.tabs.sendMessage(tab.id, {
+            action: "resumeAutomation",
+            sessionId: sessionId,
+          });
+        }
+      } catch (error) {
+        console.error("Error sending resume message:", error);
+      }
+
+      await this.sessionManager.updateSession(sessionId, {
+        status: "running",
+        resumedAt: Date.now(),
+      });
+
+      sendResponse({ status: "resumed", sessionId });
+    } else {
+      sendResponse({
+        status: "error",
+        message: "No active automation found for session",
+      });
+    }
+  }
+  async handlePauseApplying(request, sendResponse) {
+    const { sessionId } = request;
+
+    if (this.activeAutomations.has(sessionId)) {
+      const automation = this.activeAutomations.get(sessionId);
+      automation.isPaused = true;
+
+      // Send pause message to all tabs in the automation window
+      try {
+        const tabs = await chrome.tabs.query({ windowId: automation.windowId });
+        for (const tab of tabs) {
+          chrome.tabs.sendMessage(tab.id, {
+            action: "pauseAutomation",
+            sessionId: sessionId,
+          });
+        }
+      } catch (error) {
+        console.error("Error sending pause message:", error);
+      }
+
+      await this.sessionManager.updateSession(sessionId, {
+        status: "paused",
+        pausedAt: Date.now(),
+      });
+
+      sendResponse({ status: "paused", sessionId });
+    } else {
+      sendResponse({
+        status: "error",
+        message: "No active automation found for session",
+      });
+    }
   }
 
   // Get platform-specific domains

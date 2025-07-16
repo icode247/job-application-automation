@@ -1,6 +1,6 @@
-// shared/base/base-platform-automation.js
+// shared/base/base-platform-automation.js - COMPLETE VERSION WITH ENHANCED CHATBOT
 import BasePlatform from "../../platforms/base-platform.js";
-import { StatusOverlay } from "../../services/index.js";
+import ChatbotStatusOverlay from "../../services/status-notification-service.js";
 
 export default class BasePlatformAutomation extends BasePlatform {
   constructor(config) {
@@ -35,12 +35,19 @@ export default class BasePlatformAutomation extends BasePlatform {
       searchLinkPattern: this.getSearchLinkPattern(), // Abstract method
     };
 
+    // Automation control state
+    this.isPaused = false;
+    this.isRunning = false;
+
     // Timers
     this.healthCheckTimer = null;
     this.keepAliveInterval = null;
     this.sendCvPageNotRespondTimeout = null;
     this.stuckStateTimer = null;
     this.stateVerificationInterval = null;
+
+    // Enhanced chatbot overlay
+    this.statusOverlay = null;
   }
 
   /**
@@ -67,28 +74,174 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Initialize platform automation
+   * Initialize platform automation with enhanced chatbot
    */
   async initialize() {
     await super.initialize();
 
-    // Create status overlay
-    this.statusOverlay = new StatusOverlay({
+    // Create enhanced status overlay with cross-tab persistence
+    this.statusOverlay = new ChatbotStatusOverlay({
       id: `${this.platform}-status-overlay`,
       platform: `${this.platform.toUpperCase()}`,
+      sessionId: this.sessionId,
+      userId: this.userId,
       icon: "🤖",
       position: { top: "10px", left: "10px" },
+      persistMessages: false,
+      enableControls: true,
     });
-    this.statusOverlay.create();
 
     // Set up communication and monitoring
     this.initializePortConnection();
     this.startHealthCheck();
     this.startStateVerification();
+    this.setupChatbotControls();
+  }
 
-    this.statusOverlay.addSuccess(
-      `Hi! I'm ready to help you apply to ${this.platform} jobs automatically. Let's get started! 🚀`
+  /**
+   * Set up chatbot control handlers
+   */
+  setupChatbotControls() {
+    // Listen for automation control messages
+    if (chrome.runtime && chrome.runtime.onMessage) {
+      chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.sessionId === this.sessionId) {
+          this.handleChatbotControlMessage(request);
+          sendResponse({ success: true });
+        }
+      });
+    }
+  }
+
+  /**
+   * Handle control messages from chatbot
+   */
+  async handleChatbotControlMessage(request) {
+    try {
+      switch (request.action) {
+        case "pauseAutomation":
+          await this.pauseAutomation();
+          break;
+
+        case "resumeAutomation":
+          await this.resumeAutomation();
+          break;
+
+        case "stopAutomation":
+          await this.stopAutomation();
+          break;
+
+        default:
+          this.log(`Unknown control action: ${request.action}`);
+      }
+    } catch (error) {
+      this.log("Error handling chatbot control message:", error);
+      this.statusOverlay.addError(
+        "I had trouble processing your request. Please try again!"
+      );
+    }
+  }
+
+  /**
+   * Pause automation functionality
+   */
+  async pauseAutomation() {
+    this.isRunning = false;
+    this.isPaused = true;
+
+    // Clear any pending timeouts
+    if (this.sendCvPageNotRespondTimeout) {
+      clearTimeout(this.sendCvPageNotRespondTimeout);
+      this.sendCvPageNotRespondTimeout = null;
+    }
+
+    this.statusOverlay.addBotMessage(
+      "Automation paused! You can resume anytime using the controls below. 🤚",
+      "info"
     );
+    this.statusOverlay.updateStatus("paused", "Paused by user");
+    this.statusOverlay.isPaused = true;
+    this.statusOverlay.automationState = "paused";
+    this.statusOverlay.updateControls();
+
+    this.log("⏸️ Automation paused by user");
+
+    // Notify background script
+    this.safeSendPortMessage({
+      type: "AUTOMATION_PAUSED",
+      sessionId: this.sessionId,
+    });
+  }
+
+  /**
+   * Resume automation functionality
+   */
+  async resumeAutomation() {
+    this.isRunning = true;
+    this.isPaused = false;
+
+    this.statusOverlay.addBotMessage(
+      "Great! Resuming automation. Let's continue finding you jobs! 🚀",
+      "success"
+    );
+    this.statusOverlay.updateStatus("searching", "Resuming automation...");
+    this.statusOverlay.isPaused = false;
+    this.statusOverlay.automationState = "searching";
+    this.statusOverlay.updateControls();
+
+    this.log("▶️ Automation resumed by user");
+
+    // Notify background script
+    this.safeSendPortMessage({
+      type: "AUTOMATION_RESUMED",
+      sessionId: this.sessionId,
+    });
+
+    // Continue with search after a brief delay
+    setTimeout(() => {
+      if (!this.applicationState.isApplicationInProgress) {
+        this.searchNext();
+      }
+    }, 1000);
+  }
+
+  /**
+   * Stop automation functionality
+   */
+  async stopAutomation() {
+    this.isRunning = false;
+    this.isPaused = false;
+
+    // Clear all timeouts
+    if (this.sendCvPageNotRespondTimeout) {
+      clearTimeout(this.sendCvPageNotRespondTimeout);
+    }
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+    }
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+    }
+    if (this.stateVerificationInterval) {
+      clearInterval(this.stateVerificationInterval);
+    }
+
+    this.statusOverlay.addBotMessage(
+      "Automation stopped! Thank you for using FastApply Bot! 👋",
+      "info"
+    );
+    this.statusOverlay.updateStatus("completed", "Stopped by user");
+    this.statusOverlay.automationState = "stopped";
+    this.statusOverlay.updateControls();
+
+    this.log("⏹️ Automation stopped by user");
+
+    // Notify background script
+    this.safeSendPortMessage({
+      type: "AUTOMATION_STOPPED",
+      reason: "user_requested",
+      sessionId: this.sessionId,
+    });
   }
 
   /**
@@ -157,7 +310,6 @@ export default class BasePlatformAutomation extends BasePlatform {
 
       this.connectionRetries = 0;
       this.log("✅ Port connection established successfully");
-      // Removed connection success message - not needed for user
     } catch (error) {
       this.log("❌ Error initializing port connection:", error);
       this.statusOverlay.addError(
@@ -283,7 +435,7 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * ✅ FIXED: Common port message handling with platform-specific delegation
+   * Enhanced port message handling with platform-specific delegation
    */
   handlePortMessage(message) {
     try {
@@ -313,13 +465,8 @@ export default class BasePlatformAutomation extends BasePlatform {
           // Just acknowledge keepalive
           break;
 
-        // ✅ REMOVED: SUCCESS case that was causing the issue
-        // case "SUCCESS":
-        //   this.handleSuccessMessage(data);  // This method doesn't exist in base class
-        //   break;
-
         default:
-          // ✅ FIX: All other messages (including SUCCESS) go to platform-specific handler
+          // All other messages go to platform-specific handler
           this.handlePlatformSpecificMessage(type, data);
       }
     } catch (error) {
@@ -356,7 +503,6 @@ export default class BasePlatformAutomation extends BasePlatform {
 
     if (!data || !data.url) {
       this.log("No URL data in handleSearchNext");
-      // Removed generic message - let specific platform handle this
       setTimeout(() => this.searchNext(), 2500);
       return;
     }
@@ -367,7 +513,7 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Update visual link status
+   * Enhanced update visual link status with better user feedback
    */
   updateLinkStatus(data) {
     const normalizedUrl = this.normalizeUrlFully(data.url);
@@ -379,9 +525,7 @@ export default class BasePlatformAutomation extends BasePlatform {
       if (this.urlsMatch(linkUrl, normalizedUrl)) {
         if (data.status === "SUCCESS") {
           this.markLinkAsColor(links[i], "orange", "Completed");
-          this.statusOverlay.addSuccess(
-            "Great! I successfully applied to this job for you! ✅"
-          );
+          this.statusOverlay.updateStatus("success", "Application successful!");
         } else if (data.status === "ERROR") {
           this.markLinkAsColor(links[i], "red", "Error");
           this.statusOverlay.addError(
@@ -389,6 +533,7 @@ export default class BasePlatformAutomation extends BasePlatform {
               (data.message ? ` - ${data.message}` : "") +
               ". Don't worry, I'll continue with the next one!"
           );
+          this.statusOverlay.updateStatus("error", "Resolving issue...");
         } else {
           this.markLinkAsColor(links[i], "orange", "Skipped");
           this.statusOverlay.addWarning(
@@ -396,10 +541,18 @@ export default class BasePlatformAutomation extends BasePlatform {
               (data.message ? ` because ${data.message.toLowerCase()}` : "") +
               ". Moving on to the next one!"
           );
+          this.statusOverlay.updateStatus("warning", "Job skipped");
         }
         break;
       }
     }
+
+    // Auto-recover and continue after showing status
+    setTimeout(() => {
+      if (data.status !== "SUCCESS") {
+        this.statusOverlay.updateStatus("searching", "Continuing search...");
+      }
+    }, 3000);
   }
 
   /**
@@ -419,7 +572,7 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Common duplicate job handling
+   * Enhanced duplicate job handling
    */
   handleDuplicateJob(data) {
     this.log("⚠️ Duplicate job detected, resetting application state");
@@ -433,7 +586,7 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Common error message handling
+   * Enhanced error message handling with user-friendly messages
    */
   handleErrorMessage(errorMessage) {
     const actualMessage =
@@ -442,27 +595,67 @@ export default class BasePlatformAutomation extends BasePlatform {
       "Unknown error from background script";
 
     this.log("❌ Error from background script:", actualMessage);
-    this.statusOverlay.addError(
-      "I encountered a technical issue, but I'm working to resolve it. Please bear with me!"
-    );
+
+    // More user-friendly error messages
+    let userMessage =
+      "I encountered a technical issue, but I'm working to resolve it.";
+
+    if (actualMessage.includes("timeout")) {
+      userMessage =
+        "This job application is taking longer than expected. Let me try the next one!";
+    } else if (actualMessage.includes("not found")) {
+      userMessage =
+        "I couldn't find the application form for this job. Moving to the next one!";
+    } else if (actualMessage.includes("blocked")) {
+      userMessage =
+        "This job requires additional verification. I'll skip it and continue with others!";
+    } else if (actualMessage.includes("duplicate")) {
+      userMessage =
+        "I've already applied to this job. Let me find you a new one!";
+    } else if (actualMessage.includes("network")) {
+      userMessage = "I had a network issue, but I'm trying again!";
+    }
+
+    this.statusOverlay.addError(userMessage);
+    this.statusOverlay.updateStatus("error", "Resolving issue...");
+
+    // Auto-recover after showing error
+    setTimeout(() => {
+      this.statusOverlay.updateStatus("searching", "Continuing search...");
+      if (!this.isPaused) {
+        this.searchNext();
+      }
+    }, 3000);
   }
 
   /**
-   * Common search logic - can be overridden by platforms
+   * Enhanced search logic with action previews and pause support
    */
   async searchNext() {
     try {
+      // Check if automation is paused
+      if (this.isPaused) {
+        this.log("Automation is paused, not searching");
+        return;
+      }
+
       this.log("Executing searchNext");
 
       // Critical: If an application is in progress, do not continue
       if (this.applicationState.isApplicationInProgress) {
         this.log("Application in progress, not searching for next link");
-        // Removed status message - not needed for user
+        this.statusOverlay.addInfo(
+          "I'm currently working on an application. Please wait..."
+        );
         this.safeSendPortMessage({ type: "CHECK_APPLICATION_STATUS" });
         return;
       }
 
-      // Removed "searching for job links" message - too frequent
+      // Show what we're doing
+      this.statusOverlay.updateStatus(
+        "searching",
+        "Looking for job opportunities..."
+      );
 
       // Find all matching links
       let links = this.findAllLinksElements();
@@ -482,7 +675,11 @@ export default class BasePlatformAutomation extends BasePlatform {
         "I ran into an issue while searching for jobs. Let me try again!"
       );
       this.resetApplicationStateOnError();
-      setTimeout(() => this.searchNext(), 5000);
+      setTimeout(() => {
+        if (!this.isPaused) {
+          this.searchNext();
+        }
+      }, 5000);
     }
   }
 
@@ -571,17 +768,39 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Process a job link
+   * Enhanced process job link with action preview
    */
   async processJobLink({ link, url }) {
-    this.statusOverlay.addSuccess(
-      "Perfect! I found a great job opportunity for you. Let me apply now! 🎯"
+    // Show action preview with countdown
+    const jobTitle = link.textContent.trim() || "Job Application";
+    const preview = this.statusOverlay.showActionPreview(
+      "Apply to this job",
+      {
+        url: url,
+        title: jobTitle,
+      },
+      3 // 3 second countdown
     );
 
+    // Wait for countdown
+    await this.delay(3000);
+
+    // Check if paused during countdown
+    if (this.isPaused) {
+      this.log("Automation paused during countdown, aborting");
+      return;
+    }
+
+    // Now proceed with normal processing
     if (this.applicationState.isApplicationInProgress) {
       this.log("Application became in progress, aborting new task");
       return;
     }
+
+    this.statusOverlay.addSuccess(
+      "Perfect! I found a great job opportunity for you. Let me apply now! 🎯"
+    );
+    this.statusOverlay.updateStatus("applying", "Applying to job...");
 
     // Mark as processing
     this.markLinkAsColor(link, "green", "In Progress");
@@ -605,7 +824,7 @@ export default class BasePlatformAutomation extends BasePlatform {
         type: this.getJobTaskMessageType(),
         data: {
           url,
-          title: link.textContent.trim() || "Job Application",
+          title: jobTitle,
         },
       });
     } catch (err) {
@@ -662,7 +881,7 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Handle case when no unprocessed links found
+   * Enhanced handle no unprocessed links with action preview
    */
   async handleNoUnprocessedLinks() {
     if (this.applicationState.isApplicationInProgress) {
@@ -670,20 +889,35 @@ export default class BasePlatformAutomation extends BasePlatform {
       return;
     }
 
-    // Removed "no new job links found" message - too technical
     const loadMoreBtn = this.findLoadMoreElement();
 
     if (loadMoreBtn) {
+      // Show action preview before loading more
+      this.statusOverlay.showActionPreview(
+        "Load more job opportunities",
+        { action: "Clicking 'Load More' button" },
+        2
+      );
+
+      await this.delay(2000);
+
+      // Check if paused during preview
+      if (this.isPaused) {
+        this.log("Automation paused during load more preview, aborting");
+        return;
+      }
+
       if (this.applicationState.isApplicationInProgress) {
         this.log("Application became in progress, aborting navigation");
         return;
       }
 
       this.statusOverlay.addInfo("Let me load more job opportunities for you!");
+      this.statusOverlay.updateStatus("searching", "Loading more jobs...");
       loadMoreBtn.click();
 
       setTimeout(() => {
-        if (!this.applicationState.isApplicationInProgress) {
+        if (!this.applicationState.isApplicationInProgress && !this.isPaused) {
           this.searchNext();
         }
       }, 3000);
@@ -691,6 +925,7 @@ export default class BasePlatformAutomation extends BasePlatform {
       this.statusOverlay.addSuccess(
         "Excellent! I've successfully processed all available jobs for you! 🎉 Great work today!"
       );
+      this.statusOverlay.updateStatus("completed", "All jobs processed");
       this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
     }
   }
@@ -706,6 +941,27 @@ export default class BasePlatformAutomation extends BasePlatform {
       clearTimeout(this.sendCvPageNotRespondTimeout);
       this.sendCvPageNotRespondTimeout = null;
     }
+  }
+
+  /**
+   * Enhanced progress reporting with chatbot updates
+   */
+  updateProgress(updates) {
+    this.progress = { ...this.progress, ...updates };
+
+    if (this.onProgress) {
+      this.onProgress(this.progress);
+    }
+
+    if (updates.current) {
+      this.statusOverlay.updateStatus(
+        "applying",
+        `Processing: ${updates.current}`
+      );
+    }
+
+    // Notify content script
+    this.notifyContentScript("progress", this.progress);
   }
 
   /**
@@ -871,6 +1127,13 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
+   * Delay utility
+   */
+  async delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
    * Logging with platform context
    */
   log(message, data = {}) {
@@ -889,9 +1152,18 @@ export default class BasePlatformAutomation extends BasePlatform {
   }
 
   /**
-   * Cleanup all resources
+   * Enhanced cleanup with chatbot state preservation
    */
   cleanup() {
+    // Save final state before cleanup
+    if (this.statusOverlay) {
+      this.statusOverlay.addBotMessage(
+        "Session ended. Your progress has been saved! 💾",
+        "info"
+      );
+      this.statusOverlay.updateStatus("completed", "Session ended");
+    }
+
     // Clear timers
     if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
     if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
@@ -920,11 +1192,16 @@ export default class BasePlatformAutomation extends BasePlatform {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
     this.applicationState.applicationUrl = null;
+    this.isPaused = false;
+    this.isRunning = false;
 
     super.cleanup();
     this.log("🧹 Platform cleanup completed");
   }
 
+  /**
+   * Wait for page load utility
+   */
   async waitForPageLoad(timeout = 30000) {
     return new Promise((resolve) => {
       if (document.readyState === "complete") {

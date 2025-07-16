@@ -1,9 +1,7 @@
 /**
- * ChatbotStatusOverlay - An interactive chatbot-style status notification system
- * Provides conversational feedback with a modern chat interface
- * BRANDED VERSION with custom color scheme
+ * Simplified ChatbotStatusOverlay - Clean automation assistant
+ * Persists only during active automation, clears when stopped
  */
-//icon
 class ChatbotStatusOverlay {
   constructor(options = {}) {
     this.options = {
@@ -11,38 +9,126 @@ class ChatbotStatusOverlay {
       title: options.title || "Job Assistant",
       botName: options.botName || "FastApply Bot",
       platform: options.platform || "AUTOMATION",
+      sessionId: options.sessionId || null,
       icon: options.icon || "🤖",
       position: options.position || { top: "20px", right: "20px" },
-      width: options.width || "380px",
-      maxHeight: options.maxHeight || "500px",
-      maxMessages: options.maxMessages || 50,
-      autoHide: options.autoHide || false,
-      autoHideDelay: options.autoHideDelay || 8000,
-      enableSound: options.enableSound || false,
+      width: options.width || "400px",
+      maxHeight: options.maxHeight || "550px",
       ...options,
     };
 
-    // State
+    // State management
     this.container = null;
     this.chatContainer = null;
     this.statusBar = null;
+    this.controlsContainer = null;
     this.isVisible = true;
     this.isMinimized = false;
     this.messageCount = 0;
     this.currentStatus = "ready";
-    this.typingTimeout = null;
+    this.messages = [];
+    this.automationState = "ready"; // ready, searching, applying, paused, stopped
+    this.isPaused = false;
+    this.port = null;
+    this.greetingShown = false; // Prevent duplicate greetings
 
-    // Create styles first
+    // Storage key
+    this.storageKey = `chatbot_messages_${this.options.sessionId || "default"}`;
+
+    // Initialize
+    this.initializeStorage();
     this.injectStyles();
+    this.setupMessageListener();
 
-    // Initialize if not set to manual
     if (!options.manual) {
       this.create();
     }
   }
 
   /**
-   * Inject required CSS styles with BRAND COLORS
+   * Initialize storage and load persisted data
+   */
+  async initializeStorage() {
+    if (!this.options.persistMessages) return;
+
+    try {
+      const result = await chrome.storage.local.get([this.storageKey]);
+      if (result[this.storageKey]) {
+        this.messages = result[this.storageKey];
+        this.messageCount = this.messages.length;
+      }
+    } catch (error) {
+      console.error("Error loading chatbot data:", error);
+    }
+  }
+
+  /**
+   * Save messages to storage
+   */
+  async saveMessages() {
+    if (!this.options.persistMessages) return;
+
+    try {
+      await chrome.storage.local.set({
+        [this.storageKey]: this.messages,
+      });
+    } catch (error) {
+      console.error("Error saving chatbot messages:", error);
+    }
+  }
+
+  /**
+   * Clear all messages and storage
+   */
+  async clearMessages() {
+    this.messages = [];
+    this.messageCount = 0;
+    this.greetingShown = false; // Reset greeting flag
+
+    if (this.chatContainer) {
+      this.chatContainer.innerHTML = "";
+    }
+
+    if (this.options.persistMessages) {
+      try {
+        await chrome.storage.local.remove([this.storageKey]);
+      } catch (error) {
+        console.error("Error clearing chatbot storage:", error);
+      }
+    }
+  }
+
+  /**
+   * Setup cross-tab message listener
+   */
+  setupMessageListener() {
+    if (!this.options.persistMessages) return;
+
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace !== "local") return;
+
+      if (changes[this.storageKey]) {
+        const newMessages = changes[this.storageKey].newValue || [];
+        if (newMessages.length > this.messages.length) {
+          const newMessagesOnly = newMessages.slice(this.messages.length);
+          this.messages = newMessages;
+          this.messageCount = newMessages.length;
+
+          newMessagesOnly.forEach((msg) => {
+            if (msg.formatted) {
+              this._createFormattedMessage(msg.content, msg.sender, false);
+            } else {
+              this._createMessage(msg.content, msg.sender, false);
+            }
+          });
+          this._scrollToBottom();
+        }
+      }
+    });
+  }
+
+  /**
+   * Inject simplified styles
    */
   injectStyles() {
     if (document.getElementById("chatbot-overlay-styles")) return;
@@ -51,36 +137,18 @@ class ChatbotStatusOverlay {
     styles.id = "chatbot-overlay-styles";
     styles.textContent = `
       @keyframes chatbotSlideIn {
-        from { 
-          opacity: 0; 
-          transform: translateX(100%) scale(0.8); 
-        }
-        to { 
-          opacity: 1; 
-          transform: translateX(0) scale(1); 
-        }
+        from { opacity: 0; transform: translateX(100%); }
+        to { opacity: 1; transform: translateX(0); }
       }
 
-      @keyframes chatbotSlideOut {
-        from { 
-          opacity: 1; 
-          transform: translateX(0) scale(1); 
-        }
-        to { 
-          opacity: 0; 
-          transform: translateX(100%) scale(0.8); 
-        }
+      @keyframes chatbotSlideInLeft {
+        from { opacity: 0; transform: translateX(-100%); }
+        to { opacity: 1; transform: translateX(0); }
       }
 
       @keyframes messageFadeIn {
-        from { 
-          opacity: 0; 
-          transform: translateY(10px); 
-        }
-        to { 
-          opacity: 1; 
-          transform: translateY(0); 
-        }
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
       }
 
       @keyframes typingDots {
@@ -95,7 +163,7 @@ class ChatbotStatusOverlay {
       }
 
       .chatbot-overlay-container {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         line-height: 1.4;
         user-select: none;
       }
@@ -105,43 +173,14 @@ class ChatbotStatusOverlay {
       }
 
       .chatbot-message-bubble {
-        max-width: 85%;
-        margin: 8px 0;
+        display: flex;
+        align-items: flex-start;
+        margin: 12px 0;
         animation: messageFadeIn 0.3s ease-out;
-      }
-
-      .chatbot-message-content {
-        padding: 10px 14px;
-        border-radius: 18px;
-        font-size: 13px;
-        line-height: 1.3;
-        position: relative;
-        word-wrap: break-word;
-      }
-
-      .chatbot-message-bot .chatbot-message-content {
-        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
-        color: white;
-        margin-left: 40px;
-        border-bottom-left-radius: 4px;
-        box-shadow: 0 2px 12px rgba(14, 165, 233, 0.3);
-      }
-
-      .chatbot-message-system .chatbot-message-content {
-        background: #f0f9ff;
-        color: #075985;
-        margin: 4px 20px;
-        border-radius: 12px;
-        text-align: center;
-        font-size: 12px;
-        padding: 6px 12px;
-        border: 1px solid #bae6fd;
+        gap: 10px;
       }
 
       .chatbot-bot-avatar {
-        position: absolute;
-        left: 0;
-        bottom: 0;
         width: 32px;
         height: 32px;
         border-radius: 50%;
@@ -153,31 +192,60 @@ class ChatbotStatusOverlay {
         color: white;
         border: 2px solid white;
         box-shadow: 0 2px 8px rgba(14, 165, 233, 0.4);
+        flex-shrink: 0;
+      }
+
+      .chatbot-message-content {
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        color: white;
+        padding: 12px 16px;
+        border-radius: 18px;
+        border-bottom-left-radius: 4px;
+        font-size: 14px;
+        line-height: 1.4;
+        max-width: 280px;
+        word-wrap: break-word;
+        box-shadow: 0 2px 12px rgba(14, 165, 233, 0.3);
+      }
+
+      .chatbot-message-system .chatbot-message-content {
+        background: #f0f9ff;
+        color: #075985;
+        border-radius: 12px;
+        text-align: center;
+        font-size: 13px;
+        border: 1px solid #bae6fd;
+        max-width: 100%;
+      }
+
+      .chatbot-message-system {
+        justify-content: center;
+      }
+
+      .chatbot-message-system .chatbot-bot-avatar {
+        display: none;
       }
 
       .chatbot-message-timestamp {
         font-size: 11px;
         color: rgba(255,255,255,0.8);
         margin-top: 4px;
-        margin-left: 40px;
-      }
-
-      .chatbot-message-system .chatbot-message-timestamp {
-        margin-left: 0;
-        text-align: center;
-        color: #075985;
       }
 
       .chatbot-typing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 12px 0;
+      }
+
+      .chatbot-typing-content {
         display: flex;
         align-items: center;
         padding: 10px 14px;
         background: #f0f9ff;
         border-radius: 18px;
         border-bottom-left-radius: 4px;
-        margin-left: 40px;
-        max-width: 80px;
-        margin-bottom: 8px;
         border: 1px solid #e0f2fe;
       }
 
@@ -194,12 +262,58 @@ class ChatbotStatusOverlay {
         animation: typingDots 1.4s infinite;
       }
 
-      .chatbot-typing-dot:nth-child(2) {
-        animation-delay: 0.2s;
+      .chatbot-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+      .chatbot-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+      .chatbot-controls {
+        padding: 16px;
+        background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+        border-top: 1px solid #e2e8f0;
+        display: flex;
+        gap: 12px;
+        align-items: center;
       }
 
-      .chatbot-typing-dot:nth-child(3) {
-        animation-delay: 0.4s;
+      .chatbot-control-btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+
+      .chatbot-control-btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      }
+
+      .chatbot-control-btn.pause {
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        color: white;
+      }
+
+      .chatbot-control-btn.continue {
+        background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+        color: white;
+      }
+
+      .chatbot-control-btn.stop {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        color: white;
+      }
+
+      .chatbot-control-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none !important;
+        box-shadow: none !important;
       }
 
       .chatbot-status-indicator {
@@ -215,14 +329,26 @@ class ChatbotStatusOverlay {
         height: 8px;
         border-radius: 50%;
         background: #38bdf8;
-        animation: statusPulse 2s infinite;
       }
 
-      .chatbot-status-error .chatbot-status-dot { background: #ef4444; }
-      .chatbot-status-warning .chatbot-status-dot { background: #f59e0b; }
-      .chatbot-status-info .chatbot-status-dot { background: #0ea5e9; }
-      .chatbot-status-applying .chatbot-status-dot { background: #7dd3fc; }
-      .chatbot-status-success .chatbot-status-dot { background: #22c55e; }
+      .chatbot-status-searching .chatbot-status-dot { 
+        background: #8b5cf6; 
+        animation: statusPulse 2s infinite;
+      }
+      .chatbot-status-applying .chatbot-status-dot { 
+        background: #0ea5e9; 
+        animation: statusPulse 2s infinite;
+      }
+      .chatbot-status-paused .chatbot-status-dot { 
+        background: #f59e0b; 
+        animation: statusPulse 3s infinite;
+      }
+      .chatbot-status-ready .chatbot-status-dot { 
+        background: #22c55e;
+      }
+      .chatbot-status-stopped .chatbot-status-dot { 
+        background: #ef4444;
+      }
 
       .chatbot-minimize-btn {
         background: none;
@@ -231,30 +357,12 @@ class ChatbotStatusOverlay {
         cursor: pointer;
         padding: 4px;
         border-radius: 4px;
-        transition: background 0.2s;
+        transition: all 0.2s;
       }
 
       .chatbot-minimize-btn:hover {
         background: rgba(255,255,255,0.2);
         color: white;
-      }
-
-      .chatbot-header-actions {
-        display: flex;
-        gap: 4px;
-        align-items: center;
-      }
-
-      .chatbot-platform-badge {
-        background: rgba(255,255,255,0.25);
-        color: white;
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        border: 1px solid rgba(255,255,255,0.3);
       }
     `;
     document.head.appendChild(styles);
@@ -263,31 +371,58 @@ class ChatbotStatusOverlay {
   /**
    * Create the chatbot overlay
    */
-  create() {
-    this.destroy(); // Remove existing overlay if any
+  async create() {
+    // Prevent duplicate creation
+    if (document.getElementById(this.options.id)) {
+      console.warn("Chatbot overlay already exists, destroying old one");
+      this.destroy();
+    }
 
     // Create main container
     this.container = document.createElement("div");
     this.container.id = this.options.id;
     this.container.className = "chatbot-overlay-container";
+    // Determine animation based on position
+    const animation = this.options.position.left
+      ? "chatbotSlideInLeft 0.4s ease-out"
+      : "chatbotSlideIn 0.4s ease-out";
+
     this.container.style.cssText = `
       position: fixed;
-      top: ${this.options.position.top};
-      right: ${this.options.position.right};
+      ${this.options.position.top ? `top: ${this.options.position.top};` : ""}
+      ${
+        this.options.position.right
+          ? `right: ${this.options.position.right};`
+          : ""
+      }
+      ${
+        this.options.position.left ? `left: ${this.options.position.left};` : ""
+      }
+      ${
+        this.options.position.bottom
+          ? `bottom: ${this.options.position.bottom};`
+          : ""
+      }
       width: ${this.options.width};
       max-height: ${this.options.maxHeight};
       background: white;
       border-radius: 16px;
-      box-shadow: 0 8px 30px rgba(14, 165, 233, 0.15), 0 0 0 1px rgba(14, 165, 233, 0.1);
+      box-shadow: 0 8px 30px rgba(14, 165, 233, 0.15);
       z-index: 9999999;
       overflow: hidden;
-      animation: chatbotSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+      animation: ${animation};
       ${!this.isVisible ? "display: none;" : ""}
     `;
 
     // Create header
     const header = this.createHeader();
     this.container.appendChild(header);
+
+    // Create controls
+    if (this.options.enableControls) {
+      this.controlsContainer = this.createControls();
+      this.container.appendChild(this.controlsContainer);
+    }
 
     // Create chat container
     this.chatContainer = document.createElement("div");
@@ -296,36 +431,152 @@ class ChatbotStatusOverlay {
       overflow-y: auto;
       padding: 16px;
       background: linear-gradient(180deg, #f0f9ff 0%, #fafbfc 100%);
-      position: relative;
     `;
 
     this.container.appendChild(this.chatContainer);
     document.body.appendChild(this.container);
 
-    // Initial greeting
-    this.addGreeting();
-    this.updateStatus("ready");
+    // Initialize port connection
+    this.initializePortConnection();
+
+    // Load persisted messages or show greeting
+    if (this.messages.length > 0) {
+      this.loadPersistedMessages();
+      this.greetingShown = true; // Mark greeting as shown if messages exist
+    } else if (!this.greetingShown) {
+      this.addGreeting();
+      this.greetingShown = true;
+    }
+
+    this.updateStatus(this.currentStatus);
+    this.updateControls();
 
     return this;
   }
 
   /**
-   * Create the header section with BRAND COLORS
+   * Initialize port connection
+   */
+  initializePortConnection() {
+    if (!chrome.runtime) return;
+
+    try {
+      this.port = chrome.runtime.connect({ name: `chatbot-${Date.now()}` });
+
+      this.port.onMessage.addListener((message) => {
+        this.handlePortMessage(message);
+      });
+
+      this.port.onDisconnect.addListener(() => {
+        this.port = null;
+        setTimeout(() => this.initializePortConnection(), 5000);
+      });
+    } catch (error) {
+      console.warn("Could not establish port connection:", error);
+    }
+  }
+
+  /**
+   * Handle messages from automation system
+   */
+  handlePortMessage(message) {
+    const { type, data } = message;
+
+    switch (type) {
+      case "AUTOMATION_STATE_CHANGED":
+        this.automationState = data.state;
+        this.updateStatus(data.state);
+        this.updateControls();
+        break;
+
+      case "AUTOMATION_PAUSED":
+        this.isPaused = true;
+        this.automationState = "paused";
+        this.updateStatus("paused");
+        this.addMessage("Automation paused! 🤚");
+        this.updateControls();
+        break;
+
+      case "AUTOMATION_RESUMED":
+        this.isPaused = false;
+        this.automationState = "applying"; // Resume to applying state
+        this.updateStatus("applying");
+        this.addMessage("Automation resumed! 🚀");
+        this.updateControls();
+        break;
+
+      case "AUTOMATION_STOPPED":
+        this.automationState = "stopped";
+        this.isPaused = false; // Reset pause state
+        this.addMessage("Automation stopped! 👋");
+        this.updateControls();
+        // Clear messages when automation stops
+        setTimeout(() => {
+          this.clearMessages();
+          // Reset to ready state after clearing
+          this.automationState = "ready";
+          this.updateStatus("ready");
+          this.updateControls();
+        }, 2000);
+        break;
+    }
+  }
+
+  /**
+   * Send message to automation system
+   */
+  sendToAutomation(message) {
+    if (this.port) {
+      try {
+        this.port.postMessage(message);
+      } catch (error) {
+        console.warn("Failed to send message to automation:", error);
+      }
+    }
+
+    if (chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        chrome.runtime.sendMessage(message);
+      } catch (error) {
+        console.warn("Failed to send runtime message:", error);
+      }
+    }
+  }
+
+  /**
+   * Load persisted messages
+   */
+  loadPersistedMessages() {
+    if (!this.chatContainer) return;
+
+    this.chatContainer.innerHTML = "";
+
+    this.messages.forEach((msg) => {
+      if (msg.formatted) {
+        this._createFormattedMessage(msg.content, msg.sender, false);
+      } else {
+        this._createMessage(msg.content, msg.sender, false);
+      }
+    });
+
+    this._scrollToBottom();
+  }
+
+  /**
+   * Create header
    */
   createHeader() {
     const header = document.createElement("div");
     header.style.cssText = `
-      background: linear-gradient(135deg,rgb(9, 12, 13) 0%,rgb(23, 66, 88) 50%, #0369a1 100%);
+      background: linear-gradient(135deg, #0c4a6e 0%, #0369a1 100%);
       color: white;
       padding: 16px 20px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       cursor: pointer;
-      border-bottom: 1px solid rgba(255,255,255,0.2);
     `;
 
-    // Left side - Bot info
     const botInfo = document.createElement("div");
     botInfo.style.cssText = `
       display: flex;
@@ -344,7 +595,6 @@ class ChatbotStatusOverlay {
       justify-content: center;
       font-size: 20px;
       border: 2px solid rgba(255,255,255,0.4);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     `;
     avatar.textContent = this.options.icon;
 
@@ -355,7 +605,6 @@ class ChatbotStatusOverlay {
       font-weight: 600;
       font-size: 16px;
       margin-bottom: 2px;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.1);
     `;
     botName.textContent = this.options.botName;
 
@@ -369,33 +618,18 @@ class ChatbotStatusOverlay {
     textInfo.appendChild(botName);
     textInfo.appendChild(this.statusBar);
 
-    botInfo.appendChild(avatar);
-    botInfo.appendChild(textInfo);
-
-    // Right side - Actions
-    const actions = document.createElement("div");
-    actions.className = "chatbot-header-actions";
-
-    const platformBadge = document.createElement("span");
-    platformBadge.className = "chatbot-platform-badge";
-    platformBadge.textContent = this.options.platform;
-
     const minimizeBtn = document.createElement("button");
     minimizeBtn.className = "chatbot-minimize-btn";
     minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
-    minimizeBtn.title = this.isMinimized ? "Expand" : "Minimize";
-
-    actions.appendChild(platformBadge);
-    actions.appendChild(minimizeBtn);
-
-    header.appendChild(botInfo);
-    header.appendChild(actions);
-
-    // Add click handlers
-    minimizeBtn.addEventListener("click", (e) => {
+    minimizeBtn.onclick = (e) => {
       e.stopPropagation();
       this.toggleMinimize();
-    });
+    };
+
+    botInfo.appendChild(avatar);
+    botInfo.appendChild(textInfo);
+    header.appendChild(botInfo);
+    header.appendChild(minimizeBtn);
 
     header.addEventListener("click", () => {
       if (this.isMinimized) {
@@ -407,102 +641,134 @@ class ChatbotStatusOverlay {
   }
 
   /**
-   * Add initial greeting message
+   * Create automation controls
    */
-  addGreeting() {
-    const greetings = [
-      `Hi! I'm ${this.options.botName}, your automation assistant.`,
-      "I'll keep you updated on the job application process.",
-      "Let's find you some great opportunities! 🚀",
-    ];
+  createControls() {
+    const controls = document.createElement("div");
+    controls.className = "chatbot-controls";
 
-    // Add greeting with delay for natural feel
-    setTimeout(() => {
-      this.addBotMessage(greetings[0]);
-      setTimeout(() => {
-        this.addBotMessage(greetings[1]);
-        setTimeout(() => {
-          this.addBotMessage(greetings[2]);
-        }, 1200);
-      }, 800);
-    }, 500);
+    const actionBtn = document.createElement("button");
+    actionBtn.className = "chatbot-control-btn pause";
+    actionBtn.innerHTML = `<span>⏸️</span> Pause`;
+    actionBtn.onclick = () => this.toggleAutomation();
+
+    const stopBtn = document.createElement("button");
+    stopBtn.className = "chatbot-control-btn stop";
+    stopBtn.innerHTML = `<span>⏹️</span> Stop`;
+    stopBtn.onclick = () => this.stopAutomation();
+
+    controls.appendChild(actionBtn);
+    controls.appendChild(stopBtn);
+
+    return controls;
   }
 
   /**
-   * Add a bot message
+   * Update control buttons
    */
-  addBotMessage(message, type = "info") {
+  updateControls() {
+    if (!this.controlsContainer) return;
+
+    const actionBtn = this.controlsContainer.querySelector(".pause, .continue");
+    const stopBtn = this.controlsContainer.querySelector(".stop");
+
+    // Update action button based on state
+    if (this.isPaused) {
+      actionBtn.className = "chatbot-control-btn continue";
+      actionBtn.innerHTML = `<span>▶️</span> Continue`;
+      actionBtn.disabled = false; // Always allow continue when paused
+    } else {
+      actionBtn.className = "chatbot-control-btn pause";
+      actionBtn.innerHTML = `<span>⏸️</span> Pause`;
+      // Allow pause when automation is active
+      actionBtn.disabled = !["searching", "applying"].includes(
+        this.automationState
+      );
+    }
+
+    // Stop button is enabled when automation is running or paused
+    stopBtn.disabled =
+      this.automationState === "stopped" || this.automationState === "ready";
+  }
+
+  /**
+   * Toggle automation (pause/continue)
+   */
+  toggleAutomation() {
+    if (this.isPaused) {
+      this.addMessage("Resuming automation... 🚀");
+      this.sendToAutomation({ action: "resumeAutomation" });
+      this.isPaused = false;
+      this.automationState = "applying";
+    } else {
+      this.addMessage("Pausing automation... 🤚");
+      this.sendToAutomation({ action: "pauseAutomation" });
+      this.isPaused = true;
+      this.automationState = "paused";
+    }
+    this.updateStatus(this.automationState);
+    this.updateControls();
+  }
+
+  /**
+   * Stop automation
+   */
+  stopAutomation() {
+    if (confirm("Are you sure you want to stop the automation?")) {
+      this.addMessage("Stopping automation... 🛑");
+      this.sendToAutomation({ action: "stopAutomation" });
+      this.automationState = "stopped";
+      this.isPaused = false;
+      this.updateStatus("stopped");
+      this.updateControls();
+    }
+  }
+
+  /**
+   * Add formatted message (preserves line breaks)
+   */
+  addFormattedMessage(message) {
     if (!this.chatContainer || this.isMinimized) return this;
 
     this.showTypingIndicator();
 
     setTimeout(() => {
       this.hideTypingIndicator();
-      this._createMessage(message, "bot", type);
+      this._createFormattedMessage(message, "bot", true);
       this._scrollToBottom();
       this.messageCount++;
-      this._enforceMessageLimit();
-    }, 800 + Math.random() * 400); // Realistic typing delay
+    }, 800 + Math.random() * 400);
 
     return this;
   }
 
   /**
-   * Add system message (like status updates)
+   * Add a message to the chat
    */
-  addSystemMessage(message) {
+  addMessage(message) {
     if (!this.chatContainer || this.isMinimized) return this;
 
-    this._createMessage(message, "system");
-    this._scrollToBottom();
-    this.messageCount++;
-    this._enforceMessageLimit();
+    this.showTypingIndicator();
+
+    setTimeout(() => {
+      this.hideTypingIndicator();
+      this._createMessage(message, "bot", true);
+      this._scrollToBottom();
+      this.messageCount++;
+    }, 800 + Math.random() * 400);
 
     return this;
   }
 
   /**
-   * Show typing indicator
+   * Create formatted message element (preserves line breaks)
    */
-  showTypingIndicator() {
-    this.hideTypingIndicator(); // Remove existing
-
-    const indicator = document.createElement("div");
-    indicator.className = "chatbot-typing-indicator";
-    indicator.id = "chatbot-typing";
-
-    const dots = document.createElement("div");
-    dots.className = "chatbot-typing-dots";
-    dots.innerHTML = `
-      <div class="chatbot-typing-dot"></div>
-      <div class="chatbot-typing-dot"></div>
-      <div class="chatbot-typing-dot"></div>
-    `;
-
-    indicator.appendChild(dots);
-    this.chatContainer.appendChild(indicator);
-    this._scrollToBottom();
-  }
-
-  /**
-   * Hide typing indicator
-   */
-  hideTypingIndicator() {
-    const existing = document.getElementById("chatbot-typing");
-    if (existing) {
-      existing.remove();
-    }
-  }
-
-  /**
-   * Create message element
-   */
-  _createMessage(message, sender, type = "info") {
+  _createFormattedMessage(message, sender, persist = true) {
     const messageElement = document.createElement("div");
     messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
 
+    // Add bot avatar for all bot messages
     if (sender === "bot") {
-      // Add bot avatar
       const avatar = document.createElement("div");
       avatar.className = "chatbot-bot-avatar";
       avatar.textContent = this.options.icon;
@@ -511,26 +777,67 @@ class ChatbotStatusOverlay {
 
     const content = document.createElement("div");
     content.className = "chatbot-message-content";
+    content.style.whiteSpace = "pre-line"; // Preserve line breaks
     content.textContent = message;
 
-    // Add emoji based on message type
-    const emoji = this._getEmojiForType(type);
-    if (emoji && sender === "bot") {
-      content.textContent = `${emoji} ${message}`;
-    }
+    const messageWrapper = document.createElement("div");
+    messageWrapper.appendChild(content);
 
-    messageElement.appendChild(content);
-
-    // Add timestamp
     const timestamp = document.createElement("div");
     timestamp.className = "chatbot-message-timestamp";
     timestamp.textContent = new Date().toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
     });
-    messageElement.appendChild(timestamp);
+    messageWrapper.appendChild(timestamp);
 
+    messageElement.appendChild(messageWrapper);
     this.chatContainer.appendChild(messageElement);
+
+    // Persist message only if enabled and requested
+    if (persist && this.options.persistMessages) {
+      this.messages.push({
+        content: message,
+        sender: sender,
+        timestamp: Date.now(),
+        formatted: true,
+      });
+      this.saveMessages();
+    }
+  }
+
+  /**
+   * Legacy API compatibility methods
+   */
+  addBotMessage(message, type = "info") {
+    // Extract emoji based on type for visual consistency
+    const emoji = this._getEmojiForType(type);
+    const finalMessage = emoji ? `${emoji} ${message}` : message;
+    return this.addMessage(finalMessage);
+  }
+
+  addError(message) {
+    return this.addMessage(`❌ ${message}`);
+  }
+
+  addSuccess(message) {
+    return this.addMessage(`✅ ${message}`);
+  }
+
+  addWarning(message) {
+    return this.addMessage(`⚠️ ${message}`);
+  }
+
+  addInfo(message) {
+    return this.addMessage(`ℹ️ ${message}`);
+  }
+
+  /**
+   * Show action preview (simplified version)
+   */
+  showActionPreview(action, details = {}, countdown = 3) {
+    const preview = details.url ? `${action}\n📍 ${details.url}` : action;
+    return this.addMessage(`⏳ About to: ${preview}`);
   }
 
   /**
@@ -550,75 +857,160 @@ class ChatbotStatusOverlay {
   }
 
   /**
-   * Update status in header
+   * Create message element
    */
-  updateStatus(status, details = "") {
+  _createMessage(message, sender, persist = true) {
+    const messageElement = document.createElement("div");
+    messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
+
+    // Add bot avatar for all bot messages
+    if (sender === "bot") {
+      const avatar = document.createElement("div");
+      avatar.className = "chatbot-bot-avatar";
+      avatar.textContent = this.options.icon;
+      messageElement.appendChild(avatar);
+    }
+
+    const content = document.createElement("div");
+    content.className = "chatbot-message-content";
+    content.textContent = message;
+
+    const messageWrapper = document.createElement("div");
+    messageWrapper.appendChild(content);
+
+    const timestamp = document.createElement("div");
+    timestamp.className = "chatbot-message-timestamp";
+    timestamp.textContent = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    messageWrapper.appendChild(timestamp);
+
+    messageElement.appendChild(messageWrapper);
+    this.chatContainer.appendChild(messageElement);
+
+    // Persist message only if enabled and requested
+    if (persist && this.options.persistMessages) {
+      this.messages.push({
+        content: message,
+        sender: sender,
+        timestamp: Date.now(),
+      });
+      this.saveMessages();
+    }
+  }
+
+  /**
+   * Update status
+   */
+  updateStatus(status) {
     if (!this.statusBar) return this;
 
     this.currentStatus = status;
-    const statusConfig = this._getStatusConfig(status);
+
+    const statusConfig = {
+      ready: "Ready to help",
+      searching: "Searching for jobs...",
+      applying: "Applying to jobs...",
+      paused: "Paused",
+      stopped: "Stopped",
+    };
 
     const dot = this.statusBar.querySelector(".chatbot-status-dot");
     const text = this.statusBar.querySelector("span:last-child");
 
-    if (dot) {
-      this.statusBar.className = `chatbot-status-indicator chatbot-status-${status}`;
-    }
-
-    if (text) {
-      text.textContent = details || statusConfig.text;
-    }
+    this.statusBar.className = `chatbot-status-indicator chatbot-status-${status}`;
+    text.textContent = statusConfig[status] || status;
 
     return this;
   }
 
   /**
-   * Get status configuration
+   * Show typing indicator
    */
-  _getStatusConfig(status) {
-    const configs = {
-      ready: { text: "Ready to help" },
-      searching: { text: "Searching for jobs..." },
-      applying: { text: "Applying to jobs..." },
-      success: { text: "Application successful!" },
-      error: { text: "Encountered an issue" },
-      warning: { text: "Attention needed" },
-      info: { text: "Processing..." },
-      completed: { text: "All done!" },
-    };
+  showTypingIndicator() {
+    this.hideTypingIndicator();
 
-    return configs[status] || { text: status };
+    const indicator = document.createElement("div");
+    indicator.className = "chatbot-typing-indicator";
+    indicator.id = "chatbot-typing";
+
+    const avatar = document.createElement("div");
+    avatar.className = "chatbot-bot-avatar";
+    avatar.textContent = this.options.icon;
+
+    const typingContent = document.createElement("div");
+    typingContent.className = "chatbot-typing-content";
+
+    const dots = document.createElement("div");
+    dots.className = "chatbot-typing-dots";
+    dots.innerHTML = `
+      <div class="chatbot-typing-dot"></div>
+      <div class="chatbot-typing-dot"></div>
+      <div class="chatbot-typing-dot"></div>
+    `;
+
+    typingContent.appendChild(dots);
+    indicator.appendChild(avatar);
+    indicator.appendChild(typingContent);
+    this.chatContainer.appendChild(indicator);
+    this._scrollToBottom();
+  }
+
+  hideTypingIndicator() {
+    const existing = document.getElementById("chatbot-typing");
+    if (existing) {
+      existing.remove();
+    }
   }
 
   /**
-   * Convenience methods for different message types
+   * Initial greeting
    */
-  addError(error) {
-    const message =
-      typeof error === "string"
-        ? error
-        : error.message || "Something went wrong";
-    this.addBotMessage(`Oops! ${message}`, "error");
-    this.updateStatus("error", "Issue detected");
-    this._playNotificationSound();
-    return this;
+  addGreeting() {
+    setTimeout(() => {
+      this.addMessage(
+        `Hi! I'm ${this.options.botName}, your automation assistant! 👋`
+      );
+      setTimeout(() => {
+        this.addMessage(
+          "I'll help you track the job application process. Use the controls below to manage automation! 🚀"
+        );
+      }, 1200);
+    }, 500);
   }
 
-  addSuccess(message) {
-    this.addBotMessage(`Great! ${message}`, "success");
-    this.updateStatus("success");
-    return this;
+  /**
+   * Handle automation completion (called when automation stops)
+   */
+  async handleAutomationComplete() {
+    this.automationState = "completed";
+    this.isPaused = false;
+    this.updateStatus("completed", "All done!");
+    this.updateControls();
+
+    // Clear messages after a delay
+    setTimeout(() => {
+      this.clearMessages();
+      this.greetingShown = false;
+    }, 3000);
   }
 
-  addWarning(message) {
-    this.addBotMessage(`Heads up: ${message}`, "warning");
-    this.updateStatus("warning");
-    return this;
+  /**
+   * Simulate automation states for testing
+   */
+  startAutomation() {
+    this.automationState = "searching";
+    this.updateStatus("searching");
+    this.updateControls();
+    this.addMessage("Starting job search automation...");
   }
 
-  addInfo(message) {
-    this.addBotMessage(message, "info");
-    return this;
+  simulateApplying() {
+    this.automationState = "applying";
+    this.updateStatus("applying");
+    this.updateControls();
+    this.addMessage("Now applying to jobs...");
   }
 
   /**
@@ -628,60 +1020,21 @@ class ChatbotStatusOverlay {
     this.isMinimized = !this.isMinimized;
 
     const minimizeBtn = this.container.querySelector(".chatbot-minimize-btn");
-    if (minimizeBtn) {
-      minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
-      minimizeBtn.title = this.isMinimized ? "Expand" : "Minimize";
-    }
+    minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
 
     if (this.chatContainer) {
       this.chatContainer.style.display = this.isMinimized ? "none" : "block";
     }
 
-    return this;
-  }
-
-  /**
-   * Show/hide the entire overlay
-   */
-  show() {
-    if (!this.container) return this;
-    this.isVisible = true;
-    this.container.style.display = "block";
-    this.container.style.animation =
-      "chatbotSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)";
-    return this;
-  }
-
-  hide() {
-    if (!this.container) return this;
-    this.isVisible = false;
-    this.container.style.animation = "chatbotSlideOut 0.3s ease-in-out";
-    setTimeout(() => {
-      if (this.container) {
-        this.container.style.display = "none";
-      }
-    }, 300);
-    return this;
-  }
-
-  toggle() {
-    return this.isVisible ? this.hide() : this.show();
-  }
-
-  /**
-   * Clear all messages except greeting
-   */
-  clear() {
-    if (this.chatContainer) {
-      this.chatContainer.innerHTML = "";
-      this.messageCount = 0;
-      this.addGreeting();
+    if (this.controlsContainer) {
+      this.controlsContainer.style.display = this.isMinimized ? "none" : "flex";
     }
+
     return this;
   }
 
   /**
-   * Internal helper methods
+   * Helper methods
    */
   _scrollToBottom() {
     if (this.chatContainer) {
@@ -691,72 +1044,31 @@ class ChatbotStatusOverlay {
     }
   }
 
-  _enforceMessageLimit() {
-    if (this.messageCount > this.options.maxMessages) {
-      const messages = this.chatContainer.querySelectorAll(
-        ".chatbot-message-bubble"
-      );
-      const toRemove = Math.min(10, messages.length - this.options.maxMessages);
-
-      for (let i = 0; i < toRemove; i++) {
-        if (messages[i]) {
-          messages[i].remove();
-          this.messageCount--;
-        }
-      }
-    }
-  }
-
-  _playNotificationSound() {
-    if (this.options.enableSound) {
-      try {
-        const audio = new Audio(
-          "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+XwwmwhBCdz0/LRfC0FP4R00g=="
-        );
-        audio.volume = 0.3;
-        audio.play().catch(() => {}); // Ignore errors
-      } catch (e) {
-        // Silent fail
-      }
-    }
-  }
-
-  /**
-   * Update position
-   */
-  setPosition(position) {
+  show() {
     if (!this.container) return this;
+    this.isVisible = true;
+    this.container.style.display = "block";
+    return this;
+  }
 
-    if (position.top !== undefined) this.container.style.top = position.top;
-    if (position.right !== undefined)
-      this.container.style.right = position.right;
-    if (position.bottom !== undefined)
-      this.container.style.bottom = position.bottom;
-    if (position.left !== undefined) this.container.style.left = position.left;
-
+  hide() {
+    if (!this.container) return this;
+    this.isVisible = false;
+    this.container.style.display = "none";
     return this;
   }
 
   /**
-   * Update the title/bot name
-   */
-  setTitle(title) {
-    this.options.title = title;
-    this.options.botName = title;
-
-    const botNameElement = this.container?.querySelector(
-      "div:first-child div:last-child div:first-child"
-    );
-    if (botNameElement) {
-      botNameElement.textContent = title;
-    }
-    return this;
-  }
-
-  /**
-   * Destroy the overlay
+   * Destroy overlay
    */
   destroy() {
+    if (this.port) {
+      try {
+        this.port.disconnect();
+      } catch (e) {}
+      this.port = null;
+    }
+
     const existing = document.getElementById(this.options.id);
     if (existing) {
       existing.remove();
@@ -765,18 +1077,38 @@ class ChatbotStatusOverlay {
     this.container = null;
     this.chatContainer = null;
     this.statusBar = null;
-    this.messageCount = 0;
+    this.controlsContainer = null;
 
     return this;
   }
-
-  /**
-   * Check if overlay exists
-   */
-  exists() {
-    return !!this.container && document.body.contains(this.container);
-  }
 }
 
-// Export as StatusOverlay for backward compatibility
+// Export for use
 export default ChatbotStatusOverlay;
+
+// Add to window for testing
+if (typeof window !== "undefined") {
+  window.ChatbotStatusOverlay = ChatbotStatusOverlay;
+
+  // Test function that mimics your initialization
+  window.testChatbot = () => {
+    const overlay = new ChatbotStatusOverlay({
+      id: "test-platform-status-overlay",
+      platform: "TESTPLATFORM",
+      sessionId: "test-session-123",
+      userId: "test-user-456",
+      icon: "🤖",
+      position: { top: "10px", left: "10px" },
+      persistMessages: false,
+      enableControls: true,
+    });
+
+    // Make buttons clickable for testing
+    setTimeout(() => {
+      overlay.startAutomation();
+      console.log("Automation started - buttons should be clickable now");
+    }, 3000);
+
+    return overlay;
+  };
+}
