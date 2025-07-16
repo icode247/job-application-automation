@@ -329,6 +329,259 @@ export default class WorkableFileHandler {
     );
   }
 
+  async uploadImageStandalone(fileInput, imageUrl) {
+    if (!fileInput) {
+      console.error("File input not found");
+      return false;
+    }
+
+    try {
+      console.log("Downloading image...");
+
+      let response;
+      try {
+        response = await fetch(imageUrl);
+      } catch (corsError) {
+        throw corsError;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("Downloaded image is empty");
+      }
+
+      console.log("Creating file object...");
+
+      const fileName = "profile-photo.jpg";
+      const file = new File([blob], fileName, {
+        type: blob.type || "image/jpeg",
+        lastModified: Date.now(),
+      });
+
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+
+      fileInput.files = dataTransfer.files;
+
+      console.log("Triggering upload events...");
+
+      // Dispatch events to trigger the upload process
+      const changeEvent = new Event("change", { bubbles: true });
+      fileInput.dispatchEvent(changeEvent);
+
+      const inputEvent = new Event("input", { bubbles: true });
+      fileInput.dispatchEvent(inputEvent);
+
+      // Focus and blur to ensure all handlers are triggered
+      fileInput.focus();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      fileInput.blur();
+
+      console.log("Waiting for crop modal to appear...");
+
+      // Wait for the crop modal to appear and handle it
+      const finalUploadSuccess = await this.waitForModalAndUpload(fileInput);
+
+      if (finalUploadSuccess) {
+        console.log("✅ Image uploaded and processed successfully!");
+      } else {
+        console.log("⚠️ Upload may have failed or is still processing");
+      }
+
+      return finalUploadSuccess;
+    } catch (error) {
+      console.error("❌ Error uploading image:", error);
+      return false;
+    }
+  }
+
+  waitForModalAndUpload(fileInput, timeout = 45000) {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      let modalFound = false;
+      let uploadButtonClicked = false;
+
+      const checkProcess = () => {
+        const elapsed = Date.now() - startTime;
+
+        if (elapsed > timeout) {
+          console.log("⏰ Timeout reached");
+          resolve(false);
+          return;
+        }
+
+        // Phase 1: Wait for the crop modal to appear
+        if (!modalFound) {
+          console.log("🔍 Looking for crop modal...");
+
+          // Look for the upload button with data-ui="crop-image"
+          const uploadButton = document.querySelector('[data-ui="crop-image"]');
+
+          if (uploadButton && uploadButton.textContent.trim() === "Upload") {
+            console.log("✅ Found crop modal with upload button");
+            modalFound = true;
+
+            // Click the upload button
+            console.log("🖱️ Clicking upload button...");
+            uploadButton.click();
+            uploadButtonClicked = true;
+
+            // Give some time for the click to process
+            setTimeout(checkProcess, 1000);
+            return;
+          }
+
+          // Also check if modal is visible by looking for modal containers
+          const modalSelectors = [
+            '[role="dialog"]',
+            ".modal",
+            '[class*="modal"]',
+            '[class*="Modal"]',
+            '[class*="dialog"]',
+            '[class*="Dialog"]',
+            '[class*="overlay"]',
+            '[class*="Overlay"]',
+          ];
+
+          for (const selector of modalSelectors) {
+            const modal = document.querySelector(selector);
+            if (modal && this.isElementVisible(modal)) {
+              const uploadBtn = modal.querySelector(
+                '[data-ui="crop-image"], button:contains("Upload")'
+              );
+              if (uploadBtn) {
+                console.log("✅ Found modal with upload button");
+                modalFound = true;
+                uploadBtn.click();
+                uploadButtonClicked = true;
+                setTimeout(checkProcess, 1000);
+                return;
+              }
+            }
+          }
+
+          // Continue looking for modal
+          setTimeout(checkProcess, 500);
+          return;
+        }
+
+        // Phase 2: After clicking upload button, wait for completion
+        if (modalFound && uploadButtonClicked) {
+          console.log("⏳ Waiting for upload completion...");
+
+          // Check if modal is gone (indicating completion)
+          const uploadButton = document.querySelector('[data-ui="crop-image"]');
+          if (!uploadButton || !this.isElementVisible(uploadButton)) {
+            console.log(
+              "✅ Modal closed, checking for final success indicators"
+            );
+
+            // Look for success indicators in the original container
+            const container =
+              fileInput.closest('[data-role="dropzone"]') ||
+              fileInput.parentElement;
+
+            // Check for preview image or success indicators
+            if (container) {
+              const preview = container.querySelector('[data-role="preview"]');
+              if (preview) {
+                const img = preview.querySelector("img");
+                if (
+                  img &&
+                  img.src &&
+                  !img.src.includes("data:") &&
+                  img.src.includes("http")
+                ) {
+                  console.log("✅ Found uploaded image preview");
+                  resolve(true);
+                  return;
+                }
+              }
+
+              // Check for other success indicators
+              const successSelectors = [
+                ".upload-success",
+                ".file-uploaded",
+                ".upload-complete",
+                ".success-message",
+                ".file-success",
+                ".uploaded",
+              ];
+
+              for (const selector of successSelectors) {
+                const element = container.querySelector(selector);
+                if (element && element.textContent.trim()) {
+                  console.log(`✅ Found success indicator: ${selector}`);
+                  resolve(true);
+                  return;
+                }
+              }
+            }
+
+            // If we've waited long enough after modal closed, consider it successful
+            if (elapsed > 15000) {
+              // 15 seconds after modal appeared
+              console.log(
+                "✅ Upload likely completed (modal closed and time elapsed)"
+              );
+              resolve(true);
+              return;
+            }
+          }
+
+          // Check for errors
+          const errorSelectors = [
+            ".upload-error",
+            ".file-error",
+            ".error-message",
+            ".upload-failed",
+            ".file-failed",
+            ".error",
+          ];
+
+          for (const selector of errorSelectors) {
+            const element = document.querySelector(selector);
+            if (
+              element &&
+              element.textContent.trim() &&
+              this.isElementVisible(element)
+            ) {
+              console.log(`❌ Found error: ${element.textContent.trim()}`);
+              resolve(false);
+              return;
+            }
+          }
+
+          // Continue waiting
+          setTimeout(checkProcess, 1000);
+          return;
+        }
+
+        // Fallback - continue checking
+        setTimeout(checkProcess, 500);
+      };
+
+      checkProcess();
+    });
+  }
+
+  isElementVisible(element) {
+    if (!element) return false;
+
+    const style = window.getComputedStyle(element);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      element.offsetParent !== null
+    );
+  }
+
   /**
    * Handle a single file upload field
    */
@@ -363,6 +616,9 @@ export default class WorkableFileHandler {
           jobDescription,
           fileUrls
         );
+      } else if (fileType === "avatar") {
+        console.log(fileType, userDetails);
+        return await this.uploadImageStandalone(fileInput, userDetails.image);
       } else {
         return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
       }
@@ -854,60 +1110,31 @@ export default class WorkableFileHandler {
    */
   determineFileType(fileInput) {
     try {
-      const name = (fileInput.name || "").toLowerCase();
-      const id = (fileInput.id || "").toLowerCase();
+      const dataUi = fileInput.getAttribute("data-ui");
+      if (dataUi) {
+        const dataUiLower = dataUi.toLowerCase();
 
-      if (
-        name.includes("resume") ||
-        id.includes("resume") ||
-        name.includes("cv") ||
-        id.includes("cv")
-      ) {
-        return "resume";
-      }
+        switch (dataUiLower) {
+          case "resume":
+          case "cv":
+            return "resume";
 
-      if (
-        name.includes("cover") ||
-        id.includes("cover") ||
-        name.includes("letter") ||
-        id.includes("letter")
-      ) {
-        return "coverLetter";
-      }
+          case "cover-letter":
+          case "coverletter":
+          case "cover_letter":
+            return "coverLetter";
 
-      // Check surrounding context
-      const container =
-        fileInput.closest(".form-group") || fileInput.parentElement;
-      if (container) {
-        const containerText = container.textContent.toLowerCase();
+          case "avatar":
+          case "photo":
+          case "picture":
+          case "profile":
+          case "headshot":
+            return "avatar";
 
-        if (containerText.includes("resume") || containerText.includes("cv")) {
-          return "resume";
-        }
-
-        if (
-          containerText.includes("cover letter") ||
-          containerText.includes("cover")
-        ) {
-          return "coverLetter";
+          default:
+            break;
         }
       }
-
-      // Check label
-      const label = this.getFileInputLabel(fileInput);
-      if (label) {
-        const labelText = label.toLowerCase();
-
-        if (labelText.includes("resume") || labelText.includes("cv")) {
-          return "resume";
-        }
-
-        if (labelText.includes("cover") || labelText.includes("letter")) {
-          return "coverLetter";
-        }
-      }
-
-      return "resume";
     } catch (error) {
       console.error("Error determining file type:", error);
       return "resume";
