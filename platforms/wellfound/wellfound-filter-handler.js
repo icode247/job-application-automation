@@ -1,188 +1,285 @@
-// Content script to apply Wellfound filters programmatically
 export class WellfoundFilters {
-  // Apply job type filters
-  setJobTypes(types = ["full_time", "contract"]) {
-    types.forEach((type) => {
-      const checkbox = document.getElementById(`form-input--jobTypes--${type}`);
-      if (checkbox && !checkbox.checked) {
-        checkbox.click();
+  constructor() {
+    this.filterTypes = {
+      location: {
+        buttonSelector: '.styles_component__kQDF2',
+        typingDelay: 300, 
+        searchDelay: 2000, 
+        createCustom: true
+      },
+      jobTitles: {
+        buttonSelector: '.styles_inactive__aAc_w',
+        typingDelay: 50, 
+        searchDelay: 500, 
+        createCustom: false
       }
+    };
+  }
+
+  /**
+   * Find and prepare the input field for a specific filter type
+   * @param {string} filterType - 'location' or 'jobTitles'
+   * @returns {HTMLElement|null} The input element or null if not found
+   */
+  async prepareFilter(filterType) {
+    const config = this.filterTypes[filterType];
+    if (!config) {
+      console.error(`Invalid filter type: ${filterType}`);
+      return null;
+    }
+
+    const button = document.querySelector(config.buttonSelector);
+    let input;
+
+    if (button) {
+      button.click();
+      console.log(`${filterType} button clicked!`);
+      
+      // Wait for the select to appear
+      await this.delay(500);
+      
+      input = this.findInput();
+    } else {
+      console.log(`${filterType} button not found - looking for input directly`);
+      input = this.findInput();
+    }
+
+    if (!input) {
+      console.log(`${filterType} input not found`);
+      return null;
+    }
+
+    console.log(`${filterType} input found:`, input);
+    return input;
+  }
+
+  /**
+   * Find the React Select input element
+   * @returns {HTMLElement|null} The input element
+   */
+  findInput() {
+    // Try to find input with various selectors
+    const selectors = [
+      '[id^="react-select-"][id$="-input"]',
+      '.select__input input',
+      'input[aria-autocomplete="list"]'
+    ];
+
+    for (const selector of selectors) {
+      const input = document.querySelector(selector);
+      if (input) return input;
+    }
+
+    return null;
+  }
+
+  /**
+   * Clear all selected options from the multi-select
+   * @param {string} filterType - Type of filter for logging
+   */
+  async clearAllSelectedOptions(filterType = 'filter') {
+    let removeButtons = document.querySelectorAll('.select__multi-value__remove');
+    console.log(`Found ${removeButtons.length} selected ${filterType} options to remove`);
+    
+    let count = 0;
+    // Keep removing until no more remove buttons exist
+    while (removeButtons.length > 0) {
+      const removeButton = removeButtons[0]; // Always get the first one
+      const optionText = removeButton.parentElement.querySelector('.select__multi-value__label')?.textContent || 'Unknown';
+      console.log(`Removing ${filterType} option ${count + 1}: "${optionText}"`);
+      removeButton.click();
+      await this.delay(100);
+      
+      count++;
+      // Re-query the DOM to get the updated list of remove buttons
+      removeButtons = document.querySelectorAll('.select__multi-value__remove');
+    }
+    
+    console.log(`All ${count} ${filterType} options cleared`);
+  }
+
+  /**
+   * Properly set React Select input value
+   * @param {HTMLElement} input - The input element
+   * @param {string} value - The value to set
+   */
+  setReactInputValue(input, value) {
+    const lastValue = input.value;
+    input.value = value;
+
+    const event = new Event('input', { bubbles: true });
+
+    const tracker = input._valueTracker;
+    if (tracker) {
+      tracker.setValue(lastValue);
+    }
+
+    input.dispatchEvent(event);
+  }
+
+  /**
+   * Type text into the input field with appropriate delays
+   * @param {HTMLElement} input - The input element
+   * @param {string} text - Text to type
+   * @param {number} delay - Delay between characters
+   */
+  async typeText(input, text, delay = 50) {
+    input.focus();
+    input.click();
+
+    // Clear the input first
+    this.setReactInputValue(input, '');
+    await this.delay(200);
+
+    input.focus();
+
+    let currentValue = '';
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      currentValue += char;
+
+      this.setReactInputValue(input, currentValue);
+      console.log(`Typed: "${currentValue}"`);
+
+      await this.delay(delay);
+    }
+  }
+
+  /**
+   * Find and select an option from the dropdown
+   * @param {string} searchText - Text that was typed
+   * @param {boolean} createCustom - Whether to create custom option if not found
+   * @returns {boolean} Whether an option was selected
+   */
+  async selectOption(searchText, createCustom = false) {
+    const options = document.querySelectorAll('.select__option');
+    console.log(`Dropdown shows ${options.length} options for "${searchText}"`);
+
+    // Log all available options
+    options.forEach((option, index) => {
+      console.log(`Option ${index}: "${option.textContent.trim()}"`);
     });
-  }
 
-  // Set salary range
-  setSalary(minSalary, maxSalary) {
-    const minInput = document.querySelector(
-      'input[placeholder="Minimum salary"]'
-    );
-    const maxInput = document.querySelector(
-      'input[placeholder="Maximum (optional)"]'
-    );
+    // Find matching option
+    let foundOption = null;
+    for (let option of options) {
+      const optionText = option.textContent.trim();
 
-    if (minInput) {
-      minInput.value = minSalary;
-      minInput.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    if (maxInput) {
-      maxInput.value = maxSalary;
-      maxInput.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-  }
-
-  // Add skills
-  addSkills(skills = ["Python", "React.js", "Node.js"]) {
-    const skillsInput = document.getElementById("skills-input");
-
-    skills.forEach((skill) => {
-      // Check if there's a recommended button for this skill
-      const recommendedBtn = document.querySelector(
-        `[data-test="AutocompleteWithRecommendationsField-RecommendedOptionButton--${skill}"]`
-      );
-      if (recommendedBtn) {
-        recommendedBtn.click();
-      } else {
-        // Manually type and add the skill
-        if (skillsInput) {
-          skillsInput.value = skill;
-          skillsInput.dispatchEvent(new Event("input", { bubbles: true }));
-          // You might need to handle dropdown selection here
-        }
+      if (optionText.toLowerCase().includes(searchText.toLowerCase())) {
+        foundOption = option;
+        console.log(`Found matching option: "${optionText}"`);
+        break;
       }
-    });
-  }
+    }
 
-  // Add markets
-  addMarkets(markets = ["Healthcare", "E-Commerce"]) {
-    markets.forEach((market) => {
-      const marketBtn = document.querySelector(
-        `[data-test="AutocompleteWithRecommendationsField-RecommendedOptionButton--${market}"]`
-      );
-      if (marketBtn) {
-        marketBtn.click();
+    if (foundOption) {
+      foundOption.click();
+      console.log(`✓ Selected: ${foundOption.textContent.trim()}`);
+      await this.delay(500);
+      return true;
+    }
+
+    // If no match found and custom creation is enabled
+    if (createCustom) {
+      console.log(`No matching option found for "${searchText}" - creating custom option`);
+      
+      // Try to find input again in case it changed
+      const input = this.findInput();
+      if (input) {
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+        
+        console.log(`✓ Created custom option: ${searchText}`);
+        await this.delay(500);
+        return true;
       }
-    });
+    }
+
+    console.log(`No matching option found for "${searchText}"`);
+    return false;
   }
 
-  // Set company sizes
-  setCompanySizes(sizes = ["SIZE_11_50", "SIZE_51_200"]) {
-    sizes.forEach((size) => {
-      const checkbox = document.getElementById(
-        `form-input--companySizes--${size}`
-      );
-      if (checkbox && !checkbox.checked) {
-        checkbox.click();
-      }
-    });
-  }
+  /**
+   * Add multiple options to a specific filter
+   * @param {string} filterType - 'location' or 'jobTitles'
+   * @param {string[]} options - Array of options to add
+   * @param {boolean} clearFirst - Whether to clear existing options first
+   */
+  async addOptions(filterType, options, clearFirst = true) {
+    const config = this.filterTypes[filterType];
+    if (!config) {
+      console.error(`Invalid filter type: ${filterType}`);
+      return;
+    }
 
-  // Set investment stages
-  setInvestmentStages(stages = ["SEED_STAGE", "SERIES_A"]) {
-    stages.forEach((stage) => {
-      const checkbox = document.getElementById(
-        `form-input--investmentStages--${stage}`
-      );
-      if (checkbox && !checkbox.checked) {
-        checkbox.click();
-      }
-    });
-  }
+    // Prepare the filter (find input, click button if needed)
+    const input = await this.prepareFilter(filterType);
+    if (!input) return;
 
-  // Set keywords
-  setKeywords(included = [], excluded = []) {
-    const includedInput = document.querySelector(
-      '[data-test="KeywordsFilterField--keywords--input"]'
+    // Clear existing options if requested
+    if (clearFirst) {
+      await this.clearAllSelectedOptions(filterType);
+      await this.delay(500);
+    }
+
+    // Add each option
+    for (const option of options) {
+      console.log(`Adding ${filterType} option: ${option}`);
+      
+      // Type the option
+      await this.typeText(input, option, config.typingDelay);
+      
+      // Wait for dropdown to appear
+      console.log(`Waiting for ${filterType} dropdown...`);
+      await this.delay(config.searchDelay);
+      
+      // Select the option
+      await this.selectOption(option, config.createCustom);
+      
+      // Wait between options
+      await this.delay(500);
+    }
+
+    // Show final selections
+    const selected = document.querySelectorAll('.select__multi-value__label');
+    console.log(
+      `Final ${filterType} selections:`,
+      Array.from(selected).map(el => el.textContent)
     );
-    const excludedInput = document.querySelector(
-      '[data-test="KeywordsFilterField--excludedKeywords--input"]'
-    );
-
-    if (includedInput && included.length > 0) {
-      includedInput.value = included.join(", ");
-      includedInput.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-
-    if (excludedInput && excluded.length > 0) {
-      excludedInput.value = excluded.join(", ");
-      excludedInput.dispatchEvent(new Event("input", { bubbles: true }));
-    }
   }
 
-  // Toggle switches
-  setRemoteOnly(enabled = true) {
-    const toggle = document.getElementById("mostlyOrFullyRemote");
-    if (toggle && toggle.checked !== enabled) {
-      toggle.click();
-    }
+  /**
+   * Add job title filters
+   * @param {string[]} jobTitles - Array of job titles to add
+   * @param {boolean} clearFirst - Whether to clear existing selections
+   */
+  async addJobTitles(jobTitles, clearFirst = true) {
+    await this.addOptions('jobTitles', jobTitles, clearFirst);
   }
 
-  setHighlyResponsive(enabled = true) {
-    const toggle = document.getElementById(
-      "highlyResponsiveToIncomingApplications"
-    );
-    if (toggle && toggle.checked !== enabled) {
-      toggle.click();
-    }
+  /**
+   * Add location filters
+   * @param {string[]} locations - Array of locations to add
+   * @param {boolean} clearFirst - Whether to clear existing selections
+   */
+  async addLocations(locations, clearFirst = true) {
+    await this.addOptions('location', locations, clearFirst);
   }
 
-  setVisaSponsorship(enabled = true) {
-    const toggle = document.getElementById("allowInternationalApplicants");
-    if (toggle && toggle.checked !== enabled) {
-      toggle.click();
-    }
+  /**
+   * Utility method for delays
+   * @param {number} ms - Milliseconds to wait
+   */
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // Set experience range using slider
-  setExperienceRange(min = 0, max = 5) {
-    const sliders = document.querySelectorAll(".rheostat-handle");
-    // Experience slider is typically the second one (after equity slider)
-    if (sliders.length >= 4) {
-      // 2 for equity, 2 for experience
-      const minHandle = sliders[2];
-      const maxHandle = sliders[3];
-
-      // This is complex - you'd need to calculate positions and dispatch mouse events
-      // For simplicity, you might want to use a library like Puppeteer for complex interactions
-    }
-  }
-
-  // Apply all filters and view results
-  applyFiltersAndSearch() {
-    const viewResultsBtn = document.querySelector(
-      '[data-test="SearchBar-ViewResultsButton"]'
-    );
-    if (viewResultsBtn) {
-      viewResultsBtn.click();
-    }
-  }
-
-  // Main method to apply a complete filter set
-  applyFilterSet(filterConfig) {
-    const {
-      jobTypes,
-      minSalary,
-      maxSalary,
-      skills,
-      markets,
-      companySizes,
-      investmentStages,
-      includedKeywords,
-      excludedKeywords,
-      remoteOnly,
-      highlyResponsive,
-      visaSponsorship,
-    } = filterConfig;
-
-    // Apply filters with delays to ensure DOM updates
-    setTimeout(() => this.setJobTypes(jobTypes), 100);
-    setTimeout(() => this.setSalary(minSalary, maxSalary), 200);
-    setTimeout(() => this.addSkills(skills), 300);
-    setTimeout(() => this.addMarkets(markets), 400);
-    setTimeout(() => this.setCompanySizes(companySizes), 500);
-    setTimeout(() => this.setInvestmentStages(investmentStages), 600);
-    setTimeout(() => this.setKeywords(includedKeywords, excludedKeywords), 700);
-    setTimeout(() => this.setRemoteOnly(remoteOnly), 800);
-    setTimeout(() => this.setHighlyResponsive(highlyResponsive), 900);
-    setTimeout(() => this.setVisaSponsorship(visaSponsorship), 1000);
-    setTimeout(() => this.applyFiltersAndSearch(), 1500);
+  /**
+   * Get currently selected options
+   * @returns {string[]} Array of selected option texts
+   */
+  getSelectedOptions() {
+    const selected = document.querySelectorAll('.select__multi-value__label');
+    return Array.from(selected).map(el => el.textContent);
   }
 }

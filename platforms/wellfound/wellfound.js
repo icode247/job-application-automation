@@ -14,10 +14,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.platform = "wellfound";
     this.baseUrl = "https://wellfound.com";
 
-    this.jobQueue = []; 
-    this.currentJobIndex = 0; 
-    this.isLoadingMore = false; 
-    this.queueInitialized = false; 
+    this.jobQueue = [];
+    this.currentJobIndex = 0;
+    this.isLoadingMore = false;
+    this.queueInitialized = false;
 
     // Initialize Wellfound-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
@@ -818,6 +818,13 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.statusOverlay.addInfo("Starting job search process");
       this.statusOverlay.updateStatus("searching");
 
+      // Add job titles
+      await this.filters.addJobTitles([
+        "Flutter Developer",
+      ]);
+
+      // Add locations
+      await this.filters.addLocations(["New York", "San Francisco", "Remote"]);
       // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
