@@ -8,7 +8,10 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
+//Application error: Error during application process: DomUtils is not defined ReferenceError: DomUtils is not defined at
+// FormUtils.findSubmitButton (chrome-extension://bjohmhedpgcadjaeakhcaei
+//   fijjbdefi/shared/utilities/form-utils.js:487:21) at
+//   WorkablePlatform.processApplication
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -592,41 +595,37 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     // Fill form fields
     try {
       if (this.formHandler) {
+        await this.formHandler.handlePhoneInputWithCountryCode(
+          form,
+          this.userProfile
+        );
+        await this.formHandler.handleCustomSelectWithModal(
+          form,
+          this.userProfile
+        );
         await this.formHandler.fillFormWithProfile(
           form,
           this.userProfile,
           jobDescription
         );
+
         this.statusOverlay.addSuccess("Form fields filled");
       }
     } catch (error) {
       this.statusOverlay.addWarning("Form filling failed: " + error.message);
     }
 
-    // Submit the form
-    const submitButton = FormUtils.findSubmitButton(form);
+    // 6. Find submit button
+    const submitButton = this.formHandler.findSubmitButton(form);
     if (!submitButton) {
-      throw new Error("Cannot find submit button");
+      throw new ApplicationError("Cannot find submit button");
     }
 
-    return await this.submitForm(submitButton);
-  }
-
-  async submitForm(submitButton) {
-    this.statusOverlay.addInfo("Submitting application...");
-
-    DomUtils.scrollToElement(submitButton);
-    await this.wait(600);
-
-    try {
-      submitButton.click();
-      this.statusOverlay.addSuccess("Clicked submit button");
-    } catch (e) {
-      this.statusOverlay.addError(
-        "Failed to click submit button: " + e.message
-      );
-    }
-    return true;
+    // 7. Submit the form
+    const submitted = await this.formHandler.submitForm(form, {
+      dryRun: true,
+    });
+    return submitted;
   }
 
   // ========================================

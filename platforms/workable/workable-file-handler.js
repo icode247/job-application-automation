@@ -523,7 +523,7 @@ export default class WorkableFileHandler {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           resume_urls: fileUrls,
-          job_description: jobDescription,
+          job_description: jobDescription.title,
         }),
       });
 
@@ -953,15 +953,11 @@ export default class WorkableFileHandler {
   getFileUrls(userDetails, fileType) {
     switch (fileType) {
       case "resume":
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        return userDetails.resumeUrl;
       case "coverLetter":
-        return userDetails.coverLetterUrl ? [userDetails.coverLetterUrl] : [];
+        return userDetails.coverLetterUrl;
       default:
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        return userDetails.resumeUrl;
     }
   }
 
