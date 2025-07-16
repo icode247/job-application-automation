@@ -1,4 +1,7 @@
 // platforms/recruitee/recruitee-file-handler.js
+
+//Matching resume to job description, please wait...
+
 export class RecruiteeFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
@@ -106,7 +109,7 @@ export class RecruiteeFileHandler {
     try {
       const fileType = this.determineFileType(fileInput);
       const fileUrls = this.getFileUrls(userDetails, fileType);
-
+      console.log("File URLS", fileUrls);
       if (!fileUrls || fileUrls.length === 0) {
         this.showStatus(`No ${fileType} files available`, "warning");
         return false;
@@ -278,6 +281,7 @@ export class RecruiteeFileHandler {
    * Match and upload best resume for the job
    */
   async matchAndUploadResume(fileInput, userDetails, jobDescription, fileUrls) {
+    console.log(fileUrls);
     try {
       this.showStatus(
         "Matching resume to job description, please wait...",
@@ -713,46 +717,13 @@ export class RecruiteeFileHandler {
   getFileUrls(userDetails, fileType) {
     switch (fileType) {
       case "resume":
-        if (userDetails.resumeUrl) {
-          return Array.isArray(userDetails.resumeUrl)
-            ? userDetails.resumeUrl
-            : [userDetails.resumeUrl];
-        }
-
-        if (userDetails.resumeUrls) {
-          const urls = userDetails.resumeUrls;
-          return Array.isArray(urls) ? urls.flat() : [];
-        }
-
-        return [];
+        return userDetails.resumeUrl;
 
       case "coverLetter":
-        if (userDetails.coverLetterUrl) {
-          return Array.isArray(userDetails.coverLetterUrl)
-            ? userDetails.coverLetterUrl
-            : [userDetails.coverLetterUrl];
-        }
-
-        if (userDetails.coverLetterUrls) {
-          const urls = userDetails.coverLetterUrls;
-          return Array.isArray(urls) ? urls.flat() : [];
-        }
-
-        return [];
+        return userDetails.coverLetterUrl;
 
       default:
-        if (userDetails.resumeUrl) {
-          return Array.isArray(userDetails.resumeUrl)
-            ? userDetails.resumeUrl
-            : [userDetails.resumeUrl];
-        }
-
-        if (userDetails.resumeUrls) {
-          const urls = userDetails.resumeUrls;
-          return Array.isArray(urls) ? urls.flat() : [];
-        }
-
-        return [];
+        return userDetails.resumeUrl;
     }
   }
 

@@ -257,19 +257,19 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
 
   async initialize() {
     await super.initialize(); // Handles all common initialization
-
+  
     // Initialize Recruitee-specific handlers
     this.fileHandler = new RecruiteeFileHandler({
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
     });
 
-    // this.formHandler = new RecruiteeFormHandler({
-    //   logger: (message) => this.statusOverlay.addInfo(message),
-    //   host: this.getApiHost(),
-    //   userData: this.userProfile || {},
-    //   jobDescription: "",
-    // });
+    this.formHandler = new RecruiteeFormHandler({
+      logger: (message) => this.statusOverlay.addInfo(message),
+      host: this.getApiHost(),
+      userData: this.userProfile || {},
+      jobDescription: "",
+    });
 
     this.statusOverlay.addSuccess("Recruitee-specific components initialized");
   }
@@ -524,6 +524,11 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       const jobId = urlParts[urlParts.length - 1] || "unknown";
       console.log("Extracted Recruitee job ID:", jobId);
 
+      // Extract job description
+      const jobDescription = this.extractJobDescription();
+
+      console.log("Job description:", jobDescription);
+
       // Wait for page to fully load
       await this.wait(3000);
 
@@ -544,9 +549,6 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
           "Cannot find Recruitee application form"
         );
       }
-
-      // Extract job description
-      const jobDescription = this.extractJobDescription();
 
       // Process the form
       const result = await this.processApplicationForm(
@@ -618,15 +620,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       "Found Recruitee application form, beginning to fill out"
     );
 
-    console.log("this.userService", this.userService);
     try {
-      this.formHandler = new RecruiteeFormHandler(
-        this.aiService, // AI service for getting answers
-        this.userService, // User service for profile data
-        (message) => this.statusOverlay.addInfo(message) // Logger function
-      );
-
-      // Handle multi-step form if present (Recruitee-specific)
       const isMultiStep = form.querySelector(".c-step, .steps-indicator");
       if (isMultiStep) {
         return await this.handleMultiStepForm(form, profile, jobDescription);
@@ -634,7 +628,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
 
       // Handle file uploads (resume) - do this first
       this.statusOverlay.addInfo("Handling file uploads...");
-      await this.fileHandler.handleResumeUpload(profile, form);
+      await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
       // Use the new form handler's main method
       this.statusOverlay.addInfo("Processing form fields...");
