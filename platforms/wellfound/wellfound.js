@@ -806,6 +806,154 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   // WELLFOUND-SPECIFIC SEARCH LOGIC
   // ========================================
 
+  /**
+   * Check for captcha/verification blocks and pause automation until resolved
+   */
+  async checkCaptchaStatus() {
+    try {
+      this.log("🔍 Checking for captcha/verification blocks");
+
+      const captchaSelectors = [
+        'p[data-dd-captcha-human-title=""]',
+        "p.captcha__human__title",
+        'p[data-dd-captcha-human-title*="Verification Required"]',
+      ];
+
+      const captchaFound = captchaSelectors.some((selector) => {
+        const element = document.querySelector(selector);
+        return (
+          element &&
+          (element.textContent.includes("Access blocked") ||
+            element.textContent.includes("Verification Required"))
+        );
+      });
+
+      if (captchaFound) {
+        this.log("🚫 Captcha/verification detected, pausing automation");
+        this.statusOverlay.addWarning(
+          "Captcha detected - please solve it to continue"
+        );
+        this.statusOverlay.updateStatus("paused");
+
+        // Pause automation and wait for user to solve captcha
+        await this.waitForCaptchaResolution();
+      } else {
+        this.log("✅ No captcha detected, continuing");
+      }
+    } catch (error) {
+      this.log("❌ Error checking captcha status:", error);
+    }
+  }
+
+  /**
+   * Wait for captcha to be resolved by user
+   */
+  async waitForCaptchaResolution() {
+    const maxWaitTime = 10 * 60 * 1000; // 10 minutes max wait
+    const checkInterval = 10000; // Check every 10 seconds
+    let waitTime = 0;
+
+    while (waitTime < maxWaitTime) {
+      await this.delay(checkInterval);
+      waitTime += checkInterval;
+
+      const captchaSelectors = [
+        'p[data-dd-captcha-human-title=""]',
+        "p.captcha__human__title",
+        'p[data-dd-captcha-human-title*="Verification Required"]',
+      ];
+
+      const captchaStillPresent = captchaSelectors.some((selector) => {
+        const element = document.querySelector(selector);
+        return (
+          element &&
+          (element.textContent.includes("Access blocked") ||
+            element.textContent.includes("Verification Required"))
+        );
+      });
+
+      if (!captchaStillPresent) {
+        this.log("✅ Captcha resolved, continuing automation");
+        this.statusOverlay.addSuccess(
+          "Captcha resolved - continuing automation"
+        );
+        this.statusOverlay.updateStatus("searching");
+        return;
+      }
+
+      this.log(
+        `⏳ Waiting for captcha resolution... (${Math.floor(waitTime / 1000)}s)`
+      );
+    }
+
+    throw new Error(
+      "Captcha resolution timeout - please refresh and try again"
+    );
+  }
+
+  /**
+   * Check if user is logged in by looking for login/signup buttons
+   */
+  async checkLoginStatus() {
+    try {
+      this.log("🔍 Checking user login status");
+
+      const loginButton = document.querySelector(
+        "button[onclick=\"window.location.href='/login'\"]"
+      );
+      const signupButton = document.querySelector(
+        'button[onclick*="/jobs/signup"]'
+      );
+
+      if (loginButton || signupButton) {
+        this.log("🚫 User not logged in, pausing automation");
+        this.statusOverlay.addWarning("Please log in to Wellfound to continue");
+        this.statusOverlay.updateStatus("paused");
+
+        // Wait for user to log in
+        await this.waitForUserLogin();
+      } else {
+        this.log("✅ User is logged in, continuing");
+      }
+    } catch (error) {
+      this.log("❌ Error checking login status:", error);
+    }
+  }
+
+  /**
+   * Wait for user to log in
+   */
+  async waitForUserLogin() {
+    const maxWaitTime = 15 * 60 * 1000; // 15 minutes max wait
+    const checkInterval = 10000; // Check every 10 seconds
+    let waitTime = 0;
+
+    while (waitTime < maxWaitTime) {
+      await this.delay(checkInterval);
+      waitTime += checkInterval;
+
+      const loginButton = document.querySelector(
+        "button[onclick=\"window.location.href='/login'\"]"
+      );
+      const signupButton = document.querySelector(
+        'button[onclick*="/jobs/signup"]'
+      );
+
+      if (!loginButton && !signupButton) {
+        this.log("✅ User logged in, continuing automation");
+        this.statusOverlay.addSuccess("Login detected - continuing automation");
+        this.statusOverlay.updateStatus("searching");
+        return;
+      }
+
+      this.log(
+        `⏳ Waiting for user login... (${Math.floor(waitTime / 1000)}s)`
+      );
+    }
+
+    throw new Error("Login timeout - please refresh and try again");
+  }
+
   async startSearchProcess() {
     try {
       // Prevent duplicate search process starts
@@ -814,17 +962,29 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         return;
       }
 
+      // Check if user is logged in
+      await this.checkLoginStatus();
+
+      // Check for captcha/verification blocks
+      await this.checkCaptchaStatus();
+
       this.searchProcessStarted = true;
       this.statusOverlay.addInfo("Starting job search process");
       this.statusOverlay.updateStatus("searching");
 
-      // Add job titles
-      await this.filters.addJobTitles([
-        "Flutter Developer",
-      ]);
+      // Get user preferences
+      const preferences =
+        this.sessionContext?.preferences || this.config.preferences || {};
 
-      // Add locations
-      await this.filters.addLocations(["New York", "San Francisco", "Remote"]);
+      console.log("preferences", this.sessionContext);
+      // Add job titles from user preferences
+      const jobTitles = preferences.positions || ["Software Engineer"];
+      await this.filters.addJobTitles(jobTitles);
+
+      // Add locations from user preferences
+      const locations = preferences.location;
+      await this.filters.addLocations(locations);
+
       // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
