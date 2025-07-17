@@ -1,12 +1,9 @@
-// platforms/recruitee/recruitee-file-handler.js
-
-//Matching resume to job description, please wait...
-
+// platforms/recruitee/recruitee-file-handler.j
 export class RecruiteeFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
     this.apiHost = config.apiHost || "http://localhost:3000";
-    this.aiBaseUrl = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
+    this.aiBaseUrl = "http://localhost:8000/api";
     this.processedInputs = new Set();
   }
 
@@ -123,12 +120,14 @@ export class RecruiteeFileHandler {
           fileUrls
         );
       } else if (fileType === "coverLetter" && jobDescription) {
-        return await this.handleCoverLetterUpload(
-          fileInput,
-          userDetails,
-          jobDescription,
-          fileUrls
-        );
+        return await this.uploadCoverLetterPDF(fileInput, {
+          fullName: userDetails.name,
+          jobDescription: jobDescription,
+          skills: userDetails.skills,
+          education: userDetails.education,
+          fullPositions: userDetails.fullPositions,
+          tone: "Professional",
+        });
       } else {
         return await this.uploadFileFromUrl(
           fileInput,
@@ -137,6 +136,90 @@ export class RecruiteeFileHandler {
       }
     } catch (error) {
       this.showStatus("Single file upload failed: " + error.message, "error");
+      return false;
+    }
+  }
+
+  async uploadCoverLetterPDF(fileInput, letterData) {
+    if (!fileInput) {
+      console.error("File input not found");
+      return false;
+    }
+
+    try {
+      console.log("Generating and downloading cover letter PDF...");
+
+      // Call your Flask endpoint to generate the PDF
+      const response = await fetch(`${this.aiBaseUrl}/generate-cover-letter-pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(letterData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          `Failed to generate PDF: ${response.status} - ${
+            errorData.error || "Unknown error"
+          }`
+        );
+      }
+
+      // Validate content type
+      const contentType = response.headers.get("content-type");
+      if (contentType && !contentType.includes("application/pdf")) {
+        console.warn("Expected PDF but received:", contentType);
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("Generated PDF is empty");
+      }
+
+      console.log("Creating PDF file object...");
+
+      const fileName = "cover-letter.pdf";
+      const file = new File([blob], fileName, {
+        type: blob.type || "application/pdf",
+        lastModified: Date.now(),
+      });
+
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      fileInput.files = dataTransfer.files;
+
+      console.log("Triggering upload events...");
+
+      // Dispatch events to trigger the upload process
+      const changeEvent = new Event("change", { bubbles: true });
+      fileInput.dispatchEvent(changeEvent);
+
+      const inputEvent = new Event("input", { bubbles: true });
+      fileInput.dispatchEvent(inputEvent);
+
+      // Focus and blur to ensure all handlers are triggered
+      fileInput.focus();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      fileInput.blur();
+
+      console.log("Waiting for upload to complete...");
+
+      
+      // Wait for upload completion (no crop modal needed for PDFs)
+      const finalUploadSuccess = await this.waitForUploadProcess(fileInput);
+
+      if (finalUploadSuccess) {
+        console.log("✅ Cover letter PDF uploaded successfully!");
+      } else {
+        console.log("⚠️ Upload may have failed or is still processing");
+      }
+
+      return finalUploadSuccess;
+    } catch (error) {
+      console.error("❌ Error uploading cover letter PDF:", error);
       return false;
     }
   }
