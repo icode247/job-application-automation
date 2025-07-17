@@ -496,8 +496,8 @@ export default class LeverFormHandler {
 
         case "text":
         case "email":
-        case "tel":
-        case "phone":
+        // case "tel":
+        // case "phone":
         case "url":
         case "number":
           return await this.fillInputField(element, value);

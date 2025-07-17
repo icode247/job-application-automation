@@ -8,7 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
+//apply
 export default class LeverPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);

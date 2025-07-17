@@ -1,6 +1,6 @@
 // background/platforms/lever.js - REFACTORED VERSION
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
-//handlePlatformSpecificMessage
+
 export default class LeverAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     super(messageHandler, "lever"); // Pass platform name to base class
