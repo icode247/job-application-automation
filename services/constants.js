@@ -6,4 +6,4 @@ export const PLAN_LIMITS = {
 };
 
 export const API_HOST_URL = "http://localhost:3000";
-export const AI_BASE_URL = "http://0.0.0.0:8000/api";
+export const AI_BASE_URL = "https://resumify.fastapply.co/api";

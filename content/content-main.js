@@ -1,5 +1,4 @@
-//content/content-main.js - IMPROVED VERSION
-//handleMessage
+//content/content-main.js - COMPLETE FIXED VERSION
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -14,7 +13,7 @@ class ContentScriptManager {
     this.initializationTimeout = null;
     this.sessionContext = null;
     this.userProfile = null;
-    this.maxInitializationAttempts = 5; // ✅ Increase attempts
+    this.maxInitializationAttempts = 5;
     this.initializationAttempts = 0;
 
     // Duplicate prevention flags
@@ -22,8 +21,10 @@ class ContentScriptManager {
     this.startInProgress = false;
     this.lastInitialization = 0;
     this.processedUrls = new Set();
-
-    // ✅ NEW: Context verification flags
+    this.profileLoaded = false;
+    this.profileLoadAttempts = 0;
+    this.maxProfileLoadAttempts = 10;
+    this.waitingForProfile = false;
     this.contextVerified = false;
     this.verificationAttempts = 0;
     this.maxVerificationAttempts = 10;
@@ -39,7 +40,6 @@ class ContentScriptManager {
 
     const now = Date.now();
     if (now - this.lastInitialization < 3000) {
-      // ✅ Reduce from 5000 to 3000
       console.log("🔄 Too soon since last initialization, skipping");
       return;
     }
@@ -53,30 +53,37 @@ class ContentScriptManager {
         `📝 Content script initialization attempt ${this.initializationAttempts}`
       );
 
-      // ✅ FIX: Enhanced automation window check with retries
       const isAutomationWindow = await this.checkIfAutomationWindowWithRetry();
       console.log("🔍 Automation window check result:", isAutomationWindow);
 
       if (isAutomationWindow) {
         this.automationActive = true;
 
-        // ✅ FIX: Enhanced session context retrieval with verification
-        const sessionContext = await this.getSessionContextWithVerification();
+        const sessionContext = await this.getSessionContextWithProfile();
         console.log("📊 Session context retrieved:", sessionContext);
 
-        if (sessionContext) {
+        if (sessionContext && sessionContext.sessionId) {
           this.sessionContext = sessionContext;
           this.sessionId = sessionContext.sessionId;
           this.platform = sessionContext.platform;
           this.userId = sessionContext.userId;
-
-          if (sessionContext.userProfile) {
+          console.log("Session context established:", sessionContext)
+          if (
+            sessionContext.userProfile &&
+            this.isUserProfileComplete(sessionContext.userProfile)
+          ) {
             this.userProfile = sessionContext.userProfile;
-            console.log(`👤 User profile loaded from session context:`, {
+            this.profileLoaded = true;
+            console.log(`👤 User profile loaded successfully:`, {
               name: this.userProfile.name || this.userProfile.firstName,
               email: this.userProfile.email,
               hasResumeUrl: !!this.userProfile.resumeUrl,
             });
+          } else {
+            console.warn(
+              "⚠️ No complete user profile in session context, attempting to fetch..."
+            );
+            await this.waitForUserProfile();
           }
 
           console.log(`🤖 Session context established:`, {
@@ -84,6 +91,7 @@ class ContentScriptManager {
             platform: this.platform,
             userId: this.userId,
             hasUserProfile: !!this.userProfile,
+            profileLoaded: this.profileLoaded,
             url: window.location.href,
           });
 
@@ -93,10 +101,20 @@ class ContentScriptManager {
 
             console.log(`✅ Content script initialized for ${this.platform}`);
             this.notifyBackgroundReady();
-            this.setAutoStartTimeout();
+
+            if (
+              this.profileLoaded &&
+              this.isUserProfileComplete(this.userProfile)
+            ) {
+              this.setConditionalAutoStart();
+            } else {
+              console.warn(
+                "⚠️ Auto-start disabled - user profile not loaded or incomplete"
+              );
+            }
           }
         } else {
-          throw new Error("Failed to retrieve or verify session context");
+          throw new Error("Failed to retrieve session context");
         }
       } else {
         console.log("❌ Not an automation window, skipping initialization");
@@ -105,7 +123,7 @@ class ContentScriptManager {
       console.error("❌ Error initializing content script:", error);
 
       if (this.initializationAttempts < this.maxInitializationAttempts) {
-        const retryDelay = 2000 + this.initializationAttempts * 1000; // Progressive delay
+        const retryDelay = 2000 + this.initializationAttempts * 1000;
         console.log(`🔄 Retrying initialization in ${retryDelay}ms...`);
         setTimeout(() => {
           this.initializationInProgress = false;
@@ -143,7 +161,6 @@ class ContentScriptManager {
 
         if (sessionId && platform) {
           console.log("✅ Automation window detected via sessionStorage");
-          // Set window flags for consistency
           window.automationSessionId = sessionId;
           window.automationPlatform = platform;
           window.automationUserId = userId;
@@ -162,6 +179,12 @@ class ContentScriptManager {
           if (response && response.isAutomationWindow) {
             console.log("✅ Automation window detected via background script");
             window.isAutomationWindow = true;
+
+            // Store session context if provided
+            if (response.sessionContext) {
+              this.storeSessionContextInStorage(response.sessionContext);
+            }
+
             return true;
           }
         } catch (error) {
@@ -171,7 +194,6 @@ class ContentScriptManager {
           );
 
           if (attempt < maxAttempts - 1) {
-            // Wait before retrying
             await this.delay(1000 * (attempt + 1));
             continue;
           }
@@ -196,8 +218,8 @@ class ContentScriptManager {
     return false;
   }
 
-  // ✅ NEW: Enhanced session context retrieval with verification
-  async getSessionContextWithVerification(maxAttempts = 5) {
+  // ✅ NEW: Enhanced session context retrieval with profile waiting
+  async getSessionContextWithProfile(maxAttempts = 8) {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         console.log(`📊 Session context retrieval attempt ${attempt + 1}`);
@@ -208,30 +230,40 @@ class ContentScriptManager {
         if (context && context.sessionId) {
           console.log("📊 Session context found in storage");
 
-          // ✅ Verify context completeness
-          if (this.isSessionContextComplete(context)) {
+          // ✅ FIXED: Check if profile is complete
+          if (this.isUserProfileComplete(context.userProfile)) {
+            console.log("✅ Complete user profile found in context");
             this.contextVerified = true;
-            return await this.enrichSessionContext(context);
+            return context;
           } else {
-            console.log("⚠️ Session context incomplete, trying to enrich...");
+            console.log(
+              "⚠️ User profile incomplete, requesting from background..."
+            );
           }
         }
 
-        // Try to get from background script
+        // Request full session context from background script
         try {
-          console.log("📡 Requesting session context from background script");
+          console.log(
+            "📡 Requesting full session context from background script"
+          );
           const response = await this.sendMessageToBackground({
-            action: "getSessionContext",
+            action: "getFullSessionContext",
             tabId: await this.getTabId(),
             windowId: await this.getWindowId(),
             url: window.location.href,
           });
 
           if (response && response.sessionContext) {
-            console.log("📊 Session context received from background");
+            console.log("📊 Full session context received from background");
             this.storeSessionContextInStorage(response.sessionContext);
-            this.contextVerified = true;
-            return response.sessionContext;
+
+            if (
+              this.isUserProfileComplete(response.sessionContext.userProfile)
+            ) {
+              this.contextVerified = true;
+              return response.sessionContext;
+            }
           }
         } catch (error) {
           console.warn(
@@ -258,8 +290,13 @@ class ContentScriptManager {
             if (response && response.sessionContext) {
               console.log("📊 Session assigned by background script");
               this.storeSessionContextInStorage(response.sessionContext);
-              this.contextVerified = true;
-              return response.sessionContext;
+
+              if (
+                this.isUserProfileComplete(response.sessionContext.userProfile)
+              ) {
+                this.contextVerified = true;
+                return response.sessionContext;
+              }
             }
           } catch (error) {
             console.warn(
@@ -288,14 +325,60 @@ class ContentScriptManager {
     return null;
   }
 
-  // ✅ NEW: Check if session context is complete
-  isSessionContextComplete(context) {
-    return !!(
-      context &&
-      context.sessionId &&
-      context.platform &&
-      context.userId
+  // ✅ NEW: Wait for user profile with polling
+  async waitForUserProfile(timeout = 30000) {
+    if (this.waitingForProfile) {
+      console.log("⏳ Already waiting for user profile");
+      return;
+    }
+
+    this.waitingForProfile = true;
+    const startTime = Date.now();
+
+    console.log("⏳ Waiting for user profile to be injected...");
+
+    while (Date.now() - startTime < timeout) {
+      // Check if profile appeared in storage
+      const context = this.getSessionContextFromStorage();
+      if (this.isUserProfileComplete(context?.userProfile)) {
+        this.userProfile = context.userProfile;
+        this.profileLoaded = true;
+        console.log("✅ User profile loaded during wait");
+        this.waitingForProfile = false;
+        return;
+      }
+
+      // Check window/sessionStorage directly
+      if (
+        window.automationUserProfile &&
+        this.isUserProfileComplete(window.automationUserProfile)
+      ) {
+        this.userProfile = window.automationUserProfile;
+        this.profileLoaded = true;
+        console.log("✅ User profile found in window during wait");
+        this.waitingForProfile = false;
+        return;
+      }
+
+      await this.delay(1000);
+    }
+
+    console.warn("⚠️ Timeout waiting for user profile");
+    this.waitingForProfile = false;
+  }
+
+  // ✅ NEW: Check if user profile is complete
+  isUserProfileComplete(profile) {
+    if (!profile || typeof profile !== "object") return false;
+
+    const requiredFields = ["userId", "email"];
+    const hasRequiredFields = requiredFields.every(
+      (field) => profile[field] && profile[field].toString().trim() !== ""
     );
+
+    const hasName = profile.name || profile.firstName || profile.fullName;
+
+    return hasRequiredFields && hasName;
   }
 
   async getTabId() {
@@ -313,7 +396,6 @@ class ContentScriptManager {
     });
   }
 
-  // ✅ NEW: Get window ID
   async getWindowId() {
     return new Promise((resolve) => {
       try {
@@ -329,6 +411,7 @@ class ContentScriptManager {
     });
   }
 
+  // ✅ FIXED: Enhanced session context retrieval from storage
   getSessionContextFromStorage() {
     try {
       const baseContext = {
@@ -347,22 +430,34 @@ class ContentScriptManager {
           window.parentSessionId || sessionStorage.getItem("parentSessionId"),
       };
 
-      // ✅ Enhanced user profile retrieval
+      // ✅ FIXED: Enhanced user profile retrieval with validation
       let userProfile = null;
       try {
-        if (window.automationUserProfile) {
+        // Try window first
+        if (
+          window.automationUserProfile &&
+          this.isUserProfileComplete(window.automationUserProfile)
+        ) {
           userProfile = window.automationUserProfile;
+          console.log("👤 User profile loaded from window");
         } else {
+          // Try sessionStorage
           const storedProfile = sessionStorage.getItem("automationUserProfile");
           if (storedProfile) {
-            userProfile = JSON.parse(storedProfile);
+            const parsedProfile = JSON.parse(storedProfile);
+            if (this.isUserProfileComplete(parsedProfile)) {
+              userProfile = parsedProfile;
+              console.log("👤 User profile loaded from sessionStorage");
+            } else {
+              console.warn("⚠️ Stored user profile is incomplete");
+            }
           }
         }
       } catch (error) {
         console.warn("⚠️ Error parsing stored user profile:", error);
       }
 
-      // ✅ Enhanced session config retrieval
+      // Session config
       let sessionConfig = null;
       try {
         if (window.automationSessionConfig) {
@@ -379,7 +474,6 @@ class ContentScriptManager {
         console.warn("⚠️ Error parsing stored session config:", error);
       }
 
-      // ✅ Enhanced API host retrieval
       const apiHost =
         window.automationApiHost || sessionStorage.getItem("automationApiHost");
 
@@ -392,17 +486,16 @@ class ContentScriptManager {
         contextTimestamp: window.automationContextTimestamp || Date.now(),
       };
 
-      // ✅ Additional verification
       if (context.sessionId && context.platform && context.userId) {
-        console.log("✅ Complete session context found in storage:", {
+        console.log("✅ Session context found in storage:", {
           sessionId: context.sessionId,
           platform: context.platform,
           hasUserProfile: !!context.userProfile,
-          hasSessionConfig: !!context.sessionConfig,
+          profileComplete: this.isUserProfileComplete(context.userProfile),
         });
         return context;
       } else {
-        console.log("⚠️ Incomplete session context in storage:", context);
+        console.log("⚠️ Incomplete session context in storage");
         return null;
       }
     } catch (error) {
@@ -411,6 +504,7 @@ class ContentScriptManager {
     }
   }
 
+  // ✅ FIXED: Enhanced session context storage
   storeSessionContextInStorage(context) {
     try {
       // Store basic context in window
@@ -421,10 +515,15 @@ class ContentScriptManager {
       window.isAutomationTab = true;
       window.automationContextTimestamp = Date.now();
 
-      // Store enhanced context
-      if (context.userProfile) {
+      // ✅ FIXED: Always store user profile if available and complete
+      if (
+        context.userProfile &&
+        this.isUserProfileComplete(context.userProfile)
+      ) {
         window.automationUserProfile = context.userProfile;
+        console.log("💾 User profile stored in window");
       }
+
       if (context.sessionConfig) {
         window.automationSessionConfig = context.sessionConfig;
       }
@@ -440,12 +539,17 @@ class ContentScriptManager {
         sessionStorage.setItem("isAutomationWindow", "true");
         sessionStorage.setItem("isAutomationTab", "true");
 
-        if (context.userProfile) {
+        if (
+          context.userProfile &&
+          this.isUserProfileComplete(context.userProfile)
+        ) {
           sessionStorage.setItem(
             "automationUserProfile",
             JSON.stringify(context.userProfile)
           );
+          console.log("💾 User profile stored in sessionStorage");
         }
+
         if (context.sessionConfig) {
           sessionStorage.setItem(
             "automationSessionConfig",
@@ -488,8 +592,6 @@ class ContentScriptManager {
 
     return basicContext;
   }
-
-  // ... rest of the methods remain mostly the same but with enhanced error handling
 
   addAutomationIndicator() {
     const existing = document.getElementById("automation-indicator");
@@ -544,8 +646,6 @@ class ContentScriptManager {
     this.indicator = indicator;
   }
 
-  // ... rest of methods remain the same ...
-
   getSessionId() {
     return (
       this.sessionContext?.sessionId ||
@@ -586,8 +686,8 @@ class ContentScriptManager {
     if (url.includes("greenhouse.io")) return "greenhouse";
     if (url.includes("workable.com")) return "workable";
     if (url.includes("ashbyhq.com")) return "ashby";
-    if (url.includes("workable.com")) return "workable";
     if (url.includes("wellfound.com")) return "wellfound";
+    if (url.includes("breezy.hr")) return "breezy";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
@@ -611,6 +711,8 @@ class ContentScriptManager {
         return "wellfound";
       if (url.includes("site:ashbyhq.com") || url.includes("ashbyhq.com"))
         return "ashby";
+      if (url.includes("site:breezy.hr") || url.includes("breezy.hr"))
+        return "breezy";
     }
 
     return "unknown";
@@ -625,7 +727,11 @@ class ContentScriptManager {
         throw new Error(`Platform ${this.platform} not supported`);
       }
 
-      // FIXED: Create platform automation with comprehensive config
+      // ✅ FIXED: Ensure user profile is available before creating automation
+      if (!this.userProfile && this.profileLoaded) {
+        console.warn("⚠️ Profile marked as loaded but userProfile is null");
+      }
+
       const automationConfig = {
         sessionId: this.sessionId,
         platform: this.platform,
@@ -633,7 +739,7 @@ class ContentScriptManager {
         contentScript: this,
         config: this.config,
         sessionContext: this.sessionContext,
-        userProfile: this.userProfile, // FIXED: Pass user profile directly
+        userProfile: this.userProfile, // Should be populated by now
       };
 
       console.log("Creating platform automation with config:", {
@@ -642,6 +748,9 @@ class ContentScriptManager {
         userId: automationConfig.userId,
         hasSessionContext: !!automationConfig.sessionContext,
         hasUserProfile: !!automationConfig.userProfile,
+        profileComplete: this.isUserProfileComplete(
+          automationConfig.userProfile
+        ),
       });
 
       this.platformAutomation = new PlatformClass(automationConfig);
@@ -655,16 +764,15 @@ class ContentScriptManager {
       // Initialize platform automation
       await this.platformAutomation.initialize();
 
-      // FIXED: Set session context with user profile
+      // ✅ FIXED: Set session context with validated user profile
       if (this.sessionContext) {
-        // Ensure user profile is in session context
         if (this.userProfile && !this.sessionContext.userProfile) {
           this.sessionContext.userProfile = this.userProfile;
         }
         await this.platformAutomation.setSessionContext(this.sessionContext);
       }
 
-      await this.platformAutomation.start(this.config);
+      console.log("✅ Platform automation setup completed");
     } catch (error) {
       console.error(
         `❌ Failed to setup automation for ${this.platform}:`,
@@ -678,8 +786,12 @@ class ContentScriptManager {
     this.sessionContext = { ...this.sessionContext, ...newContext };
 
     // Update user profile if provided
-    if (newContext.userProfile) {
+    if (
+      newContext.userProfile &&
+      this.isUserProfileComplete(newContext.userProfile)
+    ) {
       this.userProfile = newContext.userProfile;
+      this.profileLoaded = true;
       console.log("👤 User profile updated from session context");
     }
 
@@ -752,6 +864,7 @@ class ContentScriptManager {
             "../platforms/ashby/ashby.js"
           );
           return AshbyPlatform;
+
         case "wellfound":
           const { default: WellfoundPlatform } = await import(
             "../platforms/wellfound/wellfound.js"
@@ -826,9 +939,9 @@ class ContentScriptManager {
     }
   }
 
+  // ✅ FIXED: Enhanced start handling with profile verification
   async handleStartAutomation(request, sendResponse) {
     try {
-      // FIXED: Prevent duplicate starts
       if (this.startInProgress) {
         console.log("⚠️ Start already in progress, ignoring duplicate");
         sendResponse({ success: true, message: "Start already in progress" });
@@ -844,7 +957,7 @@ class ContentScriptManager {
       this.startInProgress = true;
 
       if (this.platformAutomation) {
-        // FIXED: Clear any conflicting timeouts
+        // Clear any conflicting timeouts
         if (this.initializationTimeout) {
           clearTimeout(this.initializationTimeout);
           this.initializationTimeout = null;
@@ -854,16 +967,20 @@ class ContentScriptManager {
         // Update config
         this.config = { ...this.config, ...request.config };
 
-        // Update session context
+        // ✅ FIXED: Update session context and user profile
         if (request.sessionContext) {
           this.sessionContext = {
             ...this.sessionContext,
             ...request.sessionContext,
           };
 
-          if (!this.userProfile && request.sessionContext.userProfile) {
+          if (
+            request.sessionContext.userProfile &&
+            this.isUserProfileComplete(request.sessionContext.userProfile)
+          ) {
             this.userProfile = request.sessionContext.userProfile;
-            console.log(`👤 User profile loaded from start message:`, {
+            this.profileLoaded = true;
+            console.log(`👤 User profile updated from start message:`, {
               name: this.userProfile.name || this.userProfile.firstName,
               email: this.userProfile.email,
             });
@@ -873,24 +990,25 @@ class ContentScriptManager {
           await this.platformAutomation.setSessionContext(this.sessionContext);
         }
 
-        if (!this.userProfile) {
-          console.warn("⚠️ No user profile available, attempting to fetch...");
-          try {
-            const context = this.getSessionContextFromStorage();
-            if (context && context.userProfile) {
-              this.userProfile = context.userProfile;
-              console.log("✅ User profile recovered from storage");
-            }
-          } catch (error) {
-            console.error("Failed to recover user profile:", error);
-          }
+        // Verify profile before starting
+        if (
+          !this.profileLoaded ||
+          !this.isUserProfileComplete(this.userProfile)
+        ) {
+          console.warn("⚠️ Starting automation without complete user profile");
+          sendResponse({
+            success: false,
+            error: "Cannot start automation without complete user profile",
+          });
+          return;
         }
 
         console.log(
-          `🤖 Starting automation for ${this.platform} with config:`,
+          `🤖 Starting automation for ${this.platform} with profile:`,
           {
             hasConfig: !!this.config,
             hasUserProfile: !!this.userProfile,
+            profileComplete: this.isUserProfileComplete(this.userProfile),
             jobsToApply: this.config.jobsToApply,
           }
         );
@@ -915,19 +1033,30 @@ class ContentScriptManager {
     }
   }
 
-  setAutoStartTimeout() {
-    if (this.platformAutomation?.isRunning) {
-      console.log("🔄 Automation already running, skipping auto-start timeout");
+  // ✅ FIXED: Conditional auto-start only if profile is loaded
+  setConditionalAutoStart() {
+    if (!this.profileLoaded || !this.isUserProfileComplete(this.userProfile)) {
+      console.log(
+        "🔄 Auto-start disabled - user profile not loaded or incomplete"
+      );
       return;
     }
 
+    if (this.platformAutomation?.isRunning) {
+      console.log("🔄 Auto-start disabled - automation already running");
+      return;
+    }
+
+    console.log("⏰ Setting conditional auto-start timer (15 seconds)");
     this.initializationTimeout = setTimeout(async () => {
       if (
         this.platformAutomation &&
         !this.platformAutomation.isRunning &&
-        !this.startInProgress
+        !this.startInProgress &&
+        this.profileLoaded &&
+        this.isUserProfileComplete(this.userProfile)
       ) {
-        this.log("🔄 Auto-starting automation with basic config");
+        console.log("🔄 Auto-starting automation with complete profile");
         this.startInProgress = true;
 
         try {
@@ -938,14 +1067,20 @@ class ContentScriptManager {
             userId: this.userId,
           });
         } catch (error) {
-          this.log(`❌ Auto-start failed: ${error.message}`);
+          console.log(`❌ Auto-start failed: ${error.message}`);
         } finally {
           this.startInProgress = false;
         }
       } else {
-        this.log("🔄 Skipping auto-start - conditions not met");
+        console.log("🔄 Skipping auto-start - conditions not met", {
+          hasPlatformAutomation: !!this.platformAutomation,
+          isRunning: this.platformAutomation?.isRunning,
+          startInProgress: this.startInProgress,
+          profileLoaded: this.profileLoaded,
+          profileComplete: this.isUserProfileComplete(this.userProfile),
+        });
       }
-    }, 10000);
+    }, 15000); // Increased to 15 seconds to allow more time for profile loading
   }
 
   notifyBackgroundReady() {
@@ -957,10 +1092,10 @@ class ContentScriptManager {
       url: window.location.href,
       sessionContext: this.sessionContext,
       hasUserProfile: !!this.userProfile,
+      profileComplete: this.isUserProfileComplete(this.userProfile),
     }).catch(console.error);
   }
 
-  // Rest of the methods remain the same...
   async handlePauseAutomation(request, sendResponse) {
     if (this.platformAutomation && this.platformAutomation.pause) {
       await this.platformAutomation.pause();
@@ -995,6 +1130,8 @@ class ContentScriptManager {
       platform: this.platform,
       sessionId: this.sessionId,
       userId: this.userId,
+      hasUserProfile: !!this.userProfile,
+      profileComplete: this.isUserProfileComplete(this.userProfile),
       readyState: document.readyState,
       timestamp: Date.now(),
     };
@@ -1121,7 +1258,6 @@ class ContentScriptManager {
         const oldUrl = currentUrl;
         currentUrl = window.location.href;
 
-        // FIXED: Track processed URLs to prevent re-processing
         if (this.processedUrls.has(currentUrl)) {
           console.log(`🔄 URL already processed: ${currentUrl}`);
           return;
@@ -1131,7 +1267,6 @@ class ContentScriptManager {
         this.processedUrls.add(currentUrl);
         this.notifyNavigation(oldUrl, currentUrl);
 
-        // FIXED: Only notify if not currently processing
         if (
           this.platformAutomation &&
           this.platformAutomation.onNavigation &&
@@ -1170,13 +1305,8 @@ class ContentScriptManager {
       throw new Error(`Element not found: ${selector}`);
     }
 
-    // Scroll into view
     element.scrollIntoView({ behavior: "smooth", block: "center" });
-
-    // Wait a bit for scroll
     await this.delay(options.delay || 500);
-
-    // Click the element
     element.click();
 
     return true;
@@ -1188,11 +1318,8 @@ class ContentScriptManager {
       throw new Error(`Element not found: ${selector}`);
     }
 
-    // Focus and fill
     element.focus();
     element.value = value;
-
-    // Trigger events
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -1249,7 +1376,6 @@ class ContentScriptManager {
   }
 
   extractCurrentJobData() {
-    // Extract job information from current page
     const jobData = {
       title: this.extractText([
         "h1",
@@ -1353,6 +1479,9 @@ class ContentScriptManager {
         <p><strong>User Profile:</strong> ${
           this.userProfile ? "✅ Loaded" : "❌ Missing"
         }</p>
+        <p><strong>Profile Complete:</strong> ${
+          this.isUserProfileComplete(this.userProfile) ? "✅ Yes" : "❌ No"
+        }</p>
         ${
           this.userProfile
             ? `
@@ -1374,6 +1503,9 @@ class ContentScriptManager {
         }</p>
         <p><strong>Context Verified:</strong> ${
           this.contextVerified ? "✅ Yes" : "⚠️ No"
+        }</p>
+        <p><strong>Profile Loaded:</strong> ${
+          this.profileLoaded ? "✅ Yes" : "⚠️ No"
         }</p>
         <button onclick="this.closest('div').remove()" style="
           background: #4CAF50; color: white; border: none; padding: 8px 16px;
@@ -1403,6 +1535,8 @@ class ContentScriptManager {
     this.contextVerified = false;
     this.verificationAttempts = 0;
     this.processedUrls.clear();
+    this.profileLoaded = false;
+    this.waitingForProfile = false;
 
     if (this.initializationTimeout) {
       clearTimeout(this.initializationTimeout);
@@ -1428,11 +1562,11 @@ class ContentScriptManager {
   }
 }
 
-// ✅ Enhanced initialization with better timing
+// Initialize content script manager
 const contentManager = new ContentScriptManager();
 console.log("📝 Content script manager created");
 
-// ✅ Improved single initialization with multiple triggers
+// Single initialization with proper timing
 const initializeOnce = (() => {
   let initialized = false;
   let scheduledInit = false;
@@ -1453,28 +1587,26 @@ const initializeOnce = (() => {
   };
 })();
 
-// ✅ Multiple initialization triggers for reliability
+// Initialize based on document state
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => initializeOnce(500));
+  document.addEventListener("DOMContentLoaded", () => initializeOnce(1000));
 } else if (document.readyState === "interactive") {
-  initializeOnce(1000);
+  initializeOnce(1500);
 } else {
-  initializeOnce(500);
+  initializeOnce(1000);
 }
 
-// ✅ Enhanced pageshow handler
+// Enhanced pageshow handler
 window.addEventListener("pageshow", (event) => {
   console.log("📄 Page show event:", {
     persisted: event.persisted,
     readyState: document.readyState,
   });
 
-  // Only reinitialize if it's a new page load or if we haven't initialized yet
   if (!event.persisted && !contentManager.isInitialized) {
     console.log("📝 New page detected, scheduling initialization...");
     setTimeout(() => initializeOnce(1000), 500);
   } else if (event.persisted && contentManager.isInitialized) {
-    // Page came from cache, just verify context is still valid
     setTimeout(() => {
       if (!contentManager.contextVerified) {
         console.log(
@@ -1487,7 +1619,7 @@ window.addEventListener("pageshow", (event) => {
   }
 });
 
-// ✅ Additional safety net for missed initializations
+// Safety net with profile check
 setTimeout(() => {
   if (
     !contentManager.isInitialized &&
@@ -1496,7 +1628,7 @@ setTimeout(() => {
     console.log("🚨 Safety net: Content script not initialized, attempting...");
     initializeOnce(0);
   }
-}, 5000);
+}, 8000);
 
 // Cleanup on page unload
 window.addEventListener("beforeunload", () => {

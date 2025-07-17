@@ -1,10 +1,158 @@
 // platforms/linkedin/linkedin-file-handler.js
 import { AI_BASE_URL, API_HOST_URL } from "../../services/constants.js";
-
+//No photo file available for user
 export default class LinkedInFileHandler {
   constructor(config) {
     this.AI_BASE_URL = AI_BASE_URL;
     this.API_HOST_URL = API_HOST_URL;
+  }
+
+  async uploadCoverLetterPDF(fileInput, letterData) {
+    if (!fileInput) {
+      console.error("File input not found");
+      return false;
+    }
+
+    try {
+      console.log("Generating and downloading cover letter PDF...");
+
+      // Call your Flask endpoint to generate the PDF
+      const response = await fetch(
+        `${this.aiBaseUrl}/generate-cover-letter-pdf`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(letterData),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          `Failed to generate PDF: ${response.status} - ${
+            errorData.error || "Unknown error"
+          }`
+        );
+      }
+
+      // Validate content type
+      const contentType = response.headers.get("content-type");
+      if (contentType && !contentType.includes("application/pdf")) {
+        console.warn("Expected PDF but received:", contentType);
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("Generated PDF is empty");
+      }
+
+      console.log("Creating PDF file object...");
+
+      const fileName = "cover-letter.pdf";
+      const file = new File([blob], fileName, {
+        type: blob.type || "application/pdf",
+        lastModified: Date.now(),
+      });
+
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      fileInput.files = dataTransfer.files;
+
+      console.log("Triggering upload events...");
+
+      // Dispatch events to trigger the upload process
+      const changeEvent = new Event("change", { bubbles: true });
+      fileInput.dispatchEvent(changeEvent);
+
+      const inputEvent = new Event("input", { bubbles: true });
+      fileInput.dispatchEvent(inputEvent);
+
+      // Focus and blur to ensure all handlers are triggered
+      fileInput.focus();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      fileInput.blur();
+
+      console.log("Waiting for upload to complete...");
+
+      // Wait for upload completion (no crop modal needed for PDFs)
+      const finalUploadSuccess = await this.waitForUploadProcess(fileInput);
+
+      if (finalUploadSuccess) {
+        console.log("✅ Cover letter PDF uploaded successfully!");
+      } else {
+        console.log("⚠️ Upload may have failed or is still processing");
+      }
+
+      return finalUploadSuccess;
+    } catch (error) {
+      console.error("❌ Error uploading cover letter PDF:", error);
+      return false;
+    }
+  }
+
+  async uploadImageStandalone(fileInput, imageUrl) {
+    if (!fileInput) {
+      console.error("File input not found");
+      return false;
+    }
+
+    try {
+      console.log("Downloading image...");
+
+      let response;
+      try {
+        response = await fetch(imageUrl);
+      } catch (corsError) {
+        throw corsError;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("Downloaded image is empty");
+      }
+
+      console.log("Creating file object...");
+
+      const fileName = "profile-photo.jpg";
+      const file = new File([blob], fileName, {
+        type: blob.type || "image/jpeg",
+        lastModified: Date.now(),
+      });
+
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+
+      fileInput.files = dataTransfer.files;
+
+      console.log("Triggering upload events...");
+
+      // Dispatch events to trigger the upload process
+      const changeEvent = new Event("change", { bubbles: true });
+      fileInput.dispatchEvent(changeEvent);
+
+      const inputEvent = new Event("input", { bubbles: true });
+      fileInput.dispatchEvent(inputEvent);
+
+      // Focus and blur to ensure all handlers are triggered
+      fileInput.focus();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      fileInput.blur();
+
+      // check if upload is success and return true
+      const uploadSuccess = await this.waitForUploadProcess(fileInput);
+      return uploadSuccess;
+    } catch (error) {
+      console.error("❌ Error uploading image:", error);
+      return false;
+    }
   }
 
   async handleFileUpload(container, userDetails, jobDescription) {
@@ -15,13 +163,8 @@ export default class LinkedInFileHandler {
         return false;
       }
 
-      // Determine file type needed
       const fileType = this.determineFileType(container);
       let fileUrls = this.getFileUrls(userDetails, fileType);
-
-      if (Array.isArray(fileUrls) && Array.isArray(fileUrls[0])) {
-        fileUrls = fileUrls[0];
-      }
 
       if (!fileUrls || fileUrls.length === 0) {
         console.log(`No ${fileType} file available for user`);
@@ -40,15 +183,29 @@ export default class LinkedInFileHandler {
 
       // Handle cover letter uploads
       if (fileType === "coverLetter" && jobDescription) {
-        return await this.handleTailoredCoverLetter(
-          fileInput,
-          userDetails,
-          jobDescription
-        );
+        console.log("Uploading cover letter PDF...");
+        return await this.uploadCoverLetterPDF(fileInput, {
+          fullName: userDetails.name,
+          jobDescription: jobDescription,
+          skills: userDetails.skills,
+          education: userDetails.education,
+          fullPositions: userDetails.fullPositions,
+          tone: "Professional",
+        });
+      }
+
+      if (fileType === "photo") {
+        console.log("Uploading profile photo...");
+        return await this.uploadImageStandalone(fileInput, userDetails.image);
       }
 
       // Fallback to simple file upload
-      return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
+      return await this.uploadFileFromUrl(
+        fileInput,
+        fileUrls,
+        userDetails,
+        jobDescription
+      );
     } catch (error) {
       console.error("Error handling file upload:", error);
       return false;
@@ -165,7 +322,6 @@ export default class LinkedInFileHandler {
           this.statusManager.show("Resume generated successfully", "success");
         }
       } else {
-        // Use existing matching service for non-unlimited plans
         if (this.statusManager) {
           this.statusManager.show(
             "Matching your resume to the job description, Please wait",
@@ -196,7 +352,9 @@ export default class LinkedInFileHandler {
           );
         }
 
+
         const data = await res.json();
+        console.log("HIGHEST RANKING RESUME", data.highest_ranking_resume)
         const proxyURL = `${
           this.API_HOST_URL
         }/api/proxy-file?url=${encodeURIComponent(
@@ -207,8 +365,9 @@ export default class LinkedInFileHandler {
         if (!response.ok) {
           throw new Error(`Failed to fetch file: ${response.statusText}`);
         }
-
+ 
         const blob = await response.blob();
+        console.log("BLOB", blob)
         let filename = `${userDetails.firstName || ""} ${
           userDetails.lastName || ""
         } resume.pdf`;
@@ -239,7 +398,6 @@ export default class LinkedInFileHandler {
         fileInput.files = dataTransfer.files;
       }
 
-      // Common code for both paths - dispatch events and wait for upload
       await this.dispatchFileEvents(fileInput);
       await this.waitForUploadProcess(fileInput);
       return true;
@@ -304,6 +462,11 @@ export default class LinkedInFileHandler {
       containerText.includes("cv")
     ) {
       return "resume";
+    } else if (
+      containerText.includes("photo") ||
+      containerHTML.includes("image")
+    ) {
+      return "photo";
     }
 
     // Default to resume
@@ -313,112 +476,13 @@ export default class LinkedInFileHandler {
   getFileUrls(userDetails, fileType) {
     switch (fileType) {
       case "resume":
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        return userDetails.resumeUrl;
       case "coverLetter":
-        return userDetails.coverLetterUrl ? [userDetails.coverLetterUrl] : [];
+        return userDetails.coverLetterUrl;
+      case "photo":
+        return userDetails.image;
       default:
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
-    }
-  }
-
-  async handleTailoredCoverLetter(fileInput, userDetails, jobDescription) {
-    try {
-      // Show status message
-      if (this.statusManager) {
-        this.statusManager.show(
-          "Generating cover letter, Please wait while we create your personalized cover letter",
-          "info"
-        );
-      }
-
-      // Generate the cover letter PDF
-      const response = await fetch(
-        `${this.AI_BASE_URL}/generate-cover-letter-pdf`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            fullName: userDetails.firstName,
-            skills: userDetails.skills,
-            education: userDetails.education,
-            jobDescription: jobDescription,
-            tone: "Professional",
-            fullPositions: userDetails.fullPositions,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to generate tailored cover letter: ${response.status}`
-        );
-      }
-
-      // The response is the PDF blob directly
-      const blob = await response.blob();
-      const fileName = `${userDetails.firstName.toLowerCase()}_cover_letter.pdf`;
-
-      // Create File object from the generated PDF
-      const file = new File([blob], fileName, {
-        type: "application/pdf",
-        lastModified: Date.now(),
-      });
-
-      if (file.size === 0) {
-        throw new Error("Generated cover letter PDF is empty");
-      }
-
-      // Create DataTransfer to simulate file selection
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
-
-      // Set files on input
-      fileInput.files = dataTransfer.files;
-
-      // Trigger events to notify the page that a file has been selected
-      await this.dispatchFileEvents(fileInput);
-
-      // Wait for upload to complete
-      await this.waitForUploadProcess(fileInput);
-
-      if (this.statusManager) {
-        this.statusManager.show(
-          "Cover letter generated and uploaded successfully",
-          "success"
-        );
-      }
-
-      console.log(
-        `Successfully generated and uploaded cover letter: ${fileName}`
-      );
-      return true;
-    } catch (error) {
-      console.error("Error generating tailored cover letter:", error);
-
-      if (this.statusManager) {
-        this.statusManager.show(
-          "Failed to generate cover letter, using fallback",
-          "warning"
-        );
-      }
-
-      // Fallback to regular cover letter if available
-      const coverLetterUrls = this.getFileUrls(userDetails, "coverLetter");
-      if (coverLetterUrls.length > 0) {
-        return await this.uploadFileFromUrl(fileInput, coverLetterUrls[0]);
-      }
-
-      if (this.statusManager) {
-        this.statusManager.show("No cover letter available", "error");
-      }
-
-      return false;
+        return userDetails.resumeUrl;
     }
   }
 
