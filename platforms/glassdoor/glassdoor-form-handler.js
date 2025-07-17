@@ -1,4 +1,4 @@
-// platforms/glassdoor/glassdoor-form-handler.js - ENHANCED VERSION
+// platforms/glassdoor/glassdoor-form-handler.js - FIXED FOR SMARTAPPLY FLOW
 import { DomUtils, FormUtils } from "../../shared/utilities/index.js";
 
 export default class GlassdoorFormHandler {
@@ -8,6 +8,24 @@ export default class GlassdoorFormHandler {
     this.userData = config.userData || {};
     this.jobDescription = config.jobDescription || "";
     this.answerCache = new Map();
+
+    // SmartApply specific configuration based on your description
+    this.smartApplyConfig = {
+      selectors: {
+        continueButton:
+          "button[data-testid='aa288590cde54b4a3f778f52168e7b17f']", // From your description
+        submitButton: "button[type='submit']",
+        form: "form",
+        // Step-specific selectors
+        resumeUpload: "input[type='file']",
+        contactForm:
+          "input[name*='name'], input[type='email'], input[type='tel']",
+        questionsForm: "input[type='radio'], select, textarea",
+        reviewPage: "*:contains('review'), *:contains('submit')",
+      },
+      maxSteps: 10,
+      stepTimeout: 30000,
+    };
   }
 
   log(message, data = {}) {
@@ -18,7 +36,7 @@ export default class GlassdoorFormHandler {
   }
 
   // ========================================
-  // INDEED SMARTAPPLY INTEGRATION (NEW)
+  // MAIN INDEED SMARTAPPLY PROCESSING
   // ========================================
 
   async processIndeedSmartApply() {
@@ -26,10 +44,10 @@ export default class GlassdoorFormHandler {
       this.log("🎯 Starting Indeed SmartApply process");
 
       // Wait for SmartApply page to fully load
-      await this.waitForElement("form, .ia-BasePage-main", 15000);
-      await this.delay(2000);
+      await this.waitForElement("form, .ia-BasePage-main", 20000);
+      await this.delay(3000);
 
-      // Check if this is Indeed SmartApply
+      // Verify this is Indeed SmartApply
       if (!this.isIndeedSmartApplyPage()) {
         throw new Error("Not an Indeed SmartApply page");
       }
@@ -38,12 +56,14 @@ export default class GlassdoorFormHandler {
       const jobTitle = this.extractJobTitle();
       this.log(`📋 Processing SmartApply for: ${jobTitle}`);
 
-      // Process multi-step application
+      // Process multi-step application following your described flow
       let currentStep = 1;
-      let maxSteps = 5; // Safety limit
       let applicationCompleted = false;
 
-      while (currentStep <= maxSteps && !applicationCompleted) {
+      while (
+        currentStep <= this.smartApplyConfig.maxSteps &&
+        !applicationCompleted
+      ) {
         this.log(`📄 Processing SmartApply step ${currentStep}`);
 
         // Wait for page content to load
@@ -57,21 +77,34 @@ export default class GlassdoorFormHandler {
         }
 
         // Process current step
-        const stepResult = await this.processSmartApplyStep();
+        const stepResult = await this.processSmartApplyStep(currentStep);
 
         if (stepResult.completed) {
           applicationCompleted = true;
           break;
+        } else if (stepResult.needsSubmit) {
+          // Final step - submit the application
+          const submitButton = this.findSubmitButton();
+          if (submitButton) {
+            this.log("📤 Found submit button, submitting application");
+            await this.clickElementReliably(submitButton);
+            await this.delay(5000);
+
+            if (this.checkSmartApplyCompletion()) {
+              applicationCompleted = true;
+              break;
+            }
+          }
         } else if (stepResult.nextStep) {
-          // Find and click next/continue button
-          const nextButton = this.findSmartApplyNextButton();
-          if (nextButton) {
+          // Continue to next step using the CORRECT button selector
+          const continueButton = this.findContinueButton();
+          if (continueButton) {
             this.log("🔄 Moving to next SmartApply step");
-            await this.clickElementReliably(nextButton);
+            await this.clickElementReliably(continueButton);
             await this.delay(3000);
             currentStep++;
           } else {
-            throw new Error("Cannot find next button to continue");
+            throw new Error("Cannot find continue button to proceed");
           }
         } else {
           throw new Error("Cannot process current step");
@@ -101,23 +134,31 @@ export default class GlassdoorFormHandler {
     return (
       window.location.href.includes("smartapply.indeed.com") ||
       document.querySelector(".ia-BasePage-main, .smartapply-container") !==
-        null
+        null ||
+      document.title.toLowerCase().includes("indeed") ||
+      document.querySelector("form") !== null // Generic form check for SmartApply
     );
   }
 
-  async processSmartApplyStep() {
+  async processSmartApplyStep(stepNumber) {
     try {
-      // Check for different step types
+      this.log(`🔧 Processing SmartApply step ${stepNumber}`);
+
+      // Determine step type based on page content
       if (this.isResumeStep()) {
+        this.log("📄 Detected resume upload step");
         return await this.handleResumeStep();
       } else if (this.isContactInfoStep()) {
+        this.log("👤 Detected contact information step");
         return await this.handleContactInfoStep();
       } else if (this.isQuestionsStep()) {
+        this.log("❓ Detected questions/form step");
         return await this.handleQuestionsStep();
       } else if (this.isReviewStep()) {
+        this.log("📋 Detected review/submit step");
         return await this.handleReviewStep();
       } else {
-        // Generic form processing
+        this.log("📝 Detected generic form step");
         return await this.handleGenericStep();
       }
     } catch (error) {
@@ -126,55 +167,84 @@ export default class GlassdoorFormHandler {
     }
   }
 
+  // ========================================
+  // STEP TYPE DETECTION
+  // ========================================
+
   isResumeStep() {
     return (
-      document.querySelector("input[type='file']") !== null ||
-      document.querySelector(".resume-upload, .file-upload") !== null ||
-      document.body.textContent.toLowerCase().includes("resume")
+      document.querySelector(this.smartApplyConfig.selectors.resumeUpload) !==
+        null ||
+      document.body.textContent.toLowerCase().includes("resume") ||
+      document.body.textContent.toLowerCase().includes("upload") ||
+      window.location.href.includes("/resume")
     );
   }
+
+  isContactInfoStep() {
+    return (
+      document.querySelector(this.smartApplyConfig.selectors.contactForm) !==
+      null
+    );
+  }
+
+  isQuestionsStep() {
+    return (
+      document.querySelector(this.smartApplyConfig.selectors.questionsForm) !==
+        null ||
+      document.body.textContent.toLowerCase().includes("question") ||
+      document.querySelectorAll("input[type='radio'], select").length > 0
+    );
+  }
+
+  isReviewStep() {
+    const pageText = document.body.textContent.toLowerCase();
+    return (
+      pageText.includes("review") ||
+      pageText.includes("submit") ||
+      pageText.includes("confirm") ||
+      document.querySelector(this.smartApplyConfig.selectors.submitButton) !==
+        null
+    );
+  }
+
+  // ========================================
+  // STEP HANDLERS
+  // ========================================
 
   async handleResumeStep() {
     this.log("📄 Handling resume upload step");
 
-    // Look for file input
-    const fileInput = document.querySelector("input[type='file']");
-    if (fileInput && this.userData.resumeUrl) {
-      try {
-        // For SmartApply, often the resume is auto-detected
-        // Check if resume is already uploaded
+    try {
+      // Look for file input
+      const fileInput = document.querySelector(
+        this.smartApplyConfig.selectors.resumeUpload
+      );
+
+      if (fileInput && this.userData.resumeUrl) {
+        this.log("📎 Resume upload field found");
+
+        // Check if resume is already uploaded/detected
         const resumeStatus = document.querySelector(
-          ".resume-uploaded, .file-uploaded"
+          ".resume-uploaded, .file-uploaded, .upload-success, [data-testid*='resume']"
         );
+
         if (resumeStatus) {
-          this.log("✅ Resume already uploaded");
+          this.log("✅ Resume already detected/uploaded");
           return { nextStep: true };
         }
 
-        // If manual upload needed, you might need to handle file upload
-        this.log("📎 Resume upload may be required");
+        // For SmartApply, often the resume is auto-detected from Indeed profile
+        this.log("📎 Resume upload may be handled automatically by Indeed");
         return { nextStep: true };
-      } catch (error) {
-        this.log("⚠️ Resume upload error:", error.message);
-        return { nextStep: true }; // Continue anyway
       }
+
+      this.log("✅ Resume step completed");
+      return { nextStep: true };
+    } catch (error) {
+      this.log("⚠️ Resume upload error:", error.message);
+      return { nextStep: true }; // Continue anyway
     }
-
-    return { nextStep: true };
-  }
-
-  isContactInfoStep() {
-    const contactFields = [
-      "input[name*='name']",
-      "input[name*='email']",
-      "input[name*='phone']",
-      "input[type='email']",
-      "input[type='tel']",
-    ];
-
-    return contactFields.some(
-      (selector) => document.querySelector(selector) !== null
-    );
   }
 
   async handleContactInfoStep() {
@@ -185,8 +255,8 @@ export default class GlassdoorFormHandler {
       await this.fillFieldBySelectors(
         [
           "input[name*='firstName']",
-          "input[placeholder*='First name']",
-          "input[aria-label*='First name']",
+          "input[placeholder*='First name' i]",
+          "input[aria-label*='First name' i]",
         ],
         this.userData.firstName
       );
@@ -194,8 +264,8 @@ export default class GlassdoorFormHandler {
       await this.fillFieldBySelectors(
         [
           "input[name*='lastName']",
-          "input[placeholder*='Last name']",
-          "input[aria-label*='Last name']",
+          "input[placeholder*='Last name' i]",
+          "input[aria-label*='Last name' i]",
         ],
         this.userData.lastName
       );
@@ -205,7 +275,7 @@ export default class GlassdoorFormHandler {
         [
           "input[type='email']",
           "input[name*='email']",
-          "input[placeholder*='email']",
+          "input[placeholder*='email' i]",
         ],
         this.userData.email
       );
@@ -216,7 +286,7 @@ export default class GlassdoorFormHandler {
         [
           "input[type='tel']",
           "input[name*='phone']",
-          "input[placeholder*='phone']",
+          "input[placeholder*='phone' i]",
         ],
         phoneNumber
       );
@@ -229,19 +299,13 @@ export default class GlassdoorFormHandler {
     }
   }
 
-  isQuestionsStep() {
-    return (
-      document.querySelector("input[type='radio'], select, textarea") !==
-        null || document.body.textContent.toLowerCase().includes("question")
-    );
-  }
-
   async handleQuestionsStep() {
     this.log("❓ Handling questions step");
 
     try {
       // Process all form fields on the page
       const fields = this.getAllFormFields();
+      this.log(`Found ${fields.length} form fields to process`);
 
       for (const field of fields) {
         await this.processFormField(field);
@@ -256,33 +320,11 @@ export default class GlassdoorFormHandler {
     }
   }
 
-  isReviewStep() {
-    return (
-      document.body.textContent.toLowerCase().includes("review") ||
-      document.body.textContent.toLowerCase().includes("submit") ||
-      document.querySelector(
-        "button[type='submit'], button:contains('Submit')"
-      ) !== null
-    );
-  }
-
   async handleReviewStep() {
     this.log("📋 Handling review/submit step");
 
-    // Look for submit button
-    const submitButton = this.findSmartApplySubmitButton();
-    if (submitButton) {
-      this.log("📤 Found submit button, submitting application");
-      await this.clickElementReliably(submitButton);
-      await this.delay(5000); // Wait for submission
-
-      // Check for completion
-      if (this.checkSmartApplyCompletion()) {
-        return { completed: true };
-      }
-    }
-
-    return { nextStep: true };
+    // This is typically the final step, so we need to submit
+    return { needsSubmit: true };
   }
 
   async handleGenericStep() {
@@ -294,6 +336,7 @@ export default class GlassdoorFormHandler {
 
       for (const field of fields) {
         await this.processFormField(field);
+        await this.delay(200);
       }
 
       return { nextStep: true };
@@ -303,60 +346,116 @@ export default class GlassdoorFormHandler {
     }
   }
 
-  findSmartApplyNextButton() {
-    const selectors = [
+  // ========================================
+  // BUTTON DETECTION (Using correct selectors from your description)
+  // ========================================
+
+  findContinueButton() {
+    // First try the EXACT selector from your description
+    const exactButton = document.querySelector(
+      this.smartApplyConfig.selectors.continueButton
+    );
+    if (
+      exactButton &&
+      this.isElementVisible(exactButton) &&
+      !exactButton.disabled
+    ) {
+      this.log("✅ Found continue button with exact selector");
+      return exactButton;
+    }
+
+    // Fallback selectors for continue buttons
+    const fallbackSelectors = [
       "button:contains('Continue')",
       "button:contains('Next')",
-      "button[type='submit']",
-      ".ia-continueButton",
-      ".continue-btn",
-      "button.btn-primary",
+      "button[type='button']:contains('Continue')",
+      ".aba5bff612c96e760268ff66780c44f60", // Additional class from your description
+      "button.css-q81v3z", // Another class mentioned
+      "button[data-testid*='continue']",
+      "button[data-testid*='next']",
     ];
 
-    for (const selector of selectors) {
-      const button = document.querySelector(selector);
-      if (button && DomUtils.isElementVisible(button) && !button.disabled) {
-        return button;
+    for (const selector of fallbackSelectors) {
+      try {
+        if (selector.includes(":contains(")) {
+          // Handle text-based selectors manually
+          const buttons = document.querySelectorAll("button");
+          for (const button of buttons) {
+            const text = button.textContent?.toLowerCase() || "";
+            if (
+              (selector.includes("Continue") && text.includes("continue")) ||
+              (selector.includes("Next") && text.includes("next"))
+            ) {
+              if (this.isElementVisible(button) && !button.disabled) {
+                this.log(`✅ Found continue button with text: "${text}"`);
+                return button;
+              }
+            }
+          }
+        } else {
+          const button = document.querySelector(selector);
+          if (button && this.isElementVisible(button) && !button.disabled) {
+            this.log(`✅ Found continue button with selector: ${selector}`);
+            return button;
+          }
+        }
+      } catch (error) {
+        continue;
       }
     }
 
-    // Fallback - look for any enabled button with relevant text
-    const buttons = document.querySelectorAll("button");
-    for (const button of buttons) {
-      const text = button.textContent?.toLowerCase() || "";
-      if (
-        (text.includes("continue") ||
-          text.includes("next") ||
-          text.includes("proceed")) &&
-        DomUtils.isElementVisible(button) &&
-        !button.disabled
-      ) {
-        return button;
-      }
-    }
-
+    this.log("❌ No continue button found");
     return null;
   }
 
-  findSmartApplySubmitButton() {
-    const selectors = [
+  findSubmitButton() {
+    const submitSelectors = [
+      "button[type='submit']",
       "button:contains('Submit')",
       "button:contains('Apply')",
-      "button[type='submit']",
+      "button:contains('Send')",
       ".submit-btn",
       ".apply-btn",
-      "button.btn-primary",
+      "button[data-testid*='submit']",
     ];
 
-    for (const selector of selectors) {
-      const button = document.querySelector(selector);
-      if (button && DomUtils.isElementVisible(button) && !button.disabled) {
-        return button;
+    for (const selector of submitSelectors) {
+      try {
+        if (selector.includes(":contains(")) {
+          // Handle text-based selectors manually
+          const buttons = document.querySelectorAll("button");
+          for (const button of buttons) {
+            const text = button.textContent?.toLowerCase() || "";
+            if (
+              (selector.includes("Submit") && text.includes("submit")) ||
+              (selector.includes("Apply") && text.includes("apply")) ||
+              (selector.includes("Send") && text.includes("send"))
+            ) {
+              if (this.isElementVisible(button) && !button.disabled) {
+                this.log(`✅ Found submit button with text: "${text}"`);
+                return button;
+              }
+            }
+          }
+        } else {
+          const button = document.querySelector(selector);
+          if (button && this.isElementVisible(button) && !button.disabled) {
+            this.log(`✅ Found submit button with selector: ${selector}`);
+            return button;
+          }
+        }
+      } catch (error) {
+        continue;
       }
     }
 
+    this.log("❌ No submit button found");
     return null;
   }
+
+  // ========================================
+  // COMPLETION DETECTION
+  // ========================================
 
   checkSmartApplyCompletion() {
     // Check for success indicators
@@ -366,6 +465,8 @@ export default class GlassdoorFormHandler {
       "thank you",
       "confirmation",
       "success",
+      "application sent",
+      "we've received your application",
     ];
 
     const pageText = document.body.textContent.toLowerCase();
@@ -375,7 +476,7 @@ export default class GlassdoorFormHandler {
 
     // Check for success elements
     const successElements = document.querySelectorAll(
-      ".success, .confirmation, .complete"
+      ".success, .confirmation, .complete, [data-testid*='success'], [class*='success']"
     );
     const hasSuccessElement = successElements.length > 0;
 
@@ -384,9 +485,20 @@ export default class GlassdoorFormHandler {
     const hasSuccessUrl =
       url.includes("success") ||
       url.includes("confirmation") ||
-      url.includes("complete");
+      url.includes("complete") ||
+      url.includes("thank");
 
-    return hasSuccessText || hasSuccessElement || hasSuccessUrl;
+    // Check if redirected away from SmartApply
+    const redirectedAway = !url.includes("smartapply.indeed.com");
+
+    const isComplete =
+      hasSuccessText || hasSuccessElement || hasSuccessUrl || redirectedAway;
+
+    if (isComplete) {
+      this.log("✅ SmartApply completion detected");
+    }
+
+    return isComplete;
   }
 
   extractJobTitle() {
@@ -396,59 +508,30 @@ export default class GlassdoorFormHandler {
       ".jobTitle",
       "[data-testid='job-title']",
       ".ia-JobHeader-title",
+      "title",
     ];
 
     for (const selector of selectors) {
       const element = document.querySelector(selector);
-      if (element) {
-        return element.textContent?.trim();
+      if (element && element.textContent) {
+        return element.textContent.trim();
       }
+    }
+
+    // Fallback to page title
+    if (document.title) {
+      return document.title.split(" - ")[0].trim();
     }
 
     return "Job Application";
   }
 
   // ========================================
-  // GLASSDOOR MODAL PROCESSING (ENHANCED)
-  // ========================================
-
-  async fillFormWithProfile(form, userData, jobDescription) {
-    try {
-      this.log("📝 Filling Glassdoor form with user profile");
-      this.userData = userData;
-      this.jobDescription = jobDescription;
-
-      // Get all form fields
-      const fields = this.getAllFormFields(form);
-      this.log(`Found ${fields.length} form fields to process`);
-
-      // Process each field
-      for (const field of fields) {
-        try {
-          await this.processFormField(field);
-          await this.delay(200); // Brief delay between fields
-        } catch (fieldError) {
-          this.log(`⚠️ Error processing field: ${fieldError.message}`);
-          continue; // Continue with other fields
-        }
-      }
-
-      this.log("✅ Form filling completed");
-      return true;
-    } catch (error) {
-      this.log("❌ Error filling form:", error.message);
-      throw error;
-    }
-  }
-
-  // ========================================
-  // FORM FIELD PROCESSING (ENHANCED)
+  // FORM FIELD PROCESSING (Enhanced)
   // ========================================
 
   getAllFormFields(container = document) {
     const fields = [];
-
-    // Get all input, select, and textarea elements
     const elements = container.querySelectorAll("input, select, textarea");
 
     for (const element of elements) {
@@ -535,7 +618,8 @@ export default class GlassdoorFormHandler {
           break;
 
         case "file":
-          await this.fillFileInput(field.element, answer);
+          // File inputs are typically handled separately
+          this.log("📎 File input detected - skipping automatic fill");
           break;
 
         default:
@@ -545,7 +629,6 @@ export default class GlassdoorFormHandler {
       this.log(`✅ Filled field: ${field.label} = ${answer}`);
     } catch (error) {
       this.log(`❌ Error processing field ${field.label}:`, error.message);
-      throw error;
     }
   }
 
@@ -559,21 +642,6 @@ export default class GlassdoorFormHandler {
 
     // Get answer based on field label/context
     let answer = this.getDirectAnswer(normalizedLabel);
-
-    if (!answer) {
-      // Use AI service if available
-      try {
-        if (this.aiService) {
-          answer = await this.aiService.getAnswer(field.label, [], {
-            userData: this.userData,
-            jobDescription: this.jobDescription,
-            platform: "glassdoor",
-          });
-        }
-      } catch (error) {
-        this.log("⚠️ AI service error:", error.message);
-      }
-    }
 
     if (!answer) {
       answer = this.getFallbackAnswer(normalizedLabel);
@@ -615,7 +683,7 @@ export default class GlassdoorFormHandler {
       "cover letter": this.userData.coverLetter,
     };
 
-    // Check for exact matches
+    // Check for exact matches first
     if (fieldMappings[normalizedLabel]) {
       return fieldMappings[normalizedLabel];
     }
@@ -678,6 +746,8 @@ export default class GlassdoorFormHandler {
       salary: "Competitive",
       relocate: "Yes",
       "willing to relocate": "Yes",
+      "hear about": "Online",
+      "how did you hear": "Online job search",
     };
 
     for (const [key, value] of Object.entries(fallbackAnswers)) {
@@ -690,7 +760,7 @@ export default class GlassdoorFormHandler {
   }
 
   // ========================================
-  // FIELD FILLING METHODS (ENHANCED)
+  // FIELD FILLING METHODS
   // ========================================
 
   async fillTextInput(element, value) {
@@ -699,6 +769,7 @@ export default class GlassdoorFormHandler {
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
     element.blur();
+    await this.delay(200);
   }
 
   async fillTextarea(element, value) {
@@ -707,10 +778,10 @@ export default class GlassdoorFormHandler {
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
     element.blur();
+    await this.delay(200);
   }
 
   async fillSelect(element, value) {
-    // Try to find matching option
     const options = element.querySelectorAll("option");
 
     for (const option of options) {
@@ -721,8 +792,7 @@ export default class GlassdoorFormHandler {
       if (
         optionText.includes(searchValue) ||
         optionValue.includes(searchValue) ||
-        searchValue.includes(optionText) ||
-        searchValue.includes(optionValue)
+        searchValue.includes(optionText)
       ) {
         element.value = option.value;
         element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -745,7 +815,6 @@ export default class GlassdoorFormHandler {
   }
 
   async fillRadio(element, value, fieldLabel) {
-    // Find all radio buttons with the same name
     const radioGroup = document.querySelectorAll(
       `input[name="${element.name}"]`
     );
@@ -784,12 +853,6 @@ export default class GlassdoorFormHandler {
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  async fillFileInput(element, value) {
-    // File inputs typically can't be filled programmatically for security reasons
-    // This would need to be handled differently, possibly with file upload APIs
-    this.log("📎 File input detected - manual handling required");
-  }
-
   getRadioLabel(radioElement) {
     const sources = [
       radioElement.labels?.[0]?.textContent,
@@ -811,7 +874,7 @@ export default class GlassdoorFormHandler {
 
     for (const selector of selectors) {
       const element = document.querySelector(selector);
-      if (element && DomUtils.isElementVisible(element)) {
+      if (element && this.isElementVisible(element)) {
         await this.fillTextInput(element, value);
         return true;
       }
@@ -868,6 +931,26 @@ export default class GlassdoorFormHandler {
     }
 
     throw new Error("All click strategies failed");
+  }
+
+  isElementVisible(element) {
+    if (!element) return false;
+
+    try {
+      const style = window.getComputedStyle(element);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0"
+      ) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    } catch (error) {
+      return false;
+    }
   }
 
   async waitForElement(selector, timeout = 10000) {

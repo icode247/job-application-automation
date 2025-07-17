@@ -1,68 +1,61 @@
-// platforms/glassdoor/glassdoor.js - FIXED AND COMPLETE VERSION
+// platforms/glassdoor/glassdoor.js - FIXED VERSION following correct flow
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import {
   AIService,
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
-// Import utilities with fallback handling
-let UrlUtils, DomUtils, FormUtils;
-try {
-  // This will be handled during initialization if needed
-} catch (error) {
-  console.warn("Utilities not available, using fallbacks");
-}
-
+//❌ No jobs found on this page
+//no Easy Apply button found 
 export default class GlassdoorPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
     this.platform = "glassdoor";
     this.baseUrl = "https://www.glassdoor.com";
 
-    // Initialize Glassdoor-specific services
+    // Job queue management (like Wellfound)
+    this.jobQueue = [];
+    this.currentJobIndex = 0;
+    this.isLoadingMore = false;
+    this.queueInitialized = false;
+
+    // Initialize services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
       userId: this.userId,
     });
     this.userService = new UserService({ userId: this.userId });
 
-    // Glassdoor-specific handlers
-    this.formHandler = null;
-    this.fileHandler = null;
-    
-    // State management
-    this.cachedJobDescription = null;
-    this.processedJobCards = new Set();
-    this.modalObserver = null;
-    this.currentJobData = null;
-    this.lastCheckedUrl = null;
-    
-    // Glassdoor-specific configuration
+    // Glassdoor-specific configuration with CORRECT selectors
     this.glassdoorConfig = {
       selectors: {
-        jobCards: ".JobsList_jobListItem__wjTHv, li[data-test='jobListing']",
-        jobTitle: ".JobCard_jobTitle__GLyJ1, a[data-test='job-title']",
-        companyName: ".EmployerProfile_compactEmployerName__9MGcV, span.employer-name",
-        location: ".JobCard_location__Ds1fM, div[data-test='emp-location']",
-        salary: "[data-test='detailSalary'], .salaryEstimate",
-        applyButton: "button[data-test='easyApply'], .EasyApplyButton_content__1cGPo, button.applyButton, a.applyButton",
-        jobLink: '.JobCard_trackingLink__HMyun, a[data-test="job-link"]',
-        nextPage: "[data-test='pagination-next'], .nextButton",
-        form: ".jobsOverlayModal form, .modal-content form, .applyButtonContainer form",
-        modal: ".jobsOverlayModal, .modal-content",
+        // Updated selectors based on your description
+        jobCards: ".JobCard_jobCardWrapper__vX29z", // Correct job card selector
+        easyApplyButton: ".button_Button__MlD2g.button-base_Button__knLaX", // Correct Easy Apply button
+        jobTitle: ".JobCard_jobTitle__UF81I",
+        companyName: ".EmployerProfile_compactEmployerName__9MGcV",
+        location: ".JobCard_location__kxKP4",
+        salary: ".JobCard_salaryEstimate__ZqNZU",
+        // Indeed SmartApply selectors
+        smartApplyForm: "form", // Generic form selector for SmartApply
+        continueButton:
+          "button[data-testid='aa288590cde54b4a3f778f52168e7b17f']",
+        submitButton: "button[type='submit']",
+        nextButton: ".aba5bff612c96e760268ff66780c44f60",
       },
       delays: {
         betweenJobs: 3000,
         formFilling: 1000,
-        modalWait: 2000,
         pageLoad: 3000,
-      }
+      },
     };
+
+    // Prevent duplicate starts
+    this.searchProcessStarted = false;
   }
 
   // ========================================
-  // PLATFORM-SPECIFIC IMPLEMENTATIONS (Required by base class)
+  // PLATFORM-SPECIFIC IMPLEMENTATIONS
   // ========================================
 
   getPlatformDomains() {
@@ -74,7 +67,10 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
   }
 
   isValidJobPage(url) {
-    return /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply)/.test(url);
+    return (
+      /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner)/.test(url) ||
+      url.includes("smartapply.indeed.com")
+    );
   }
 
   getApiHost() {
@@ -87,193 +83,77 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
   }
 
   isApplicationPage(url) {
-    return (
-      url.includes("glassdoor.com/apply") ||
-      url.includes("glassdoor.com/job/apply") ||
-      url.includes("smart-apply-action=POST_APPLY") ||
-      document.querySelector(this.glassdoorConfig.selectors.modal)
-    );
+    return url.includes("smartapply.indeed.com") || this.isValidJobPage(url);
   }
 
   getJobTaskMessageType() {
-    return "SEND_CV_TASK";
-  }
-
-  platformSpecificUrlNormalization(url) {
-    // Remove Glassdoor-specific parameters
-    return url
-      .replace(/[?&](jobListingId|pos|ao|s|guid|src|t|vt|ea|ei|ko)=[^&]*/g, "")
-      .replace(/[?&]+$/, "");
+    return "START_APPLICATION";
   }
 
   // ========================================
-  // INITIALIZATION AND SETUP
+  // INITIALIZATION
   // ========================================
 
   async initialize() {
     await super.initialize();
-
-    // Try to import utilities if not already loaded
-    await this.loadUtilities();
-
-    try {
-      // Import and initialize Glassdoor-specific handlers
-      const { default: GlassdoorFormHandler } = await import("./glassdoor-form-handler.js");
-      const { default: GlassdoorFileHandler } = await import("./glassdoor-file-handler.js");
-
-      this.formHandler = new GlassdoorFormHandler({
-        logger: (message) => this.statusOverlay.addInfo(message),
-        host: this.getApiHost(),
-        userData: this.userProfile || {},
-        jobDescription: "",
-      });
-
-      this.fileHandler = new GlassdoorFileHandler({
-        statusService: this.statusOverlay,
-        apiHost: this.getApiHost(),
-      });
-
-      this.statusOverlay.addSuccess("Glassdoor handlers initialized successfully");
-    } catch (error) {
-      this.log("⚠️ Could not load Glassdoor handlers:", error);
-      this.statusOverlay.addWarning("Some Glassdoor features may be limited");
-    }
-
-    // Set up modal observer for Glassdoor's modal-based applications
-    this.setupModalObserver();
-    
-    // Set up DOM mutation observer for dynamic content
-    this.setupDOMObserver();
+    this.log("✅ Glassdoor automation initialized with correct selectors");
   }
-
-  async loadUtilities() {
-    try {
-      const utilities = await import("../../shared/utilities/index.js");
-      UrlUtils = utilities.UrlUtils;
-      DomUtils = utilities.DomUtils;
-      FormUtils = utilities.FormUtils;
-      this.log("✅ Utilities loaded successfully");
-    } catch (error) {
-      this.log("⚠️ Utilities not available, using fallbacks:", error);
-      // Fallback methods are implemented in the class
-    }
-  }
-
-  setupModalObserver() {
-    if (this.modalObserver) {
-      this.modalObserver.disconnect();
-    }
-
-    this.modalObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-          for (const node of mutation.addedNodes) {
-            if (node.nodeType === Node.ELEMENT_NODE) {
-              // Check for Glassdoor application modal
-              const modal = node.querySelector(this.glassdoorConfig.selectors.modal) ||
-                           (node.classList?.contains("jobsOverlayModal") ? node : null);
-
-              if (modal) {
-                this.log("📋 Glassdoor application modal detected");
-                this.statusOverlay.addInfo("Application modal opened");
-                setTimeout(() => this.handleModalApplication(modal), this.glassdoorConfig.delays.modalWait);
-              }
-
-              // Check for Indeed SmartApply redirect
-              if (window.location.href.includes("smartapply.indeed.com")) {
-                this.log("🔄 Detected redirect to Indeed SmartApply");
-                setTimeout(() => this.handleIndeedSmartApplyRedirect(), 1000);
-              }
-            }
-          }
-        }
-      }
-    });
-
-    this.modalObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-  }
-
-  setupDOMObserver() {
-    // Additional observer for job cards and pagination
-    const jobCardsObserver = new MutationObserver((mutations) => {
-      if (this.isRunning && this.automationState.isSearching) {
-        this.debounceJobCardCheck();
-      }
-    });
-
-    jobCardsObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: false,
-    });
-
-    this.jobCardsObserver = jobCardsObserver;
-  }
-
-  debounceJobCardCheck() {
-    if (this.jobCardCheckTimeout) {
-      clearTimeout(this.jobCardCheckTimeout);
-    }
-
-    this.jobCardCheckTimeout = setTimeout(() => {
-      if (this.isRunning && !this.applicationState.isApplicationInProgress) {
-        this.searchNext();
-      }
-    }, 2000);
-  }
-
-  // ========================================
-  // START AND PAGE TYPE DETECTION
-  // ========================================
 
   async start(params = {}) {
     try {
+      if (this.isRunning) {
+        this.log("⚠️ Automation already running, ignoring duplicate start");
+        return true;
+      }
+
       this.isRunning = true;
-      this.log("🚀 Starting Glassdoor automation");
-      this.statusOverlay.addInfo("Starting Glassdoor automation");
+      this.log("▶️ Starting Glassdoor automation");
 
       // Ensure user profile is available
       if (!this.userProfile && this.userId) {
         try {
           this.userProfile = await this.userService.getUserDetails();
-          this.statusOverlay.addSuccess("User profile loaded");
-
-          if (this.formHandler && this.userProfile) {
-            this.formHandler.userData = this.userProfile;
-          }
+          this.log("✅ User profile fetched during start");
         } catch (error) {
-          this.statusOverlay.addWarning(
-            "Failed to load user profile - automation may have limited functionality"
-          );
+          this.log("❌ Failed to fetch user profile during start:", error);
         }
       }
 
       this.config = { ...this.config, ...params };
+
+      this.updateProgress({
+        total: params.jobsToApply || 0,
+        completed: 0,
+        current: "Starting Glassdoor automation...",
+      });
+
       await this.waitForPageLoad();
       await this.detectPageTypeAndStart();
+
+      return true;
     } catch (error) {
-      this.reportError(error, { phase: "start" });
+      this.reportError(error, { action: "start" });
+      this.isRunning = false;
+      return false;
     }
   }
 
+  // ========================================
+  // PAGE TYPE DETECTION AND ROUTING
+  // ========================================
+
   async detectPageTypeAndStart() {
     const url = window.location.href;
-    this.log(`🔍 Detecting page type for: ${url}`);
+    this.log(`🔍 Detecting Glassdoor page type for: ${url}`);
 
-    if (url.includes("google.com/search")) {
-      this.statusOverlay.addInfo("Google search page detected");
+    if (url.includes("glassdoor.com/Job/") && url.includes("-jobs-")) {
+      this.log("📊 Glassdoor search results page detected");
       await this.startSearchProcess();
-    } else if (this.isGlassdoorJobPage(url)) {
-      this.statusOverlay.addInfo("Glassdoor job page detected");
+    } else if (url.includes("smartapply.indeed.com")) {
+      this.log("📋 Indeed SmartApply page detected");
       await this.startApplicationProcess();
-    } else if (this.isGlassdoorSearchPage(url)) {
-      this.statusOverlay.addInfo("Glassdoor search page detected");
-      await this.startJobSearchProcess();
-    } else if (this.isGlassdoorApplicationPage(url)) {
-      this.statusOverlay.addInfo("Glassdoor application page detected");
+    } else if (this.isGlassdoorJobPage(url)) {
+      this.log("📋 Individual Glassdoor job page detected");
       await this.startApplicationProcess();
     } else {
       this.log("❓ Unknown page type, waiting for navigation");
@@ -281,62 +161,39 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // PAGE TYPE DETECTION METHODS
-  // ========================================
-
   isGlassdoorJobPage(url) {
     return (
       /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner)/.test(url) &&
-      !url.includes("/jobs.htm") &&
-      !url.includes("/apply")
-    );
-  }
-
-  isGlassdoorSearchPage(url) {
-    return (
-      /^https:\/\/(www\.)?glassdoor\.com\/(Job\/|job\/)/.test(url) ||
-      url.includes("glassdoor.com/Job/jobs.htm")
-    );
-  }
-
-  isGlassdoorApplicationPage(url) {
-    return (
-      url.includes("glassdoor.com/apply") ||
-      url.includes("smart-apply-action=POST_APPLY") ||
-      url.includes("smartapply.indeed.com")
+      !url.includes("/Job/") &&
+      !url.includes("-jobs-")
     );
   }
 
   // ========================================
-  // SEARCH PROCESS IMPLEMENTATION
+  // SEARCH PROCESS (Queue-based like Wellfound)
   // ========================================
 
   async startSearchProcess() {
     try {
-      this.statusOverlay.addInfo("Starting job search process");
-      this.statusOverlay.updateStatus("searching");
-      this.automationState.isSearching = true;
+      if (this.searchProcessStarted) {
+        this.log("⚠️ Search process already started, ignoring duplicate");
+        return;
+      }
+
+      this.searchProcessStarted = true;
+      this.statusOverlay.addMessage("Starting Glassdoor job search...");
+
+      // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
+      this.searchProcessStarted = false;
       this.reportError(error, { phase: "search" });
     }
   }
 
-  async startJobSearchProcess() {
-    try {
-      this.statusOverlay.addInfo("Starting job search on Glassdoor results page");
-      this.statusOverlay.updateStatus("searching");
-      this.automationState.isSearching = true;
-      await this.fetchSearchTaskData();
-    } catch (error) {
-      this.reportError(error, { phase: "jobSearch" });
-    }
-  }
-
   async fetchSearchTaskData() {
-    this.log("📡 Fetching search task data from background");
-    this.statusOverlay.addInfo("Fetching search task data...");
+    this.log("📡 Fetching Glassdoor search task data from background");
+    this.statusOverlay.addMessage("Getting search task data...");
 
     const success = this.safeSendPortMessage({ type: "GET_SEARCH_TASK" });
     if (!success) {
@@ -344,9 +201,10 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     }
   }
 
-  processSearchTaskData(data) {
+  // Handle search task data from background (like Wellfound)
+  handleSearchTaskData(data) {
     try {
-      this.log("📊 Processing search task data:", data);
+      this.log("📊 Processing Glassdoor search task data:", data);
 
       if (!data) {
         this.log("⚠️ No search task data provided");
@@ -354,7 +212,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       }
 
       this.searchData = {
-        tabId: data.tabId,
         limit: data.limit || 10,
         current: data.current || 0,
         domain: data.domain || this.getPlatformDomains(),
@@ -366,926 +223,908 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
           : this.getSearchLinkPattern(),
       };
 
-      this.log("✅ Search data initialized:", this.searchData);
+      if (data.profile && !this.userProfile) {
+        this.userProfile = data.profile;
+        this.log("👤 User profile loaded from search task data");
+      }
+
+      this.log("✅ Glassdoor search data initialized:", this.searchData);
       this.statusOverlay.addSuccess("Search initialization complete");
 
-      setTimeout(() => this.searchNext(), 1000);
+      // Start building job queue and processing
+      setTimeout(() => this.startQueueBasedSearch(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
-      this.statusOverlay.addError("Error processing search task data: " + error.message);
+      this.statusOverlay.addError(
+        "Error processing search task data: " + error.message
+      );
     }
   }
 
-  // ========================================
-  // ENHANCED SEARCH LOGIC FOR GLASSDOOR
-  // ========================================
-
-  async searchNext() {
+  async startQueueBasedSearch() {
     try {
-      this.log("🔍 Executing Glassdoor searchNext");
+      this.log("🚀 Starting queue-based Glassdoor job search");
+      this.statusOverlay.addMessage(
+        "Building job queue from Glassdoor page..."
+      );
 
-      if (this.applicationState.isApplicationInProgress) {
-        this.log("Application in progress, not searching for next job");
-        this.statusOverlay.addInfo("Application in progress, waiting to complete...");
-        this.safeSendPortMessage({ type: "CHECK_APPLICATION_STATUS" });
+      // Build initial job queue
+      const queueBuilt = await this.buildJobQueue();
+
+      if (!queueBuilt || this.jobQueue.length === 0) {
+        this.log("❌ No jobs found to process");
+        this.statusOverlay.addError("No jobs found on this page");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
         return;
       }
 
-      this.statusOverlay.addInfo("Searching for job cards...");
+      this.statusOverlay.addSuccess(
+        `Found ${this.jobQueue.length} jobs to process`
+      );
 
-      // Check if we're on Glassdoor search results page
-      if (this.isGlassdoorSearchPage(window.location.href)) {
-        await this.processGlassdoorJobCards();
-      } else {
-        // Fall back to standard Google search link processing
-        await super.searchNext();
-      }
-    } catch (err) {
-      this.log("Error in Glassdoor searchNext:", err);
-      this.statusOverlay.addError("Error in search: " + err.message);
-      this.resetApplicationStateOnError();
-      setTimeout(() => this.searchNext(), 5000);
-    }
-  }
-
-  async processGlassdoorJobCards() {
-    const jobCards = this.getGlassdoorJobCards();
-    this.log(`Found ${jobCards.length} job cards on Glassdoor`);
-
-    if (jobCards.length === 0) {
-      await this.handleNoJobCardsFound();
-      return;
-    }
-
-    // Find unprocessed job card
-    const unprocessedCard = this.findUnprocessedJobCard(jobCards);
-
-    if (unprocessedCard) {
-      await this.processGlassdoorJobCard(unprocessedCard);
-    } else {
-      await this.handleNoUnprocessedJobCards();
-    }
-  }
-
-  getGlassdoorJobCards() {
-    const selectors = [
-      ".JobsList_jobListItem__wjTHv",
-      'li[data-test="jobListing"]',
-      ".react-job-listing",
-      ".job-search-card",
-    ];
-
-    for (const selector of selectors) {
-      const cards = document.querySelectorAll(selector);
-      if (cards.length > 0) {
-        return Array.from(cards);
-      }
-    }
-
-    return [];
-  }
-
-  findUnprocessedJobCard(jobCards) {
-    for (const card of jobCards) {
-      const cardId = this.getJobCardId(card);
-
-      if (this.processedJobCards.has(cardId)) {
-        continue;
-      }
-
-      const jobUrl = this.getJobUrlFromCard(card);
-      if (!jobUrl) continue;
-
-      const normalizedUrl = this.normalizeUrlFully(jobUrl);
-
-      // Check if already processed
-      if (this.isLinkProcessed(normalizedUrl)) {
-        this.processedJobCards.add(cardId);
-        continue;
-      }
-
-      // Check for Easy Apply only
-      if (!this.hasEasyApply(card)) {
-        this.processedJobCards.add(cardId);
-        this.markJobCardAsSkipped(card, "No Easy Apply");
-        continue;
-      }
-
-      return { card, url: jobUrl, cardId };
-    }
-
-    return null;
-  }
-
-  getJobCardId(card) {
-    const dataJobId = card.getAttribute("data-jobid") || card.getAttribute("data-id");
-    if (dataJobId) return dataJobId;
-
-    const link = card.querySelector(this.glassdoorConfig.selectors.jobLink);
-    if (link && link.href) {
-      const match = link.href.match(/jobListingId=(\d+)/);
-      if (match) return match[1];
-    }
-
-    // Fallback to position in DOM
-    const allCards = this.getGlassdoorJobCards();
-    return `card-${Array.from(allCards).indexOf(card)}`;
-  }
-
-  getJobUrlFromCard(card) {
-    const selectors = [
-      'a[data-test="job-link"]',
-      ".JobCard_trackingLink__HMyun",
-      'a[data-test="job-title"]',
-      ".react-job-listing a",
-    ];
-
-    for (const selector of selectors) {
-      const link = card.querySelector(selector);
-      if (link && link.href) {
-        return link.href;
-      }
-    }
-
-    return null;
-  }
-
-  hasEasyApply(card) {
-    const easyApplySelectors = [
-      'button[data-test="easyApply"]',
-      ".EasyApplyButton_content__1cGPo",
-      "button.applyButton",
-      "a.applyButton",
-    ];
-
-    for (const selector of easyApplySelectors) {
-      const button = card.querySelector(selector);
-      if (button && this.isElementVisible(button)) {
-        const buttonText = button.textContent?.trim().toLowerCase();
-        if (buttonText === "easy apply") {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
-  async processGlassdoorJobCard(jobData) {
-    const { card, url, cardId } = jobData;
-
-    this.statusOverlay.addSuccess("Found Glassdoor job to apply: " + url);
-    this.processedJobCards.add(cardId);
-
-    if (this.applicationState.isApplicationInProgress) {
-      this.log("Application became in progress, aborting new task");
-      return;
-    }
-
-    // Visual feedback
-    this.markJobCardAsProcessing(card);
-
-    // Set application state
-    this.applicationState.isApplicationInProgress = true;
-    this.applicationState.applicationStartTime = Date.now();
-
-    if (!this.applicationState.processedUrls) {
-      this.applicationState.processedUrls = new Set();
-    }
-    this.applicationState.processedUrls.add(this.normalizeUrlFully(url));
-
-    this.setStuckDetectionTimeout();
-
-    try {
-      this.safeSendPortMessage({
-        type: this.getJobTaskMessageType(),
-        data: {
-          url,
-          title: this.getJobTitleFromCard(card) || "Job Application",
-        },
-      });
-    } catch (err) {
-      this.handleJobTaskError(err, url, card);
+      // Start processing jobs from queue
+      await this.processNextJobFromQueue();
+    } catch (error) {
+      this.log("❌ Error starting queue-based search:", error);
     }
   }
 
   // ========================================
-  // JOB CARD VISUAL FEEDBACK METHODS
+  // JOB QUEUE MANAGEMENT (Following Wellfound pattern)
   // ========================================
 
-  markJobCardAsProcessing(card) {
+  async buildJobQueue() {
     try {
-      card.style.border = "2px solid #4CAF50";
-      card.style.backgroundColor = "rgba(76, 175, 80, 0.1)";
+      this.log("🏗️ Building job queue from Glassdoor job cards...");
 
-      const indicator = document.createElement("div");
-      indicator.className = "processing-indicator";
-      indicator.style.cssText = `
-        position: absolute;
-        top: 5px;
-        right: 5px;
-        background: #4CAF50;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 11px;
-        z-index: 10;
-      `;
-      indicator.textContent = "Processing...";
+      this.jobQueue = [];
+      this.currentJobIndex = 0;
 
-      card.style.position = "relative";
-      card.appendChild(indicator);
-    } catch (error) {
-      this.log("Error marking job card:", error);
-    }
-  }
+      await this.waitForPageLoad();
+      await this.delay(2000);
 
-  markJobCardAsSkipped(card, reason) {
-    try {
-      card.style.border = "2px solid #FF9800";
-      card.style.backgroundColor = "rgba(255, 152, 0, 0.1)";
+      // Get job cards using CORRECT selector
+      const jobCards = document.querySelectorAll(
+        this.glassdoorConfig.selectors.jobCards
+      );
+      console.log(jobCards);
+      this.log(`🔍 Found ${jobCards.length} job cards on Glassdoor page`);
 
-      const indicator = document.createElement("div");
-      indicator.className = "skipped-indicator";
-      indicator.style.cssText = `
-        position: absolute;
-        top: 5px;
-        right: 5px;
-        background: #FF9800;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 11px;
-        z-index: 10;
-      `;
-      indicator.textContent = reason;
-
-      card.style.position = "relative";
-      card.appendChild(indicator);
-    } catch (error) {
-      this.log("Error marking job card as skipped:", error);
-    }
-  }
-
-  getJobTitleFromCard(card) {
-    const selectors = [
-      ".JobCard_jobTitle__GLyJ1",
-      'a[data-test="job-title"]',
-      '[data-test="job-link"] span',
-      ".react-job-listing h3",
-    ];
-
-    for (const selector of selectors) {
-      const element = card.querySelector(selector);
-      if (element) {
-        return element.textContent?.trim();
-      }
-    }
-
-    return "Job Application";
-  }
-
-  async handleNoJobCardsFound() {
-    this.statusOverlay.addInfo("No job cards found, trying to load more...");
-
-    const nextButton = document.querySelector(this.glassdoorConfig.selectors.nextPage);
-    if (nextButton && this.isElementVisible(nextButton) && !nextButton.disabled) {
-      this.statusOverlay.addInfo('Clicking "Next" button');
-      nextButton.click();
-      setTimeout(() => {
-        if (!this.applicationState.isApplicationInProgress) {
-          this.searchNext();
-        }
-      }, this.glassdoorConfig.delays.pageLoad);
-    } else {
-      this.statusOverlay.addSuccess("All Glassdoor jobs processed!");
-      this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
-    }
-  }
-
-  async handleNoUnprocessedJobCards() {
-    await this.handleNoJobCardsFound();
-  }
-
-  // ========================================
-  // APPLICATION PROCESS IMPLEMENTATION
-  // ========================================
-
-  async startApplicationProcess() {
-    try {
-      this.log("📝 Starting Glassdoor application process");
-      this.statusOverlay.addInfo("Starting application process");
-      this.statusOverlay.updateStatus("applying");
-
-      const currentUrl = window.location.href;
-      this.log(`🌐 Current URL: ${currentUrl}`);
-
-      if (!this.userProfile) {
-        this.log("⚠️ No user profile available, attempting to fetch...");
-        await this.fetchSendCvTaskData();
-      }
-
-      // Log page analysis
-      this.analyzeCurrentPage();
-
-      // Check for POST_APPLY page (indicates completed application)
-      if (this.checkPostApplyPage()) {
-        this.log("📄 Detected POST_APPLY page");
-        await this.handlePostApplyPage();
-        return;
-      }
-
-      // Check for success page first
-      if (this.checkGlassdoorSubmissionSuccess()) {
-        this.log("✅ Detected success page");
-        await this.handleAlreadyApplied();
-        return;
-      }
-
-      // Check for Indeed SmartApply redirect
-      if (window.location.href.includes("smartapply.indeed.com")) {
-        this.log("🔄 Detected Indeed SmartApply redirect");
-        await this.handleIndeedSmartApplyRedirect();
-        return;
-      }
-
-      // Start the application process
-      await this.apply();
-    } catch (error) {
-      this.log("❌ Error in startApplicationProcess:", error);
-      this.reportError(error, { phase: "application", url: window.location.href });
-      this.handleApplicationError(error);
-    }
-  }
-
-  analyzeCurrentPage() {
-    const url = window.location.href;
-    this.log("🔍 Analyzing current page...");
-    this.log(`URL: ${url}`);
-    this.log(`Title: ${document.title}`);
-    
-    // Check for key Glassdoor elements
-    const elements = {
-      'Easy Apply buttons': document.querySelectorAll('[data-test="easyApply"], .EasyApplyButton_content__1cGPo').length,
-      'Forms': document.querySelectorAll('form').length,
-      'Modals': document.querySelectorAll('.jobsOverlayModal, .modal-content').length,
-      'Apply buttons': document.querySelectorAll('button:contains("Apply"), a:contains("Apply")').length,
-      'Job cards': document.querySelectorAll('.JobsList_jobListItem__wjTHv').length
-    };
-
-    this.log("📊 Page elements found:", elements);
-
-    // Check page type
-    const pageTypes = {
-      'Job listing page': this.isGlassdoorJobListingPage(url),
-      'Search results page': this.isGlassdoorSearchPage(url), 
-      'Application page': this.isGlassdoorApplicationPage(url),
-      'POST_APPLY page': this.checkPostApplyPage()
-    };
-
-    this.log("📋 Page type analysis:", pageTypes);
-
-    // Log any visible forms for debugging
-    const forms = document.querySelectorAll('form');
-    forms.forEach((form, index) => {
-      if (DomUtils.isElementVisible(form)) {
-        this.log(`📝 Visible form ${index + 1}:`, {
-          action: form.action,
-          method: form.method,
-          inputs: form.querySelectorAll('input').length,
-          textareas: form.querySelectorAll('textarea').length,
-          selects: form.querySelectorAll('select').length
-        });
-      }
-    });
-  }
-
-  async handleModalApplication(modal) {
-    try {
-      this.log("📋 Handling Glassdoor modal application");
-      this.statusOverlay.addInfo("Processing modal application form");
-
-      const form = modal.querySelector("form");
-      if (form) {
-        await this.processApplicationForm(form);
-      } else {
-        this.statusOverlay.addWarning("No form found in modal");
-      }
-    } catch (error) {
-      this.log("❌ Error handling modal application:", error);
-      this.handleApplicationError(error);
-    }
-  }
-
-  async handleIndeedSmartApplyRedirect() {
-    try {
-      this.log("🔄 Handling Indeed SmartApply redirect from Glassdoor");
-      this.statusOverlay.addInfo("Detected redirect to Indeed SmartApply - processing...");
-
-      if (this.formHandler && this.formHandler.processIndeedSmartApply) {
-        const result = await this.formHandler.processIndeedSmartApply();
-        
-        if (result.success) {
-          this.statusOverlay.addSuccess("Indeed SmartApply completed successfully");
-          await this.handleSuccessfulApplication(result.jobTitle || "Job on Glassdoor");
-        } else {
-          throw new Error(result.error || "Indeed SmartApply processing failed");
-        }
-      } else {
-        throw new Error("SmartApply handler not available");
-      }
-    } catch (error) {
-      this.log("❌ Error handling Indeed SmartApply:", error);
-      this.handleApplicationError(error);
-    }
-  }
-
-  async apply() {
-    try {
-      this.statusOverlay.addInfo("Starting Glassdoor application process");
-      this.statusOverlay.updateStatus("applying");
-
-      if (!this.validateHandlers()) {
-        throw new Error("Required handlers are not properly initialized");
-      }
-
-      if (this.hasPageErrors()) {
-        throw new Error("Cannot start application: Page error detected");
-      }
-
-      const currentUrl = window.location.href;
-      this.log(`🔍 Applying on Glassdoor page: ${currentUrl}`);
-
-      // Determine what type of Glassdoor page we're on
-      if (this.isGlassdoorJobListingPage(currentUrl)) {
-        // We're on a job listing page - need to click apply button first
-        this.statusOverlay.addInfo("On job listing page - looking for apply button");
-        await this.handleJobListingPage();
-      } else if (this.isGlassdoorApplicationPage(currentUrl)) {
-        // We're already on an application page
-        this.statusOverlay.addInfo("Already on application page - looking for form");
-        await this.waitForAndProcessForm();
-      } else {
-        // Unknown page type - try to find form anyway
-        this.statusOverlay.addInfo("Unknown page type - searching for form");
-        await this.waitForAndProcessForm();
-      }
-
-      return true;
-    } catch (e) {
-      this.log("Error in Glassdoor apply:", e);
-      throw new Error("Error during application process: " + this.errorToString(e));
-    }
-  }
-
-  async waitForAndProcessForm() {
-    // Wait for modal or form to appear
-    await this.wait(this.glassdoorConfig.delays.modalWait);
-
-    let form = this.findGlassdoorApplicationForm();
-    if (form) {
-      this.statusOverlay.addSuccess("Found application form immediately");
-      return await this.processApplicationForm(form);
-    }
-
-    // If no form found, wait longer for modal
-    this.statusOverlay.addInfo("No form found immediately, waiting longer...");
-    await this.wait(this.glassdoorConfig.delays.pageLoad);
-    
-    form = this.findGlassdoorApplicationForm();
-    if (form) {
-      this.statusOverlay.addSuccess("Found application form after waiting");
-      return await this.processApplicationForm(form);
-    }
-
-    // Try alternative detection methods
-    await this.tryAlternativeFormDetection();
-  }
-
-  async tryAlternativeFormDetection() {
-    this.statusOverlay.addInfo("Trying alternative form detection methods...");
-
-    // Method 1: Look for any visible form on the page
-    const allForms = document.querySelectorAll("form");
-    this.log(`Found ${allForms.length} forms on page`);
-    
-    for (const form of allForms) {
-      if (this.isElementVisible(form)) {
-        this.log("Found visible form, attempting to process");
-        this.statusOverlay.addInfo("Found visible form - attempting to process");
-        return await this.processApplicationForm(form);
-      }
-    }
-
-    // Method 2: Check for specific Glassdoor elements that indicate we should wait
-    const glassdoorIndicators = [
-      ".jobsOverlayModal",
-      ".modal-content", 
-      ".applyButtonContainer",
-      "[data-test='easyApply']",
-      ".application-form"
-    ];
-
-    for (const selector of glassdoorIndicators) {
-      const element = document.querySelector(selector);
-      if (element) {
-        this.log(`Found Glassdoor indicator: ${selector}`);
-        this.statusOverlay.addInfo(`Found ${selector} - waiting for form to load`);
-        await this.wait(3000);
-        
-        const form = this.findGlassdoorApplicationForm();
-        if (form) {
-          return await this.processApplicationForm(form);
-        }
-      }
-    }
-
-    // Method 3: Check if we need to click something to trigger the form
-    await this.tryTriggerApplicationForm();
-  }
-
-  async tryTriggerApplicationForm() {
-    this.statusOverlay.addInfo("Looking for apply button to trigger form...");
-
-    const applySelectors = [
-      'button[data-test="easyApply"]',
-      ".EasyApplyButton_content__1cGPo", 
-      "button.applyButton",
-      "a.applyButton",
-      '.apply-button'
-    ];
-
-    // First try specific selectors
-    for (const selector of applySelectors) {
-      const buttons = document.querySelectorAll(selector);
-      for (const button of buttons) {
-        if (this.isElementVisible(button) && !button.disabled) {
-          const buttonText = button.textContent?.trim().toLowerCase();
-          if (buttonText.includes("apply") && !buttonText.includes("applied")) {
-            this.log(`Found apply button: ${buttonText}`);
-            this.statusOverlay.addInfo(`Clicking apply button: ${buttonText}`);
-            
-            try {
-              await this.clickElementReliably(button);
-              await this.wait(3000);
-              
-              const form = this.findGlassdoorApplicationForm();
-              if (form) {
-                this.statusOverlay.addSuccess("Form appeared after clicking apply button");
-                return await this.processApplicationForm(form);
-              }
-            } catch (error) {
-              this.log(`Error clicking apply button: ${error.message}`);
-            }
+      for (const jobCard of jobCards) {
+        try {
+          const jobInfo = this.extractJobInfoFromCard(jobCard);
+          console.log(jobInfo);
+          if (jobInfo && !this.isJobAlreadyProcessed(jobInfo.url)) {
+            this.jobQueue.push(jobInfo);
+            this.log(`➕ Added job: ${jobInfo.title} at ${jobInfo.company}`);
           }
+        } catch (error) {
+          this.log(`❌ Error processing job card:`, error);
+          continue;
         }
       }
-    }
 
-    // Then try finding buttons by text content
-    const allButtons = document.querySelectorAll('button, a');
-    for (const button of allButtons) {
-      if (this.isElementVisible(button) && !button.disabled) {
-        const buttonText = button.textContent?.trim().toLowerCase();
-        if ((buttonText.includes("easy apply") || buttonText.includes("apply")) && 
-            !buttonText.includes("applied")) {
-          this.log(`Found apply button by text: ${buttonText}`);
-          this.statusOverlay.addInfo(`Clicking apply button: ${buttonText}`);
-          
-          try {
-            await this.clickElementReliably(button);
-            await this.wait(3000);
-            
-            const form = this.findGlassdoorApplicationForm();
-            if (form) {
-              this.statusOverlay.addSuccess("Form appeared after clicking apply button");
-              return await this.processApplicationForm(form);
-            }
-          } catch (error) {
-            this.log(`Error clicking apply button: ${error.message}`);
-          }
-        }
-      }
-    }
+      this.queueInitialized = true;
+      this.log(
+        `✅ Glassdoor job queue built with ${this.jobQueue.length} jobs`
+      );
 
-    // Method 4: Check if this is actually a completed application or redirect
-    await this.checkForAlternativeOutcomes();
-  }
-
-  async checkForAlternativeOutcomes() {
-    this.log("🔍 Checking for alternative outcomes...");
-
-    // Check if application was already submitted
-    const pageText = document.body.textContent.toLowerCase();
-    const alreadyAppliedIndicators = [
-      "already applied",
-      "application submitted", 
-      "you have applied",
-      "application sent",
-      "thank you for applying"
-    ];
-
-    if (alreadyAppliedIndicators.some(indicator => pageText.includes(indicator))) {
-      this.log("✅ Detected already applied status");
-      this.statusOverlay.addSuccess("Application already submitted or completed");
-      await this.handleAlreadyApplied();
-      return;
-    }
-
-    // Check if we're being redirected
-    if (pageText.includes("redirecting") || pageText.includes("loading")) {
-      this.log("🔄 Page appears to be redirecting, waiting...");
-      this.statusOverlay.addInfo("Page is redirecting, waiting...");
-      await this.wait(5000);
-      
-      // Re-analyze after waiting
-      const currentUrl = window.location.href;
-      if (currentUrl !== this.lastCheckedUrl) {
-        this.lastCheckedUrl = currentUrl;
-        this.log("🔄 URL changed during redirect, restarting process");
-        await this.startApplicationProcess();
-        return;
-      }
-    }
-
-    // Check if this is a job that requires external application
-    const externalIndicators = [
-      "apply on company website",
-      "external application",
-      "visit company website",
-      "apply directly"
-    ];
-
-    if (externalIndicators.some(indicator => pageText.includes(indicator))) {
-      this.log("🔗 Job requires external application");
-      throw new Error("This job requires applying on the company website directly");
-    }
-
-    // If we still can't find anything, throw a detailed error
-    await this.generateDetailedError();
-  }
-
-  async generateDetailedError() {
-    const debugInfo = {
-      url: window.location.href,
-      title: document.title,
-      pageText: document.body.textContent.substring(0, 500),
-      forms: document.querySelectorAll('form').length,
-      buttons: document.querySelectorAll('button').length,
-      modals: document.querySelectorAll('.modal, .overlay').length,
-      hasEasyApply: !!document.querySelector('[data-test="easyApply"]'),
-      hasApplicationButton: this.findButtonsWithText('apply').length > 0,
-      pageType: {
-        isJobListing: this.isGlassdoorJobListingPage(window.location.href),
-        isSearchPage: this.isGlassdoorSearchPage(window.location.href),
-        isApplicationPage: this.isGlassdoorApplicationPage(window.location.href)
-      }
-    };
-
-    this.log("🐛 Debug info for missing form:", debugInfo);
-    
-    const errorMessage = `Cannot find Glassdoor application form or modal after trying all detection methods.
-    
-Debug info:
-- URL: ${debugInfo.url}
-- Page type: ${JSON.stringify(debugInfo.pageType)}
-- Forms found: ${debugInfo.forms}
-- Buttons found: ${debugInfo.buttons}
-- Has Easy Apply: ${debugInfo.hasEasyApply}
-- Page text preview: ${debugInfo.pageText.substring(0, 200)}...
-
-This might be because:
-1. The page structure has changed
-2. This job doesn't support Easy Apply
-3. You may have already applied to this job
-4. The page requires login or has other restrictions`;
-
-    throw new Error(errorMessage);
-  }
-
-  findButtonsWithText(searchText) {
-    const buttons = document.querySelectorAll('button, a');
-    const matchingButtons = [];
-    
-    for (const button of buttons) {
-      const text = button.textContent?.toLowerCase() || '';
-      if (text.includes(searchText.toLowerCase())) {
-        matchingButtons.push(button);
-      }
-    }
-    
-    return matchingButtons;
-  }
-
-  isElementVisible(element) {
-    if (!element) return false;
-    
-    try {
-      // Use DomUtils if available, otherwise use fallback
-      if (typeof DomUtils !== 'undefined' && DomUtils.isElementVisible) {
-        return DomUtils.isElementVisible(element);
-      }
-      
-      // Fallback implementation
-      const style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-        return false;
-      }
-      
-      const rect = element.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
+      return this.jobQueue.length > 0;
     } catch (error) {
+      this.log("❌ Error building job queue:", error);
       return false;
     }
   }
 
-  isGlassdoorJobListingPage(url) {
-    return (
-      /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner)/.test(url) &&
-      !url.includes("/jobs.htm") &&
-      !url.includes("/apply")
+  extractJobInfoFromCard(jobCard) {
+    try {
+      const jobTitleElement = jobCard.querySelector(
+        this.glassdoorConfig.selectors.jobTitle
+      );
+      const companyElement = jobCard.querySelector(
+        this.glassdoorConfig.selectors.companyName
+      );
+      const locationElement = jobCard.querySelector(
+        this.glassdoorConfig.selectors.location
+      );
+      const salaryElement = jobCard.querySelector(
+        this.glassdoorConfig.selectors.salary
+      );
+
+      // Check for Easy Apply button with CORRECT selector
+      const easyApplyButton = jobCard.querySelector(
+        this.glassdoorConfig.selectors.easyApplyButton
+      );
+
+      if (!easyApplyButton) {
+        this.log(`⏭️ Skipping job - no Easy Apply button found`);
+        return null;
+      }
+
+      // Get job URL - this might be in the job title link or card itself
+      let jobUrl = null;
+      const jobLink =
+        jobCard.querySelector("a[href*='/job/']") ||
+        jobCard.querySelector("a[href*='/partner/']") ||
+        jobTitleElement?.closest("a");
+
+      if (jobLink && jobLink.href) {
+        jobUrl = jobLink.href;
+      } else {
+        this.log(`⏭️ Skipping job - no job URL found`);
+        return null;
+      }
+
+      return {
+        url: jobUrl,
+        title: jobTitleElement?.textContent?.trim() || "Unknown Title",
+        company: companyElement?.textContent?.trim() || "Unknown Company",
+        location: locationElement?.textContent?.trim() || "Unknown Location",
+        salary: salaryElement?.textContent?.trim() || "Not specified",
+        element: jobCard,
+        easyApplyButton: easyApplyButton,
+        extractedAt: Date.now(),
+      };
+    } catch (error) {
+      this.log(`❌ Error extracting job info:`, error);
+      return null;
+    }
+  }
+
+  isJobAlreadyProcessed(url) {
+    const normalizedUrl = this.normalizeUrl(url);
+    return this.searchData.submittedLinks.some(
+      (link) => this.normalizeUrl(link.url) === normalizedUrl
     );
   }
 
-  findGlassdoorApplicationForm() {
-    // Enhanced form detection with more selectors and debugging
-    const formSelectors = [
-      ".jobsOverlayModal form",
-      ".modal-content form", 
-      'form[action*="glassdoor"]',
-      'form[action*="apply"]',
-      ".applyButtonContainer form",
-      '[data-test="application-form"]',
-      'form[class*="application"]',
-      'form[class*="apply"]',
-      ".application-modal form",
-      "#application-form"
-    ];
-
-    this.log(`🔍 Searching for Glassdoor application form using ${formSelectors.length} selectors`);
-
-    for (const selector of formSelectors) {
-      const forms = document.querySelectorAll(selector);
-      this.log(`Selector "${selector}" found ${forms.length} forms`);
-      
-      for (const form of forms) {
-        if (this.isElementVisible(form)) {
-          this.log(`✅ Found visible form with selector: ${selector}`);
-          return form;
-        }
-      }
-    }
-
-    // Fallback: look for any form that might be an application form
-    const allForms = document.querySelectorAll("form");
-    this.log(`📋 Checking ${allForms.length} total forms as fallback`);
-    
-    for (const form of allForms) {
-      if (this.isElementVisible(form)) {
-        // Check if form contains application-related elements
-        const hasApplicationElements = 
-          form.querySelector('input[type="file"]') || // Resume upload
-          form.querySelector('textarea') || // Cover letter
-          form.querySelector('input[type="email"]') || // Email field
-          form.querySelector('input[type="tel"]') || // Phone field
-          form.querySelector('select') || // Dropdown fields
-          form.textContent.toLowerCase().includes('apply') ||
-          form.textContent.toLowerCase().includes('resume') ||
-          form.textContent.toLowerCase().includes('cover letter');
-
-        if (hasApplicationElements) {
-          this.log(`✅ Found potential application form based on content`);
-          return form;
-        }
-      }
-    }
-
-    this.log("❌ No application form found with any method");
-    return null;
-  }
-
-  async handleJobListingPage() {
-    this.statusOverlay.addInfo("Glassdoor job listing page detected - looking for Apply button");
-
-    // Extract job details first
-    this.currentJobData = await this.extractGlassdoorJobDescription();
-
-    // Find and click the apply button
-    const applyButton = this.findGlassdoorApplyButton();
-    if (!applyButton) {
-      throw new Error("Cannot find Apply button on Glassdoor job listing page");
-    }
-
-    this.log("🖱️ Clicking Apply button");
-    this.statusOverlay.addInfo("Clicking Apply button...");
-    
+  async processNextJobFromQueue() {
     try {
-      await this.clickElementReliably(applyButton);
-      this.statusOverlay.addSuccess("Apply button clicked successfully");
+      // Check application limit
+      if (this.searchData.current >= this.searchData.limit) {
+        this.log("🏁 Reached job application limit");
+        this.statusOverlay.addSuccess("Reached application limit");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+        return;
+      }
+
+      // Check if queue is empty
+      if (this.currentJobIndex >= this.jobQueue.length) {
+        this.log("📭 Job queue exhausted");
+        this.statusOverlay.addSuccess("All jobs processed");
+        this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+        return;
+      }
+
+      // Get next job from queue
+      const nextJob = this.jobQueue[this.currentJobIndex];
+      this.currentJobIndex++;
+
+      this.log(
+        `🎯 Processing job ${this.currentJobIndex}/${this.jobQueue.length}: ${nextJob.title}`
+      );
+      this.statusOverlay.addMessage(
+        `Processing: ${nextJob.title} at ${nextJob.company}`
+      );
+
+      await this.delay(this.glassdoorConfig.delays.betweenJobs);
+
+      // Send job to background for processing in new tab (like Wellfound)
+      const success = await this.processJobFromQueue(nextJob);
+
+      if (!success) {
+        this.searchData.submittedLinks.push({
+          url: nextJob.url,
+          status: "FAILED",
+          message: "Failed to process job",
+          timestamp: Date.now(),
+        });
+
+        this.log(`❌ Failed to process job, moving to next in queue`);
+        setTimeout(() => this.processNextJobFromQueue(), 1000);
+      }
     } catch (error) {
-      throw new Error(`Failed to click apply button: ${error.message}`);
+      this.log("❌ Error in processNextJobFromQueue:", error);
+      this.reportError(error, { action: "processNextJobFromQueue" });
     }
-
-    // Wait for the application page/modal to load
-    await this.waitForGlassdoorApplicationPage();
-    this.statusOverlay.addSuccess("Application page loaded successfully");
-
-    // Now process the form
-    await this.waitForAndProcessForm();
   }
 
-  findGlassdoorApplyButton() {
-    const applySelectors = [
-      'button[data-test="easyApply"]',
-      ".EasyApplyButton_content__1cGPo",
-      "button.applyButton", 
-      "a.applyButton",
-      'button[data-test="apply-button"]',
-      '.jobsOverlayModal button[data-test="apply"]'
+  async processJobFromQueue(jobInfo) {
+    try {
+      this.log(
+        `🎯 Sending job to background: ${jobInfo.title} - ${jobInfo.url}`
+      );
+
+      // Send to background script to open in new tab (like Wellfound pattern)
+      const success = this.safeSendPortMessage({
+        type: "START_APPLICATION",
+        data: {
+          url: jobInfo.url,
+          title: jobInfo.title,
+          company: jobInfo.company,
+          location: jobInfo.location,
+          salary: jobInfo.salary,
+        },
+      });
+
+      if (!success) {
+        throw new Error("Failed to send job to background script");
+      }
+
+      return true;
+    } catch (error) {
+      this.log(`❌ Error processing job: ${error.message}`);
+      return false;
+    }
+  }
+
+  // ========================================
+  // APPLICATION PROCESS (Indeed SmartApply)
+  // ========================================
+
+  async startApplicationProcess() {
+    try {
+      this.log("📝 Starting Glassdoor/SmartApply application process");
+      this.statusOverlay.addMessage("Starting application process...");
+
+      // Validate user profile
+      if (!this.userProfile) {
+        this.log("⚠️ No user profile available, attempting to fetch...");
+        await this.fetchApplicationTaskData();
+      }
+
+      // Wait for page to load
+      await this.delay(3000);
+
+      // Determine if this is SmartApply or regular Glassdoor
+      if (window.location.href.includes("smartapply.indeed.com")) {
+        await this.handleSmartApplyFlow();
+      } else {
+        await this.handleRegularGlassdoorFlow();
+      }
+    } catch (error) {
+      this.reportError(error, { phase: "application" });
+      this.handleApplicationError(error);
+    }
+  }
+
+  async handleSmartApplyFlow() {
+    try {
+      this.log("🔄 Processing Indeed SmartApply multi-step form");
+      this.statusOverlay.addMessage("Processing SmartApply form...");
+
+      // Wait for form to load
+      await this.waitForElementWithTimeout("form", 15000);
+
+      let currentStep = 1;
+      const maxSteps = 10; // Safety limit
+      let applicationCompleted = false;
+
+      while (currentStep <= maxSteps && !applicationCompleted) {
+        this.log(`📄 Processing SmartApply step ${currentStep}`);
+        this.statusOverlay.addMessage(`Processing step ${currentStep}...`);
+
+        // Wait for page content to load
+        await this.delay(2000);
+
+        // Check if application is completed
+        if (this.checkSmartApplyCompletion()) {
+          this.log("✅ SmartApply application completed successfully");
+          applicationCompleted = true;
+          break;
+        }
+
+        // Process current step
+        const stepResult = await this.processSmartApplyStep();
+
+        if (stepResult.completed) {
+          applicationCompleted = true;
+          break;
+        } else if (stepResult.nextStep) {
+          // Find and click next/continue button
+          const nextButton = this.findSmartApplyNextButton();
+          if (nextButton) {
+            this.log("🔄 Moving to next SmartApply step");
+            await this.clickElementReliably(nextButton);
+            await this.delay(3000);
+            currentStep++;
+          } else {
+            throw new Error("Cannot find next button to continue");
+          }
+        } else {
+          throw new Error("Cannot process current step");
+        }
+      }
+
+      if (applicationCompleted) {
+        await this.handleSuccessfulApplication();
+      } else {
+        throw new Error("SmartApply process exceeded maximum steps");
+      }
+    } catch (error) {
+      this.log("❌ SmartApply error:", error.message);
+      throw error;
+    }
+  }
+
+  async processSmartApplyStep() {
+    try {
+      // Check for different step types
+      if (this.isResumeStep()) {
+        return await this.handleResumeStep();
+      } else if (this.isContactInfoStep()) {
+        return await this.handleContactInfoStep();
+      } else if (this.isQuestionsStep()) {
+        return await this.handleQuestionsStep();
+      } else if (this.isReviewStep()) {
+        return await this.handleReviewStep();
+      } else {
+        return await this.handleGenericStep();
+      }
+    } catch (error) {
+      this.log("❌ Error processing SmartApply step:", error.message);
+      throw error;
+    }
+  }
+
+  isResumeStep() {
+    return (
+      document.querySelector("input[type='file']") !== null ||
+      document.body.textContent.toLowerCase().includes("resume")
+    );
+  }
+
+  async handleResumeStep() {
+    this.log("📄 Handling resume upload step");
+    // Most SmartApply forms auto-detect resume, so just continue
+    return { nextStep: true };
+  }
+
+  isContactInfoStep() {
+    const contactFields = [
+      "input[name*='name']",
+      "input[name*='email']",
+      "input[name*='phone']",
+      "input[type='email']",
+      "input[type='tel']",
     ];
 
-    this.log(`🔍 Searching for apply button using ${applySelectors.length} selectors`);
+    return contactFields.some(
+      (selector) => document.querySelector(selector) !== null
+    );
+  }
 
-    for (const selector of applySelectors) {
-      const elements = document.querySelectorAll(selector);
-      this.log(`Selector "${selector}" found ${elements.length} elements`);
-      
-      for (const element of elements) {
-        if (this.isElementVisible(element) && !element.disabled) {
-          const text = element.textContent?.toLowerCase() || "";
-          this.log(`Checking button text: "${text}"`);
-          
-          if (text.includes("apply") && !text.includes("applied")) {
-            this.log(`✅ Found apply button with text: "${text}"`);
-            return element;
-          }
-        }
+  async handleContactInfoStep() {
+    this.log("👤 Handling contact information step");
+
+    try {
+      // Fill basic contact info using user profile
+      if (this.userProfile) {
+        await this.fillFieldBySelectors(
+          ["input[name*='firstName']", "input[placeholder*='First name']"],
+          this.userProfile.firstName
+        );
+
+        await this.fillFieldBySelectors(
+          ["input[name*='lastName']", "input[placeholder*='Last name']"],
+          this.userProfile.lastName
+        );
+
+        await this.fillFieldBySelectors(
+          ["input[type='email']", "input[name*='email']"],
+          this.userProfile.email
+        );
+
+        await this.fillFieldBySelectors(
+          ["input[type='tel']", "input[name*='phone']"],
+          this.userProfile.phoneNumber
+        );
+      }
+
+      this.log("✅ Contact information filled");
+      return { nextStep: true };
+    } catch (error) {
+      this.log("⚠️ Contact info error:", error.message);
+      return { nextStep: true }; // Continue anyway
+    }
+  }
+
+  isQuestionsStep() {
+    return (
+      document.querySelector("input[type='radio'], select, textarea") !==
+        null || document.body.textContent.toLowerCase().includes("question")
+    );
+  }
+
+  async handleQuestionsStep() {
+    this.log("❓ Handling questions step");
+
+    try {
+      // Get all form fields and process them
+      const fields = this.getAllFormFields();
+
+      for (const field of fields) {
+        await this.processFormField(field);
+        await this.delay(300);
+      }
+
+      this.log("✅ Questions processed");
+      return { nextStep: true };
+    } catch (error) {
+      this.log("⚠️ Questions error:", error.message);
+      return { nextStep: true };
+    }
+  }
+
+  isReviewStep() {
+    return (
+      document.body.textContent.toLowerCase().includes("review") ||
+      document.body.textContent.toLowerCase().includes("submit") ||
+      document.querySelector("button[type='submit']") !== null
+    );
+  }
+
+  async handleReviewStep() {
+    this.log("📋 Handling review/submit step");
+
+    const submitButton = this.findSmartApplySubmitButton();
+    if (submitButton) {
+      this.log("📤 Found submit button, submitting application");
+      await this.clickElementReliably(submitButton);
+      await this.delay(5000);
+
+      if (this.checkSmartApplyCompletion()) {
+        return { completed: true };
       }
     }
 
-    // Fallback: look for any button with "apply" text
-    const allButtons = document.querySelectorAll("button, a");
-    this.log(`📋 Checking ${allButtons.length} total buttons as fallback`);
-    
-    for (const button of allButtons) {
-      if (this.isElementVisible(button) && !button.disabled) {
-        const text = button.textContent?.toLowerCase() || "";
-        if (text === "easy apply" || text === "apply now" || text === "apply") {
-          this.log(`✅ Found apply button via fallback: "${text}"`);
-          return button;
-        }
+    return { nextStep: true };
+  }
+
+  async handleGenericStep() {
+    this.log("📝 Handling generic form step");
+
+    try {
+      const fields = this.getAllFormFields();
+      for (const field of fields) {
+        await this.processFormField(field);
+      }
+      return { nextStep: true };
+    } catch (error) {
+      this.log("⚠️ Generic step error:", error.message);
+      return { nextStep: true };
+    }
+  }
+
+  // ========================================
+  // FORM HANDLING UTILITIES
+  // ========================================
+
+  getAllFormFields(container = document) {
+    const fields = [];
+    const elements = container.querySelectorAll("input, select, textarea");
+
+    for (const element of elements) {
+      if (element.type === "hidden" || element.disabled || element.readOnly) {
+        continue;
+      }
+
+      const fieldInfo = this.getFieldInfo(element);
+      if (fieldInfo.label) {
+        fields.push({
+          element: element,
+          type: element.type || element.tagName.toLowerCase(),
+          label: fieldInfo.label,
+          name: element.name || "",
+          id: element.id || "",
+          required: element.required || fieldInfo.label.includes("*"),
+          placeholder: element.placeholder || "",
+        });
       }
     }
 
-    this.log("❌ No apply button found");
+    return fields;
+  }
+
+  getFieldInfo(element) {
+    const sources = [
+      element.labels?.[0]?.textContent,
+      element.getAttribute("aria-label"),
+      element.getAttribute("placeholder"),
+      element.closest("label")?.textContent,
+      element.closest(".form-group, .field")?.querySelector("label")
+        ?.textContent,
+    ];
+
+    const label = sources.find((source) => source && source.trim()) || "";
+
+    return {
+      label: label.trim().replace(/\s+/g, " "),
+      element: element,
+    };
+  }
+
+  async processFormField(field) {
+    try {
+      this.log(`🔧 Processing field: ${field.label} (${field.type})`);
+
+      const answer = await this.getAnswerForField(field);
+
+      if (!answer && answer !== 0) {
+        this.log(`⏭️ No answer for field: ${field.label}`);
+        return;
+      }
+
+      // Fill the field based on its type
+      switch (field.type) {
+        case "text":
+        case "email":
+        case "tel":
+        case "password":
+        case "number":
+          await this.fillTextInput(field.element, answer);
+          break;
+
+        case "textarea":
+          await this.fillTextarea(field.element, answer);
+          break;
+
+        case "select-one":
+          await this.fillSelect(field.element, answer);
+          break;
+
+        case "radio":
+          await this.fillRadio(field.element, answer, field.label);
+          break;
+
+        case "checkbox":
+          await this.fillCheckbox(field.element, answer);
+          break;
+
+        default:
+          this.log(`❓ Unknown field type: ${field.type}`);
+      }
+
+      this.log(`✅ Filled field: ${field.label} = ${answer}`);
+    } catch (error) {
+      this.log(`❌ Error processing field ${field.label}:`, error.message);
+    }
+  }
+
+  async getAnswerForField(field) {
+    const normalizedLabel = field.label.toLowerCase().trim();
+
+    // Get answer from AI service or fallback
+    try {
+      if (this.aiService) {
+        const answer = await this.aiService.getAnswer(field.label, [], {
+          userData: this.userProfile,
+          platform: "glassdoor",
+        });
+        return answer;
+      }
+    } catch (error) {
+      this.log("⚠️ AI service error:", error.message);
+    }
+
+    return this.getFallbackAnswer(normalizedLabel);
+  }
+
+  getFallbackAnswer(normalizedLabel) {
+    const fallbackAnswers = {
+      "work authorization": "Yes",
+      "authorized to work": "Yes",
+      "require sponsorship": "No",
+      "visa sponsorship": "No",
+      experience: "Yes",
+      available: "Immediately",
+      "start date": "Immediately",
+      "notice period": "2 weeks",
+      salary: "Competitive",
+      relocate: "Yes",
+    };
+
+    for (const [key, value] of Object.entries(fallbackAnswers)) {
+      if (normalizedLabel.includes(key)) {
+        return value;
+      }
+    }
+
+    return "Yes"; // Default fallback
+  }
+
+  // ========================================
+  // UTILITY METHODS
+  // ========================================
+
+  findSmartApplyNextButton() {
+    // Use the CORRECT selector from your description
+    const correctButton = document.querySelector(
+      this.glassdoorConfig.selectors.continueButton
+    );
+    if (
+      correctButton &&
+      this.isElementVisible(correctButton) &&
+      !correctButton.disabled
+    ) {
+      return correctButton;
+    }
+
+    // Fallback selectors
+    const fallbackSelectors = [
+      "button:contains('Continue')",
+      "button:contains('Next')",
+      ".aba5bff612c96e760268ff66780c44f60", // From your description
+      "button[type='submit']",
+    ];
+
+    for (const selector of fallbackSelectors) {
+      const button = document.querySelector(selector);
+      if (button && this.isElementVisible(button) && !button.disabled) {
+        return button;
+      }
+    }
+
     return null;
   }
 
-  async waitForGlassdoorApplicationPage(timeout = 15000) {
-    const startTime = Date.now();
-    this.log(`⏳ Waiting for Glassdoor application page (timeout: ${timeout}ms)`);
+  findSmartApplySubmitButton() {
+    const selectors = [
+      "button:contains('Submit')",
+      "button:contains('Apply')",
+      "button[type='submit']",
+      ".submit-btn",
+    ];
 
-    while (Date.now() - startTime < timeout) {
-      // Check if URL changed to application page
-      if (this.isGlassdoorApplicationPage(window.location.href)) {
-        this.log("✅ URL indicates we're on application page");
-        const form = this.findGlassdoorApplicationForm();
-        if (form) {
-          this.log("✅ Application form found on new page");
-          return true;
-        }
+    for (const selector of selectors) {
+      const button = document.querySelector(selector);
+      if (button && this.isElementVisible(button) && !button.disabled) {
+        return button;
       }
-
-      // Check for modal appearing
-      const modal = document.querySelector(this.glassdoorConfig.selectors.modal);
-      if (modal && this.isElementVisible(modal)) {
-        this.log("✅ Application modal appeared");
-        return true;
-      }
-
-      // Check for form appearing
-      const form = this.findGlassdoorApplicationForm();
-      if (form) {
-        this.log("✅ Application form appeared");
-        return true;
-      }
-
-      // Check for Indeed SmartApply redirect
-      if (window.location.href.includes("smartapply.indeed.com")) {
-        this.log("✅ Redirected to Indeed SmartApply");
-        return true;
-      }
-
-      await this.wait(500);
     }
 
-    throw new Error("Timeout waiting for Glassdoor application page to load");
+    return null;
+  }
+
+  checkSmartApplyCompletion() {
+    const successIndicators = [
+      "application submitted",
+      "application complete",
+      "thank you",
+      "confirmation",
+      "success",
+    ];
+
+    const pageText = document.body.textContent.toLowerCase();
+    const hasSuccessText = successIndicators.some((indicator) =>
+      pageText.includes(indicator)
+    );
+
+    const url = window.location.href.toLowerCase();
+    const hasSuccessUrl =
+      url.includes("success") ||
+      url.includes("confirmation") ||
+      url.includes("complete");
+
+    return hasSuccessText || hasSuccessUrl;
+  }
+
+  // ========================================
+  // MESSAGE HANDLING (Following Wellfound pattern)
+  // ========================================
+
+  handlePortMessage(message) {
+    try {
+      this.log("📨 Received port message:", message);
+
+      const { type, data } = message || {};
+      if (!type) {
+        this.log("⚠️ Received message without type, ignoring");
+        return;
+      }
+
+      switch (type) {
+        case "CONNECTION_ESTABLISHED":
+          this.log("✅ Port connection established with background script");
+          break;
+
+        case "SEARCH_TASK_DATA":
+          this.handleSearchTaskData(data);
+          break;
+
+        case "APPLICATION_TASK_DATA":
+          this.handleApplicationTaskData(data);
+          break;
+
+        case "SEARCH_NEXT":
+          this.handleSearchNext(data);
+          break;
+
+        case "SUCCESS":
+          this.handleSuccessMessage(data);
+          break;
+
+        case "ERROR":
+          this.handleErrorMessage(data);
+          break;
+
+        default:
+          this.log(`❓ Unhandled message type: ${type}`);
+      }
+    } catch (error) {
+      this.log("❌ Error handling port message:", error);
+    }
+  }
+
+  handleApplicationTaskData(data) {
+    try {
+      this.log("📊 Processing Glassdoor application task data:", data);
+
+      if (data?.profile && !this.userProfile) {
+        this.userProfile = data.profile;
+        this.log("👤 User profile loaded from application task data");
+      }
+
+      this.statusOverlay.addSuccess("Application initialization complete");
+    } catch (error) {
+      this.log("❌ Error processing application task data:", error);
+    }
+  }
+
+  handleSearchNext(data) {
+    try {
+      this.log("🔄 Received search next signal:", data);
+
+      if (data && data.submittedLinks) {
+        this.searchData.submittedLinks = data.submittedLinks;
+      }
+      if (data && data.current !== undefined) {
+        this.searchData.current = data.current;
+      }
+
+      setTimeout(() => this.processNextJobFromQueue(), 1000);
+    } catch (error) {
+      this.log("❌ Error handling search next:", error);
+    }
+  }
+
+  handleSuccessMessage(data) {
+    if (data && data.submittedLinks !== undefined) {
+      this.handleSearchTaskData(data);
+    } else if (data && data.profile !== undefined && !this.userProfile) {
+      this.handleApplicationTaskData(data);
+    }
+  }
+
+  async fetchApplicationTaskData() {
+    this.log("📡 Fetching Glassdoor application task data from background");
+    const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
+    if (!success) {
+      throw new Error("Failed to request application task data");
+    }
+  }
+
+  async handleSuccessfulApplication() {
+    const jobTitle = this.extractJobTitle() || "Job on Glassdoor";
+    const jobId = this.extractJobIdFromUrl(window.location.href);
+
+    this.safeSendPortMessage({
+      type: "APPLICATION_SUCCESS",
+      data: {
+        jobId,
+        title: jobTitle,
+        company: "Company on Glassdoor",
+        location: "Not specified",
+        jobUrl: window.location.href,
+        platform: "glassdoor",
+      },
+    });
+
+    this.statusOverlay.addSuccess("Application completed successfully!");
+    this.applicationState.isApplicationInProgress = false;
+  }
+
+  handleApplicationError(error) {
+    this.safeSendPortMessage({
+      type: "APPLICATION_ERROR",
+      data: this.errorToString(error),
+    });
+    this.applicationState.isApplicationInProgress = false;
+  }
+
+  // ========================================
+  // HELPER UTILITIES
+  // ========================================
+
+  async fillFieldBySelectors(selectors, value) {
+    if (!value) return false;
+
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        await this.fillTextInput(element, value);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async fillTextInput(element, value) {
+    element.focus();
+    element.value = value;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.blur();
+  }
+
+  async fillTextarea(element, value) {
+    element.focus();
+    element.value = value;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.blur();
+  }
+
+  async fillSelect(element, value) {
+    const options = element.querySelectorAll("option");
+
+    for (const option of options) {
+      const optionText = option.textContent.toLowerCase();
+      const searchValue = value.toString().toLowerCase();
+
+      if (
+        optionText.includes(searchValue) ||
+        searchValue.includes(optionText)
+      ) {
+        element.value = option.value;
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+    }
+  }
+
+  async fillRadio(element, value, fieldLabel) {
+    const radioGroup = document.querySelectorAll(
+      `input[name="${element.name}"]`
+    );
+
+    for (const radio of radioGroup) {
+      const radioLabel = this.getRadioLabel(radio);
+      const searchValue = value.toString().toLowerCase();
+
+      if (radioLabel.toLowerCase().includes(searchValue)) {
+        radio.checked = true;
+        radio.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+    }
+  }
+
+  async fillCheckbox(element, value) {
+    const shouldCheck =
+      value && (value.toString().toLowerCase() === "yes" || value === true);
+    element.checked = shouldCheck;
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  getRadioLabel(radioElement) {
+    const sources = [
+      radioElement.labels?.[0]?.textContent,
+      radioElement.getAttribute("aria-label"),
+      radioElement.closest("label")?.textContent,
+      radioElement.nextElementSibling?.textContent,
+    ];
+
+    return sources.find((source) => source && source.trim()) || "";
   }
 
   async clickElementReliably(element) {
     const strategies = [
       () => element.click(),
-      () => element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+      () =>
+        element.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true })
+        ),
       () => {
         element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
@@ -1293,21 +1132,21 @@ This might be because:
       },
       () => {
         element.focus();
-        element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+        );
       },
     ];
 
-    // Scroll element into view first
     element.scrollIntoView({ behavior: "smooth", block: "center" });
-    await this.wait(500);
+    await this.delay(500);
 
     for (const strategy of strategies) {
       try {
         strategy();
-        await this.wait(1000);
+        await this.delay(1000);
         return true;
       } catch (error) {
-        this.log(`Click strategy failed: ${error.message}`);
         continue;
       }
     }
@@ -1315,476 +1154,95 @@ This might be because:
     throw new Error("All click strategies failed");
   }
 
-  async processApplicationForm(form) {
-    this.statusOverlay.addInfo("Found Glassdoor application form, filling it out");
+  isElementVisible(element) {
+    if (!element) return false;
 
-    const jobDescription = await this.extractGlassdoorJobDescription();
-
-    if (this.formHandler) {
-      this.formHandler.jobDescription = jobDescription;
-      this.formHandler.userData = this.userProfile;
-    }
-
-    // Handle file uploads
     try {
-      if (this.fileHandler && this.userProfile) {
-        await this.fileHandler.handleFileUploads(form, this.userProfile, jobDescription);
+      const style = window.getComputedStyle(element);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0"
+      ) {
+        return false;
       }
+
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
     } catch (error) {
-      this.statusOverlay.addError("File upload failed: " + error.message);
+      return false;
     }
-
-    // Fill form fields
-    try {
-      if (this.formHandler) {
-        await this.formHandler.fillFormWithProfile(form, this.userProfile, jobDescription);
-        this.statusOverlay.addSuccess("Form fields filled");
-      }
-    } catch (error) {
-      this.statusOverlay.addWarning("Form filling failed: " + error.message);
-    }
-
-    const submitButton = this.findSubmitButton(form);
-    if (!submitButton) {
-      throw new Error("Cannot find submit button");
-    }
-
-    return await this.submitForm(submitButton);
   }
 
-  findSubmitButton(form) {
-    // Use FormUtils if available, otherwise use fallback
-    if (typeof FormUtils !== 'undefined' && FormUtils.findSubmitButton) {
-      return FormUtils.findSubmitButton(form);
-    }
-    
-    // Fallback implementation
-    const submitSelectors = [
-      'button[type="submit"]',
-      'input[type="submit"]', 
-      'button:contains("Submit")',
-      'button:contains("Apply")',
-      '.submit-button',
-      '.apply-button'
-    ];
-    
-    for (const selector of submitSelectors) {
-      if (selector.includes(':contains(')) {
-        // Handle text-based selectors manually
-        const buttons = form.querySelectorAll('button');
-        for (const button of buttons) {
-          const text = button.textContent?.toLowerCase() || '';
-          if (selector.includes('Submit') && text.includes('submit')) {
-            return button;
-          }
-          if (selector.includes('Apply') && text.includes('apply')) {
-            return button;
-          }
+  async waitForElementWithTimeout(selector, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const element = document.querySelector(selector);
+      if (element) {
+        resolve(element);
+        return;
+      }
+
+      const observer = new MutationObserver((mutations) => {
+        const element = document.querySelector(selector);
+        if (element) {
+          observer.disconnect();
+          resolve(element);
         }
-      } else {
-        const element = form.querySelector(selector);
-        if (element && this.isElementVisible(element)) {
-          return element;
-        }
-      }
-    }
-    
-    return null;
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+      setTimeout(() => {
+        observer.disconnect();
+        reject(new Error(`Element ${selector} not found within ${timeout}ms`));
+      }, timeout);
+    });
   }
 
-  async submitForm(submitButton) {
-    this.statusOverlay.addInfo("Submitting Glassdoor application...");
-
-    this.scrollToElement(submitButton);
-    await this.wait(600);
-
-    try {
-      submitButton.click();
-      this.statusOverlay.addSuccess("Clicked submit button");
-      
-      // Wait for submission and check for success
-      await this.wait(this.glassdoorConfig.delays.pageLoad);
-      
-      // Check if application was successful
-      if (this.checkGlassdoorSubmissionSuccess()) {
-        await this.handleSuccessfulApplication();
-        return true;
-      }
-      
-    } catch (e) {
-      this.statusOverlay.addError("Failed to click submit button: " + e.message);
-    }
-    
-    return true;
-  }
-
-  scrollToElement(element) {
-    if (!element) return;
-    
-    try {
-      // Use DomUtils if available, otherwise use fallback
-      if (typeof DomUtils !== 'undefined' && DomUtils.scrollToElement) {
-        DomUtils.scrollToElement(element);
-      } else {
-        // Fallback implementation
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    } catch (error) {
-      // Fallback for older browsers
-      try {
-        element.scrollIntoView();
-      } catch (e) {
-        // If even basic scrollIntoView fails, continue without scrolling
-      }
-    }
-  }
-
-  // ========================================
-  // JOB DATA EXTRACTION METHODS
-  // ========================================
-
-  async extractGlassdoorJobDescription() {
-    try {
-      this.log("🔍 Extracting Glassdoor job details...");
-      this.statusOverlay.addInfo("Extracting job details...");
-
-      const jobDescription = {
-        title: this.extractText([
-          ".jobDescriptionContent h2",
-          '[data-test="job-title"]',
-          ".JobCard_jobTitle__GLyJ1",
-          "h1",
-        ]),
-        company: this.extractText([
-          ".EmployerProfile_compactEmployerName__9MGcV",
-          ".employer-name",
-          '[data-test="employer-name"]',
-          ".companyName",
-        ]),
-        location: this.extractText([
-          ".JobCard_location__Ds1fM",
-          'div[data-test="emp-location"]',
-          ".location",
-        ]),
-        salary: this.extractText([
-          '[data-test="detailSalary"]',
-          ".salaryEstimate",
-        ]),
-      };
-
-      const fullDescriptionElement = document.querySelector(
-        '.jobDescriptionContent, [data-test="description"], [data-test="jobDescriptionText"]'
-      );
-
-      if (fullDescriptionElement) {
-        jobDescription.fullDescription = fullDescriptionElement.textContent.trim();
-      }
-
-      this.log("✅ Glassdoor job details extracted:", jobDescription);
-      this.currentJobData = jobDescription;
-      return jobDescription;
-    } catch (error) {
-      this.log("❌ Error extracting Glassdoor job details:", error);
-      return { title: document.title || "Job Position" };
-    }
-  }
-
-  extractText(selectors) {
-    // Use DomUtils if available, otherwise use fallback
-    if (typeof DomUtils !== 'undefined' && DomUtils.extractText) {
-      return DomUtils.extractText(selectors);
-    }
-    
-    // Fallback implementation
+  extractJobTitle() {
+    const selectors = ["h1", ".job-title", "[data-testid='job-title']"];
     for (const selector of selectors) {
       const element = document.querySelector(selector);
-      if (element && element.textContent) {
-        return element.textContent.trim();
+      if (element) {
+        return element.textContent?.trim();
       }
     }
     return "";
   }
 
-  // ========================================
-  // SUCCESS AND ERROR HANDLING
-  // ========================================
-
-  checkGlassdoorSubmissionSuccess() {
-    // Check URL for success indicators
-    const url = window.location.href;
-    if (url.includes("success") || url.includes("confirmation") || url.includes("applied")) {
-      this.statusOverlay.addSuccess("URL indicates success - application submitted");
-      return true;
-    }
-
-    // Check for success messages
-    const successSelectors = [
-      ".success-message",
-      ".application-submitted",
-      '[data-test="application-success"]',
-      ".confirmation",
-    ];
-
-    for (const selector of successSelectors) {
-      if (document.querySelector(selector)) {
-        this.statusOverlay.addSuccess("Success message found - application submitted");
-        return true;
-      }
-    }
-
-    // Check for text indicators
-    const pageText = document.body.textContent.toLowerCase();
-    const successIndicators = [
-      "application submitted",
-      "application complete",
-      "thank you for applying",
-      "your application has been sent",
-    ];
-
-    if (successIndicators.some(indicator => pageText.includes(indicator))) {
-      this.statusOverlay.addSuccess("Success text found - application submitted");
-      return true;
-    }
-
-    return false;
-  }
-
-  checkPostApplyPage() {
-    const url = window.location.href;
-    return url.includes("smart-apply-action=POST_APPLY");
-  }
-
-  async handlePostApplyPage() {
-    this.log("📄 Detected POST_APPLY page - application completed");
-    this.statusOverlay.addSuccess("Application completed via POST_APPLY page");
-
-    const jobId = this.extractJobId(window.location.href);
-    const jobDetails = this.currentJobData || await this.extractGlassdoorJobDescription();
-
-    this.safeSendPortMessage({
-      type: "SEND_CV_TASK_DONE",
-      data: {
-        jobId: jobId,
-        title: jobDetails.title || "Job on Glassdoor",
-        company: jobDetails.company || "Company on Glassdoor",
-        location: jobDetails.location || "Not specified",
-        jobUrl: window.location.href,
-        platform: "glassdoor",
-      },
-    });
-
-    this.applicationState.isApplicationInProgress = false;
-  }
-
-  async handleAlreadyApplied() {
-    const jobId = this.extractJobId(window.location.href);
-    const jobDetails = this.currentJobData || await this.extractGlassdoorJobDescription();
-
-    this.safeSendPortMessage({
-      type: "SEND_CV_TASK_DONE",
-      data: {
-        jobId: jobId,
-        title: jobDetails.title || "Job on Glassdoor",
-        company: jobDetails.company || "Company on Glassdoor",
-        location: jobDetails.location || "Not specified",
-        jobUrl: window.location.href,
-        platform: "glassdoor",
-      },
-    });
-
-    this.applicationState.isApplicationInProgress = false;
-    this.statusOverlay.addSuccess("Application completed successfully");
-  }
-
-  async handleSuccessfulApplication(jobTitle = null) {
-    const jobDetails = this.currentJobData || await this.extractGlassdoorJobDescription();
-    const finalTitle = jobTitle || jobDetails.title || "Job on Glassdoor";
-
-    this.safeSendPortMessage({
-      type: "SEND_CV_TASK_DONE",
-      data: {
-        jobId: this.extractJobId(window.location.href),
-        title: finalTitle,
-        company: jobDetails.company || "Company on Glassdoor",
-        location: jobDetails.location || "Not specified",
-        jobUrl: window.location.href,
-        platform: "glassdoor",
-      },
-    });
-
-    this.applicationState.isApplicationInProgress = false;
-    this.statusOverlay.addSuccess("Application completed successfully");
-  }
-
-  extractJobId(url) {
-    // Use UrlUtils if available, otherwise use fallback
-    if (typeof UrlUtils !== 'undefined' && UrlUtils.extractJobId) {
-      return UrlUtils.extractJobId(url, "glassdoor");
-    }
-    
-    // Fallback implementation for Glassdoor
+  extractJobIdFromUrl(url) {
     try {
-      const match = url.match(/jobListingId=(\d+)/);
-      if (match && match[1]) {
-        return match[1];
-      }
-      
-      // Try alternative patterns
-      const jvMatch = url.match(/JV_KO[^_]+_KE[^_]+_(\d+)\.htm/);
-      if (jvMatch && jvMatch[1]) {
-        return jvMatch[1];
-      }
-      
-      return null;
+      const match = url.match(/JV_IC(\d+)/) || url.match(/jobListingId=(\d+)/);
+      return match ? match[1] : null;
     } catch (error) {
       return null;
     }
   }
 
-  handleApplicationError(error) {
-    if (error.name === "SendCvSkipError") {
-      this.statusOverlay.addWarning("Application skipped: " + error.message);
-      this.safeSendPortMessage({
-        type: "SEND_CV_TASK_SKIP",
-        data: error.message,
-      });
-    } else {
-      this.statusOverlay.addError("Application error: " + error.message);
-      this.safeSendPortMessage({
-        type: "SEND_CV_TASK_ERROR",
-        data: this.errorToString(error),
-      });
-    }
-    this.applicationState.isApplicationInProgress = false;
-  }
-
-  // ========================================
-  // VALIDATION AND UTILITY METHODS
-  // ========================================
-
-  validateHandlers() {
-    const issues = [];
-
-    if (!this.statusOverlay) issues.push("Status overlay not initialized");
-    if (!this.userProfile) issues.push("User profile not available");
-
-    if (issues.length > 0) {
-      this.statusOverlay?.addError("Initialization issues: " + issues.join(", "));
-      return false;
-    }
-
-    return true;
-  }
-
-  hasPageErrors() {
-    return (
-      document.body.innerText.includes("Page not found") ||
-      document.body.innerText.includes("Error") ||
-      window.location.href.includes("error")
-    );
-  }
-
-  async fetchSendCvTaskData() {
-    if (this.userProfile && this.hasSessionContext) {
-      this.log("✅ User profile already available from session context");
-      return;
-    }
-
-    this.log("📡 Fetching send CV task data from background");
-    this.statusOverlay.addInfo("Fetching CV task data...");
-
-    const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
-    if (!success) {
-      throw new Error("Failed to request send CV task data");
-    }
-  }
-
-  processSendCvTaskData(data) {
+  normalizeUrl(url) {
     try {
-      this.log("📊 Processing send CV task data:", data);
-
-      if (data?.profile && !this.userProfile) {
-        this.userProfile = data.profile;
-        this.log("👤 User profile set from background response");
-      }
-
-      if (this.formHandler && this.userProfile) {
-        this.formHandler.userData = this.userProfile;
-      }
-
-      this.statusOverlay.addSuccess("Apply initialization complete");
+      if (!url) return "";
+      return url.toLowerCase().replace(/\/+$/, "").trim();
     } catch (error) {
-      this.log("❌ Error processing send CV task data:", error);
-      this.statusOverlay.addError("Error processing CV data: " + error.message);
+      return url;
     }
   }
 
-  // ========================================
-  // MESSAGE HANDLING
-  // ========================================
-
-  handlePlatformSpecificMessage(type, data) {
-    switch (type) {
-      case "SUCCESS":
-        this.handleSuccessMessage(data);
-        break;
-
-      case "APPLICATION_STATUS_RESPONSE":
-        this.handleApplicationStatusResponse(data);
-        break;
-
-      case "JOB_TAB_STATUS":
-        this.handleJobTabStatus(data);
-        break;
-
-      default:
-        super.handlePlatformSpecificMessage(type, data);
+  async waitForPageLoad() {
+    if (document.readyState !== "complete") {
+      await new Promise((resolve) => {
+        if (document.readyState === "complete") {
+          resolve();
+        } else {
+          window.addEventListener("load", resolve, { once: true });
+        }
+      });
     }
-  }
 
-  handleSuccessMessage(data) {
-    if (data) {
-      if (data.submittedLinks !== undefined) {
-        this.processSearchTaskData(data);
-      } else if (data.profile !== undefined && !this.userProfile) {
-        this.processSendCvTaskData(data);
-      }
-    }
-  }
-
-  handleApplicationStatusResponse(data) {
-    this.log("📊 Application status response:", data);
-
-    if (data && data.active === false && this.applicationState.isApplicationInProgress) {
-      this.log("⚠️ State mismatch detected! Resetting application progress flag");
-      this.applicationState.isApplicationInProgress = false;
-      this.applicationState.applicationStartTime = null;
-      this.statusOverlay.addWarning("Detected state mismatch - resetting flags");
-      setTimeout(() => this.searchNext(), 1000);
-    }
-  }
-
-  handleJobTabStatus(data) {
-    this.log("📊 Job tab status:", data);
-    
-    if (data && !data.isOpen && this.applicationState.isApplicationInProgress) {
-      this.log("⚠️ Job tab closed, resetting application state");
-      this.applicationState.isApplicationInProgress = false;
-      this.applicationState.applicationStartTime = null;
-      setTimeout(() => this.searchNext(), 1000);
-    }
-  }
-
-  // ========================================
-  // UTILITY AND HELPER METHODS
-  // ========================================
-
-  errorToString(e) {
-    if (!e) return "Unknown error (no details)";
-    if (e instanceof Error) {
-      return e.message + (e.stack ? `\n${e.stack}` : "");
-    }
-    return String(e);
+    await this.delay(1000);
   }
 
   async waitForValidPage(timeout = 30000) {
@@ -1793,7 +1251,10 @@ This might be because:
     while (Date.now() - startTime < timeout) {
       const url = window.location.href;
 
-      if (url.includes("google.com/search") || this.isValidJobPage(url)) {
+      if (
+        url.includes("glassdoor.com") ||
+        url.includes("smartapply.indeed.com")
+      ) {
         await this.detectPageTypeAndStart();
         return;
       }
@@ -1801,122 +1262,30 @@ This might be because:
       await this.delay(1000);
     }
 
-    throw new Error("Timeout waiting for valid page");
+    throw new Error("Timeout waiting for valid Glassdoor page");
   }
 
-  resetApplicationStateOnError() {
-    this.applicationState.isApplicationInProgress = false;
-    this.applicationState.applicationStartTime = null;
-    this.applicationState.currentJobUrl = null;
-    this.applicationState.currentJobTabId = null;
-  }
-
-  setStuckDetectionTimeout() {
-    if (this.stuckDetectionTimeout) {
-      clearTimeout(this.stuckDetectionTimeout);
+  errorToString(e) {
+    if (e instanceof Error) {
+      return e.stack || e.message;
     }
-
-    this.stuckDetectionTimeout = setTimeout(() => {
-      if (this.applicationState.isApplicationInProgress) {
-        this.log("⚠️ Application appears stuck, resetting state");
-        this.statusOverlay.addWarning("Application timeout - resetting and continuing");
-        this.resetApplicationStateOnError();
-        setTimeout(() => this.searchNext(), 2000);
-      }
-    }, 300000); // 5 minute timeout
+    return String(e);
   }
-
-  // ========================================
-  // SESSION CONTEXT AND CLEANUP
-  // ========================================
 
   async setSessionContext(sessionContext) {
-    try {
-      this.sessionContext = sessionContext;
-      this.hasSessionContext = true;
-
-      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
-      if (sessionContext.platform) this.platform = sessionContext.platform;
-      if (sessionContext.userId) this.userId = sessionContext.userId;
-
-      if (sessionContext.userProfile) {
-        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
-          this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
-        } else {
-          this.userProfile = { ...this.userProfile, ...sessionContext.userProfile };
-          console.log("👤 User profile merged with session context");
-        }
-      }
-
-      if (!this.userProfile && this.userId) {
-        try {
-          console.log("📡 Fetching user profile from user service...");
-          this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
-        } catch (error) {
-          console.error("❌ Failed to fetch user profile:", error);
-          this.statusOverlay?.addError("Failed to fetch user profile: " + error.message);
-        }
-      }
-
-      if (this.userId && (!this.userService || this.userService.userId !== this.userId)) {
-        this.applicationTracker = new ApplicationTrackerService({ userId: this.userId });
-        this.userService = new UserService({ userId: this.userId });
-        console.log("📋 Updated services with new userId:", this.userId);
-      }
-
-      if (sessionContext.apiHost) {
-        this.sessionApiHost = sessionContext.apiHost;
-      }
-      
-      if (this.formHandler && this.userProfile) {
-        this.formHandler.userData = this.userProfile;
-      }
-
-      console.log("✅ Glassdoor session context set successfully", {
-        hasUserProfile: !!this.userProfile,
-        userId: this.userId,
-        sessionId: this.sessionId,
-        profileName: this.userProfile?.name || this.userProfile?.firstName,
-        profileEmail: this.userProfile?.email,
-      });
-    } catch (error) {
-      console.error("❌ Error setting Glassdoor session context:", error);
-      this.statusOverlay?.addError("❌ Error setting session context: " + error.message);
-    }
+    await super.setSessionContext(sessionContext);
+    this.log("✅ Glassdoor session context set successfully");
   }
 
   cleanup() {
     super.cleanup();
-    
+
     // Glassdoor-specific cleanup
-    this.processedJobCards.clear();
-    this.cachedJobDescription = null;
-    this.currentJobData = null;
-    this.lastCheckedUrl = null;
-
-    // Disconnect observers
-    if (this.modalObserver) {
-      this.modalObserver.disconnect();
-      this.modalObserver = null;
-    }
-
-    if (this.jobCardsObserver) {
-      this.jobCardsObserver.disconnect();
-      this.jobCardsObserver = null;
-    }
-
-    // Clear timeouts
-    if (this.jobCardCheckTimeout) {
-      clearTimeout(this.jobCardCheckTimeout);
-      this.jobCardCheckTimeout = null;
-    }
-
-    if (this.stuckDetectionTimeout) {
-      clearTimeout(this.stuckDetectionTimeout);
-      this.stuckDetectionTimeout = null;
-    }
+    this.jobQueue = [];
+    this.currentJobIndex = 0;
+    this.isLoadingMore = false;
+    this.queueInitialized = false;
+    this.searchProcessStarted = false;
 
     this.log("🧹 Glassdoor-specific cleanup completed");
   }

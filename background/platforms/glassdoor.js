@@ -1,89 +1,88 @@
-// background/platforms/glassdoor.js - NEW FILE
+// background/platforms/glassdoor.js - FIXED VERSION following Wellfound pattern
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
 
 export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "glassdoor"); // Pass platform name to base class
+    super(messageHandler, "glassdoor");
+
+    this.platformConfig = {
+      domains: ["https://www.glassdoor.com"],
+      searchLinkPattern:
+        /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply).*$/,
+      jobsPagePattern: /^https:\/\/(www\.)?glassdoor\.com\/Job\/.*-jobs-.*$/,
+      smartApplyPattern: /^https:\/\/smartapply\.indeed\.com/,
+    };
+
+    // Track application timeouts and states
+    this.applicationTimeouts = new Map();
+    this.processedCompletions = new Set();
+
+    this.log("🚀 GlassdoorAutomationHandler initialized with correct patterns");
   }
 
   /**
-   * Platform-specific message handling - only Glassdoor-specific logic here
+   * Handle platform-specific messages from content scripts
    */
   async handlePlatformSpecificMessage(type, data, port) {
+    const sessionId = this.getSessionIdFromPort(port);
+    const windowId = port.sender?.tab?.windowId;
+    const tabId = port.sender?.tab?.id;
+
+    console.log(
+      `📨 Handling Glassdoor message: ${type} for session ${sessionId}, tab ${tabId}`
+    );
+
     switch (type) {
       case "GET_SEARCH_TASK":
         await this.handleGetSearchTask(port, data);
         break;
 
       case "GET_SEND_CV_TASK":
+      case "GET_APPLICATION_TASK":
         await this.handleGetSendCvTask(port, data);
         break;
 
-      case "SEND_CV_TASK":
-        await this.handleSendCvTask(port, data);
+      case "START_APPLICATION":
+        await this.handleStartApplication(
+          port,
+          data,
+          sessionId,
+          windowId,
+          tabId
+        );
         break;
 
-      case "SEND_CV_TASK_DONE":
+      case "APPLICATION_SUCCESS":
         await this.handleTaskCompletion(port, data, "SUCCESS");
         break;
 
-      case "SEND_CV_TASK_ERROR":
+      case "APPLICATION_ERROR":
         await this.handleTaskCompletion(port, data, "ERROR");
         break;
 
-      case "SEND_CV_TASK_SKIP":
+      case "APPLICATION_SKIPPED":
         await this.handleTaskCompletion(port, data, "SKIPPED");
         break;
 
-      case "SEARCH_TASK_DONE":
-        await this.handleSearchTaskDone(port, data);
-        break;
-
       case "CHECK_APPLICATION_STATUS":
-      case "VERIFY_APPLICATION_STATUS":
-        await this.handleVerifyApplicationStatus(port, data);
-        break;
-
-      case "CHECK_JOB_TAB_STATUS":
-        await this.handleCheckJobTabStatus(port, data);
+        await this.handleCheckApplicationStatus(port, sessionId);
         break;
 
       case "SEARCH_NEXT_READY":
-        await this.handleSearchNextReady(port, data);
+        await this.handleSearchNextReady(port, sessionId);
         break;
 
       case "SEARCH_COMPLETED":
-        await this.handleSearchCompleted(port, data);
+        await this.handleSearchCompleted(port, sessionId, windowId);
         break;
 
       default:
-        console.log(`❓ Unhandled Glassdoor port message type: ${type}`);
+        console.warn(`❓ Unknown Glassdoor message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
         });
     }
-  }
-
-  async handleSearchCompleted(port, data) {
-    const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Glassdoor search completed for window ${windowId}`);
-
-    try {
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icons/icon48.png",
-        title: "Glassdoor Job Search Completed",
-        message: "All job applications have been processed.",
-      });
-    } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
-    }
-
-    this.safePortSend(port, {
-      type: "SUCCESS",
-      message: "Glassdoor search completion acknowledged",
-    });
   }
 
   /**
@@ -93,37 +92,95 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
+    console.log(
+      `🔍 GET_SEARCH_TASK request from Glassdoor tab ${tabId}, window ${windowId}`
+    );
+
     let sessionData = null;
+    let automation = null;
+
+    // Find automation by window ID
     for (const [
       sessionId,
-      automation,
+      auto,
     ] of this.messageHandler.activeAutomations.entries()) {
-      if (automation.windowId === windowId) {
-        const platformState = automation.platformState;
-        sessionData = {
-          tabId: tabId,
-          limit: platformState.searchData.limit,
-          current: platformState.searchData.current,
-          domain: platformState.searchData.domain,
-          submittedLinks: platformState.submittedLinks || [],
-          searchLinkPattern:
-            platformState.searchData.searchLinkPattern.toString(),
-        };
-
-        // Update search tab ID
-        platformState.searchTabId = tabId;
+      if (auto.windowId === windowId) {
+        automation = auto;
+        console.log(`✅ Found Glassdoor automation session: ${sessionId}`);
         break;
       }
     }
 
-    this.safePortSend(port, {
-      type: "SUCCESS",
-      data: sessionData || {},
+    if (automation) {
+      const platformState = automation.platformState;
+
+      // Safety check for searchLinkPattern
+      let searchLinkPatternString = "";
+      try {
+        if (platformState.searchData.searchLinkPattern) {
+          searchLinkPatternString =
+            platformState.searchData.searchLinkPattern.toString();
+        } else {
+          console.warn("⚠️ searchLinkPattern is null, using default pattern");
+          searchLinkPatternString =
+            this.platformConfig.searchLinkPattern.toString();
+        }
+      } catch (error) {
+        console.error(
+          "❌ Error converting searchLinkPattern to string:",
+          error
+        );
+        searchLinkPatternString =
+          this.platformConfig.searchLinkPattern.toString();
+      }
+
+      sessionData = {
+        tabId: tabId,
+        limit: platformState.searchData.limit,
+        current: platformState.searchData.current,
+        domain: platformState.searchData.domain,
+        submittedLinks: platformState.submittedLinks || [],
+        searchLinkPattern: searchLinkPatternString,
+      };
+
+      // Store the search tab ID properly
+      platformState.searchTabId = tabId;
+      automation.searchTabId = tabId;
+
+      console.log(`📊 Glassdoor session data prepared:`, sessionData);
+    } else {
+      console.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
+
+      // Provide default data structure to prevent errors
+      sessionData = {
+        tabId: tabId,
+        limit: 10,
+        current: 0,
+        domain: this.platformConfig.domains,
+        submittedLinks: [],
+        searchLinkPattern: this.platformConfig.searchLinkPattern.toString(),
+      };
+    }
+
+    // Send response with specific type
+    const sent = this.safePortSend(port, {
+      type: "SEARCH_TASK_DATA",
+      data: sessionData,
     });
+
+    if (!sent) {
+      console.error(
+        `❌ Failed to send Glassdoor search task data to port ${port.name}`
+      );
+    } else {
+      console.log(
+        `✅ Glassdoor search task data sent successfully to tab ${tabId}`
+      );
+    }
   }
 
   /**
-   * Handle CV task request - Glassdoor specific data structure
+   * Handle CV/Application task request - Glassdoor specific data structure
    */
   async handleGetSendCvTask(port, data) {
     const tabId = port.sender?.tab?.id;
@@ -184,7 +241,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Glassdoor session data prepared:`, {
+      console.log(`📊 Glassdoor application session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
@@ -192,6 +249,8 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       });
     } else {
       console.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
+
+      // Provide default data structure
       sessionData = {
         devMode: false,
         profile: null,
@@ -202,9 +261,9 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       };
     }
 
-    // Send response
+    // Send response with specific type
     const sent = this.safePortSend(port, {
-      type: "SUCCESS",
+      type: "APPLICATION_TASK_DATA",
       data: sessionData,
     });
 
@@ -220,18 +279,20 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
   }
 
   /**
-   * Handle CV task (opening job in new tab) - Glassdoor specific logic
+   * Handle application start request - Glassdoor specific logic (following Wellfound pattern)
    */
-  async handleSendCvTask(port, data) {
+  async handleStartApplication(port, data, sessionId, windowId, tabId) {
     try {
-      const { url, title } = data;
-      const windowId = port.sender?.tab?.windowId;
+      const { url, title, company, location, salary } = data;
 
-      console.log(`🎯 Opening Glassdoor job in new tab: ${url}`);
+      console.log(
+        `🎯 Starting Glassdoor application for: ${title} (${url}) in tab ${tabId}`
+      );
 
+      // Find the automation instance
       let automation = null;
       for (const [
-        sessionId,
+        sid,
         auto,
       ] of this.messageHandler.activeAutomations.entries()) {
         if (auto.windowId === windowId) {
@@ -241,166 +302,318 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       }
 
       if (!automation) {
-        throw new Error("No Glassdoor automation session found");
+        throw new Error(`No automation found for window ${windowId}`);
       }
 
+      // Check if already processing
       if (automation.platformState.isProcessingJob) {
-        this.safePortSend(port, {
-          type: "ERROR",
-          message: "Already processing another job",
-        });
-        return;
-      }
-
-      // Check for duplicates
-      const normalizedUrl = this.messageHandler.normalizeUrl(url);
-      if (
-        automation.platformState.submittedLinks?.some(
-          (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
-        )
-      ) {
+        console.log(
+          `⚠️ Glassdoor automation already processing job, ignoring duplicate request`
+        );
         this.safePortSend(port, {
           type: "DUPLICATE",
-          message: "This job has already been processed",
-          data: { url },
+          message: "Already processing a job application",
         });
         return;
       }
 
-      // Create new tab for job application
-      const tab = await chrome.tabs.create({
-        url: url,
-        windowId: windowId,
-        active: true,
-      });
+      // Validate URL format
+      if (!this.isValidGlassdoorJobUrl(url)) {
+        throw new Error(`Invalid Glassdoor job URL: ${url}`);
+      }
 
-      // Update automation state
+      // Check if already applied
+      const normalizedUrl = this.messageHandler.normalizeUrl(url);
+      const alreadyApplied = automation.platformState.submittedLinks.some(
+        (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
+      );
+
+      if (alreadyApplied) {
+        console.log(`🔄 Job already applied: ${url}`);
+        this.safePortSend(port, {
+          type: "DUPLICATE",
+          data: { url, message: "Already applied to this job" },
+        });
+        return;
+      }
+
+      // Set processing state
       automation.platformState.isProcessingJob = true;
       automation.platformState.currentJobUrl = url;
-      automation.platformState.currentJobTabId = tab.id;
       automation.platformState.applicationStartTime = Date.now();
 
-      // Add to submitted links
-      if (!automation.platformState.submittedLinks) {
-        automation.platformState.submittedLinks = [];
-      }
-      automation.platformState.submittedLinks.push({
+      // Set application timeout (5 minutes)
+      const timeoutId = setTimeout(() => {
+        console.log(`⏰ Glassdoor application timeout for ${url}`);
+        this.handleApplicationTimeout(automation, url, null);
+      }, 300000);
+
+      this.applicationTimeouts.set(url, timeoutId);
+
+      // Create new tab for application (key difference from modal approach)
+      const jobTab = await chrome.tabs.create({
         url: url,
-        status: "PROCESSING",
+        windowId: windowId,
+        active: false, // Don't steal focus from search tab
+      });
+
+      automation.platformState.currentJobTabId = jobTab.id;
+
+      console.log(
+        `✅ Created Glassdoor job tab ${jobTab.id} for ${url} in window ${windowId}`
+      );
+
+      // Send confirmation to search tab
+      this.safePortSend(port, {
+        type: "SUCCESS",
+        message: `Started application for ${title}`,
+        data: { url, tabId: jobTab.id },
+      });
+
+      // Notify session manager
+      await this.messageHandler.sessionManager.addNotification(sessionId, {
+        type: "application_started",
+        jobUrl: url,
+        jobTitle: title,
+        tabId: jobTab.id,
+      });
+    } catch (error) {
+      console.error(`❌ Error starting Glassdoor application:`, error);
+
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: `Failed to start application: ${error.message}`,
+        data: { url: data.url },
+      });
+
+      // Clean up on error
+      const automation = this.findAutomationByWindow(windowId);
+      if (automation) {
+        automation.platformState.isProcessingJob = false;
+        automation.platformState.currentJobUrl = null;
+        automation.platformState.applicationStartTime = null;
+      }
+    }
+  }
+
+  /**
+   * Handle application timeout
+   */
+  async handleApplicationTimeout(automation, url, tabId) {
+    try {
+      console.log(
+        `⏰ Glassdoor application timeout for ${url} in tab ${tabId}`
+      );
+
+      // Clear timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      // Close the tab if it exists
+      if (tabId) {
+        try {
+          await chrome.tabs.remove(tabId);
+        } catch (error) {
+          console.warn(`⚠️ Error closing timeout tab ${tabId}:`, error);
+        }
+      }
+
+      // Reset automation state
+      automation.platformState.isProcessingJob = false;
+      automation.platformState.currentJobUrl = null;
+      automation.platformState.currentJobTabId = null;
+      automation.platformState.applicationStartTime = null;
+
+      // Mark as timeout in submitted links
+      automation.platformState.submittedLinks.push({
+        url,
+        status: "TIMEOUT",
+        message: "Application timed out after 5 minutes",
         timestamp: Date.now(),
       });
 
-      this.safePortSend(port, {
-        type: "SUCCESS",
-        message: "Glassdoor apply tab will be created",
+      // Send search next to continue automation
+      await this.sendSearchNextMessage(automation.windowId, {
+        url,
+        status: "TIMEOUT",
+        message: "Application timed out",
       });
-
-      console.log(`✅ Glassdoor job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      console.error("❌ Error handling Glassdoor SEND_CV_TASK:", error);
+      console.error(`❌ Error handling Glassdoor application timeout:`, error);
+    }
+  }
+
+  /**
+   * Handle check application status
+   */
+  async handleCheckApplicationStatus(port, sessionId) {
+    try {
+      const automation = this.findAutomationBySession(sessionId);
+      if (!automation) {
+        this.safePortSend(port, {
+          type: "ERROR",
+          message: "Automation session not found",
+        });
+        return;
+      }
+
+      const status = {
+        isProcessingJob: automation.platformState.isProcessingJob,
+        currentJobUrl: automation.platformState.currentJobUrl,
+        applicationStartTime: automation.platformState.applicationStartTime,
+        currentJobTabId: automation.platformState.currentJobTabId,
+      };
+
+      this.safePortSend(port, {
+        type: "APPLICATION_STATUS",
+        data: status,
+      });
+    } catch (error) {
+      console.error(`❌ Error checking Glassdoor application status:`, error);
       this.safePortSend(port, {
         type: "ERROR",
-        message: error.message,
+        message: "Failed to check application status",
       });
     }
-  }
-
-  /**
-   * Handle search task completion
-   */
-  async handleSearchTaskDone(port, data) {
-    const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Glassdoor search task completed for window ${windowId}`);
-
-    try {
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icons/icon48.png",
-        title: "Glassdoor Job Search Completed",
-        message: "All job applications have been processed.",
-      });
-    } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
-    }
-
-    this.safePortSend(port, {
-      type: "SUCCESS",
-      message: "Glassdoor search completion acknowledged",
-    });
-  }
-
-  /**
-   * Handle application status verification
-   */
-  async handleVerifyApplicationStatus(port, data) {
-    const windowId = port.sender?.tab?.windowId;
-
-    let automation = null;
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
-      if (auto.windowId === windowId) {
-        automation = auto;
-        break;
-      }
-    }
-
-    const isActive = automation
-      ? automation.platformState.isProcessingJob
-      : false;
-
-    this.safePortSend(port, {
-      type: "APPLICATION_STATUS_RESPONSE",
-      data: {
-        active: isActive,
-        url: automation?.platformState.currentJobUrl || null,
-        tabId: automation?.platformState.currentJobTabId || null,
-      },
-    });
-  }
-
-  /**
-   * Handle job tab status check
-   */
-  async handleCheckJobTabStatus(port, data) {
-    const windowId = port.sender?.tab?.windowId;
-
-    let automation = null;
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
-      if (auto.windowId === windowId) {
-        automation = auto;
-        break;
-      }
-    }
-
-    const isOpen = automation
-      ? automation.platformState.isProcessingJob
-      : false;
-
-    this.safePortSend(port, {
-      type: "JOB_TAB_STATUS",
-      data: {
-        isOpen: isOpen,
-        tabId: automation?.platformState.currentJobTabId || null,
-        isProcessing: isOpen,
-      },
-    });
   }
 
   /**
    * Handle search next ready notification
    */
-  async handleSearchNextReady(port, data) {
-    console.log("🔄 Glassdoor search ready for next job");
-
+  async handleSearchNextReady(port, sessionId) {
+    console.log(`📋 Glassdoor search ready for session ${sessionId}`);
     this.safePortSend(port, {
-      type: "NEXT_READY_ACKNOWLEDGED",
-      data: { status: "success" },
+      type: "SUCCESS",
+      message: "Search next ready acknowledged",
     });
+  }
+
+  /**
+   * Handle search completion
+   */
+  async handleSearchCompleted(port, sessionId, windowId) {
+    try {
+      console.log(`🏁 Glassdoor search completed for session ${sessionId}`);
+
+      const automation = this.findAutomationBySession(sessionId);
+      if (automation) {
+        // Mark automation as completed
+        automation.status = "completed";
+        automation.endTime = Date.now();
+
+        // Update session
+        await this.messageHandler.sessionManager.updateSession(sessionId, {
+          status: "completed",
+          completedAt: Date.now(),
+        });
+
+        // Notify session manager
+        await this.messageHandler.sessionManager.addNotification(sessionId, {
+          type: "automation_completed",
+          completedJobs: automation.platformState.submittedLinks.length,
+          totalTime: Date.now() - automation.startTime,
+        });
+      }
+
+      // Show completion notification
+      try {
+        chrome.notifications.create({
+          type: "basic",
+          iconUrl: "icons/icon48.png",
+          title: "Glassdoor Job Automation Completed",
+          message: "All job applications have been processed.",
+        });
+      } catch (error) {
+        console.warn("⚠️ Error showing notification:", error);
+      }
+
+      this.safePortSend(port, {
+        type: "SUCCESS",
+        message: "Search completion acknowledged",
+      });
+    } catch (error) {
+      console.error(`❌ Error handling Glassdoor search completion:`, error);
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: "Failed to handle search completion",
+      });
+    }
+  }
+
+  /**
+   * Override task completion handling for Glassdoor-specific logic
+   */
+  async handleTaskCompletion(port, data, status) {
+    try {
+      // Clear any application timeout
+      if (data && data.url && this.applicationTimeouts.has(data.url)) {
+        clearTimeout(this.applicationTimeouts.get(data.url));
+        this.applicationTimeouts.delete(data.url);
+      }
+
+      // Close the application tab if it exists
+      const tabId = port.sender?.tab?.id;
+      if (tabId) {
+        try {
+          await chrome.tabs.remove(tabId);
+          console.log(`✅ Closed Glassdoor application tab ${tabId}`);
+        } catch (error) {
+          console.warn(`⚠️ Error closing application tab ${tabId}:`, error);
+        }
+      }
+
+      // Call parent method for common completion logic
+      await super.handleTaskCompletion(port, data, status);
+    } catch (error) {
+      console.error(`❌ Error handling Glassdoor task completion:`, error);
+    }
+  }
+
+  /**
+   * Validate Glassdoor job URL
+   */
+  isValidGlassdoorJobUrl(url) {
+    try {
+      if (!url) return false;
+
+      // Check if it's a Glassdoor domain or SmartApply
+      if (
+        !url.includes("glassdoor.com") &&
+        !url.includes("smartapply.indeed.com")
+      ) {
+        return false;
+      }
+
+      // Check if it matches job URL pattern
+      return (
+        this.platformConfig.searchLinkPattern.test(url) ||
+        this.platformConfig.smartApplyPattern.test(url)
+      );
+    } catch (error) {
+      console.error("Error validating Glassdoor URL:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Find automation by session ID
+   */
+  findAutomationBySession(sessionId) {
+    return this.messageHandler.activeAutomations.get(sessionId);
+  }
+
+  /**
+   * Find automation by window ID
+   */
+  findAutomationByWindow(windowId) {
+    for (const automation of this.messageHandler.activeAutomations.values()) {
+      if (automation.windowId === windowId) {
+        return automation;
+      }
+    }
+    return null;
   }
 
   /**
@@ -412,23 +625,72 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     }
 
     const oldUrl = automation.platformState.currentJobUrl;
-
-    // Glassdoor-specific delay logic
     const errorCount = this.errorCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
-      await this.sendSearchNextMessage(windowId, {
-        url: oldUrl,
-        status: status,
-        data: data,
-        message:
-          typeof data === "string"
-            ? data
-            : status === "ERROR"
-            ? "Application error"
-            : undefined,
-      });
+      const searchTabId =
+        automation.searchTabId || automation.platformState.searchTabId;
+
+      if (searchTabId) {
+        try {
+          await chrome.tabs.sendMessage(searchTabId, {
+            action: "platformMessage",
+            type: "SEARCH_NEXT",
+            data: {
+              url: oldUrl,
+              status: status,
+              data: data,
+              message:
+                typeof data === "string"
+                  ? data
+                  : status === "ERROR"
+                  ? "Application error"
+                  : undefined,
+              submittedLinks: automation.platformState.submittedLinks || [],
+              current: automation.platformState.searchData.current || 0,
+            },
+          });
+          console.log(
+            `✅ Sent SEARCH_NEXT with updated data to Glassdoor search tab ${searchTabId}`
+          );
+        } catch (error) {
+          console.error(
+            `❌ Failed to send SEARCH_NEXT to tab ${searchTabId}:`,
+            error
+          );
+        }
+      } else {
+        console.error("❌ No search tab ID available for Glassdoor");
+      }
     }, delay);
+  }
+
+  /**
+   * Enhanced cleanup for Glassdoor-specific resources
+   */
+  cleanup() {
+    console.log("🧹 Starting GlassdoorAutomationHandler cleanup");
+
+    // Clear all application timeouts
+    for (const timeoutId of this.applicationTimeouts.values()) {
+      clearTimeout(timeoutId);
+    }
+    this.applicationTimeouts.clear();
+
+    // Clear processed completions
+    this.processedCompletions.clear();
+
+    // Call parent cleanup
+    super.cleanup();
+
+    console.log("✅ GlassdoorAutomationHandler cleanup completed");
+  }
+
+  /**
+   * Logging with platform context
+   */
+  log(message, data = {}) {
+    console.log(`🔷 [GlassdoorHandler] ${message}`, data);
   }
 }
