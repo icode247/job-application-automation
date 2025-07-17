@@ -1134,9 +1134,9 @@ export default class LinkedInPlatform extends BasePlatform {
     }
 
     const questions = document.querySelectorAll(".fb-dash-form-element");
-    // for (const question of questions) {
-    //   await this.handleQuestion(question);
-    // }
+    for (const question of questions) {
+      await this.handleQuestion(question);
+    }
   }
 
   async handleQuestion(question) {

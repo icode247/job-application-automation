@@ -496,10 +496,7 @@ export default class AutomationOrchestrator {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
       : "software engineer";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` "${preferences.location[0]}"`
-        : "";
+    const location = preferences.location[0];
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -514,10 +511,7 @@ export default class AutomationOrchestrator {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
       : "software engineer";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` "${preferences.location[0]}"`
-        : "";
+    const location = preferences.location[0];
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -532,10 +526,7 @@ export default class AutomationOrchestrator {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
       : "software engineer";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` "${preferences.location[0]}"`
-        : "";
+    const location = preferences.location[0];
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -750,10 +741,7 @@ export default class AutomationOrchestrator {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
       : "software engineer";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` "${preferences.location[0]}"`
-        : "";
+    const location = preferences.location[0];
 
     return `https://www.google.com/search?q=site:myworkdayjobs.com+"${encodeURIComponent(
       keywords
@@ -764,10 +752,7 @@ export default class AutomationOrchestrator {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
       : "software engineer";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` "${preferences.location[0]}"`
-        : "";
+    const location = preferences.location[0];
 
     return `https://www.google.com/search?q=site:recruitee.com+"${encodeURIComponent(
       keywords
@@ -778,10 +763,7 @@ export default class AutomationOrchestrator {
     const keywords = preferences.positions?.length
       ? preferences.positions.join(" OR ")
       : "software engineer";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` "${preferences.location[0]}"`
-        : "";
+    const location = preferences.location[0];
 
     return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(
       keywords

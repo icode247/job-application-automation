@@ -64,9 +64,15 @@ export default class LeverFileHandler {
 
           if (result) {
             successCount++;
-            this.showStatus(`✅ File input ${uploadCount} processed successfully`, "success");
+            this.showStatus(
+              `✅ File input ${uploadCount} processed successfully`,
+              "success"
+            );
           } else {
-            this.showStatus(`⚠️ File input ${uploadCount} processing failed`, "warning");
+            this.showStatus(
+              `⚠️ File input ${uploadCount} processing failed`,
+              "warning"
+            );
           }
         } catch (error) {
           this.showStatus(
@@ -96,8 +102,14 @@ export default class LeverFileHandler {
    * Get a unique identifier for file input to prevent duplicate processing
    */
   getInputIdentifier(fileInput) {
-    return fileInput.id || fileInput.name || fileInput.getAttribute('data-qa') || 
-           `input-${Array.from(fileInput.form?.querySelectorAll('input[type="file"]') || []).indexOf(fileInput)}`;
+    return (
+      fileInput.id ||
+      fileInput.name ||
+      fileInput.getAttribute("data-qa") ||
+      `input-${Array.from(
+        fileInput.form?.querySelectorAll('input[type="file"]') || []
+      ).indexOf(fileInput)}`
+    );
   }
 
   /**
@@ -107,11 +119,11 @@ export default class LeverFileHandler {
     try {
       // Decode the URL first to handle encoded characters
       const decodedUrl = decodeURIComponent(url);
-      
+
       // Extract filename from the decoded URL
       const urlObj = new URL(decodedUrl);
       let fileName = urlObj.pathname.split("/").pop();
-      
+
       // If still encoded or malformed, try different approach
       if (!fileName || !fileName.includes(".") || fileName.includes("%")) {
         // Try to extract from the original URL parts
@@ -129,16 +141,16 @@ export default class LeverFileHandler {
       if (fileName && fileName.includes(".")) {
         // Remove any remaining URL encoding and invalid characters
         fileName = fileName
-          .replace(/%[0-9A-F]{2}/gi, '') // Remove any remaining URL encoding
-          .replace(/[^\w\s.-]/gi, '') // Remove invalid filename characters
-          .replace(/\s+/g, '_') // Replace spaces with underscores
+          .replace(/%[0-9A-F]{2}/gi, "") // Remove any remaining URL encoding
+          .replace(/[^\w\s.-]/gi, "") // Remove invalid filename characters
+          .replace(/\s+/g, "_") // Replace spaces with underscores
           .trim();
-        
+
         // Ensure it has a valid extension
         if (!fileName.match(/\.(pdf|doc|docx)$/i)) {
-          fileName += '.pdf';
+          fileName += ".pdf";
         }
-        
+
         return fileName;
       }
 
@@ -159,7 +171,7 @@ export default class LeverFileHandler {
     return new Promise((resolve) => {
       const startTime = Date.now();
       let checkCount = 0;
-      let lastErrorMessage = '';
+      let lastErrorMessage = "";
 
       const checkUpload = () => {
         checkCount++;
@@ -177,21 +189,24 @@ export default class LeverFileHandler {
         // Look for success indicators first
         const successSelectors = [
           ".upload-success",
-          ".file-uploaded", 
+          ".file-uploaded",
           ".upload-complete",
           ".success-message",
           ".file-success",
           ".uploaded",
           ".file-name", // Lever often shows filename when uploaded
           ".filename",
-          ".selected-file"
+          ".selected-file",
         ];
 
         // Check for success
         for (const selector of successSelectors) {
           const element = container?.querySelector(selector);
           if (element && element.textContent.trim()) {
-            console.log(`✅ Success indicator found: ${selector}`, element.textContent.trim());
+            console.log(
+              `✅ Success indicator found: ${selector}`,
+              element.textContent.trim()
+            );
             resolve(true);
             return;
           }
@@ -201,9 +216,11 @@ export default class LeverFileHandler {
         if (fileInput.files && fileInput.files.length > 0) {
           const fileName = fileInput.files[0].name;
           // Look for the filename being displayed somewhere in the container
-          const containerText = container?.textContent || '';
-          if (containerText.includes(fileName.split('.')[0])) {
-            console.log(`✅ Filename found in container text, assuming success`);
+          const containerText = container?.textContent || "";
+          if (containerText.includes(fileName.split(".")[0])) {
+            console.log(
+              `✅ Filename found in container text, assuming success`
+            );
             resolve(true);
             return;
           }
@@ -212,12 +229,12 @@ export default class LeverFileHandler {
         // Enhanced error detection - look for specific error types
         const errorSelectors = [
           ".upload-error",
-          ".file-error", 
+          ".file-error",
           ".error-message",
           ".upload-failed",
           ".file-failed",
           ".error",
-          ".validation-error"
+          ".validation-error",
         ];
 
         // Check for errors, but be more selective
@@ -225,20 +242,23 @@ export default class LeverFileHandler {
           const element = container?.querySelector(selector);
           if (element && element.textContent.trim()) {
             const errorText = element.textContent.trim();
-            
+
             // Ignore certain generic errors that might not be related to our upload
             const ignoredErrors = [
-              'File exceeds the maximum upload size of 100MB', // This seems to be a generic error
-              'Please select a file', // This means no file was selected, but we did select one
-              'Invalid file type' // Only worry about this if our file type is actually invalid
+              "File exceeds the maximum upload size of 100MB", // This seems to be a generic error
+              "Please select a file", // This means no file was selected, but we did select one
+              "Invalid file type", // Only worry about this if our file type is actually invalid
             ];
-            
-            const isIgnoredError = ignoredErrors.some(ignored => 
+
+            const isIgnoredError = ignoredErrors.some((ignored) =>
               errorText.includes(ignored)
             );
-            
+
             if (!isIgnoredError) {
-              console.log(`❌ Real error indicator found: ${selector}`, errorText);
+              console.log(
+                `❌ Real error indicator found: ${selector}`,
+                errorText
+              );
               resolve(false);
               return;
             } else {
@@ -251,10 +271,12 @@ export default class LeverFileHandler {
         // Check for file input state - if it still has files, that's usually good
         if (fileInput.files && fileInput.files.length > 0) {
           const file = fileInput.files[0];
-          
+
           // After 10 seconds, if file is still there and no real errors, assume success
           if (elapsed > 10000) {
-            console.log(`✅ File still present after 10s, assuming upload success: ${file.name}`);
+            console.log(
+              `✅ File still present after 10s, assuming upload success: ${file.name}`
+            );
             resolve(true);
             return;
           }
@@ -263,10 +285,16 @@ export default class LeverFileHandler {
         // Timeout check - be more optimistic
         if (elapsed > timeout) {
           console.log(`⏰ Upload wait timeout reached: ${elapsed}ms`);
-          
+
           // If we have the file in input and no real errors, assume success
-          if (fileInput.files && fileInput.files.length > 0 && !lastErrorMessage.includes('Invalid')) {
-            console.log(`✅ Timeout reached but file present, assuming success`);
+          if (
+            fileInput.files &&
+            fileInput.files.length > 0 &&
+            !lastErrorMessage.includes("Invalid")
+          ) {
+            console.log(
+              `✅ Timeout reached but file present, assuming success`
+            );
             resolve(true);
           } else {
             console.log(`❌ Timeout reached with issues`);
@@ -430,7 +458,10 @@ export default class LeverFileHandler {
           fileUrls
         );
       } else {
-        this.showStatus("Matching resume to job description, please wait...", "info");
+        this.showStatus(
+          "Matching resume to job description, please wait...",
+          "info"
+        );
         return await this.matchAndUploadResume(
           fileInput,
           userDetails,
@@ -551,18 +582,37 @@ export default class LeverFileHandler {
    * Match and upload best resume for the job with enhanced logging
    */
   async matchAndUploadResume(fileInput, userDetails, jobDescription, fileUrls) {
-    try {
-      this.showStatus(
-        "Matching resume to job description, please wait...",
-        "info"
-      );
+    const formattedJobDescription = `
+    🧑‍💻 Job Title: ${jobDescription.title}
+    🏢 Company: ${jobDescription.company}
+    🗂 Department: ${jobDescription.department.replace(/\/$/, "").trim()}
+    📍 Location: ${jobDescription.location} (${jobDescription.workplaceType})
+    🕒 Commitment: ${jobDescription.commitment.replace(/\/$/, "").trim()}
+    🏠 Workplace Type: ${jobDescription.workplaceType}
+    
+    ---
+    
+    Job Description:
+    ${
+      jobDescription.fullDescription ||
+      `${jobDescription.company} is looking for a ${
+        jobDescription.title
+      } to join our ${jobDescription.department
+        .replace(/\/$/, "")
+        .trim()} team. This is a ${jobDescription.commitment
+        .replace(/\/$/, "")
+        .trim()
+        .toLowerCase()} remote position based in ${jobDescription.location}.`
+    }
+    `;
 
+    try {
       const matchResponse = await fetch(`${this.aiBaseUrl}/match`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           resume_urls: fileUrls,
-          job_description: jobDescription,
+          job_description: formattedJobDescription,
         }),
       });
 
@@ -595,28 +645,6 @@ export default class LeverFileHandler {
         "warning"
       );
       return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
-    }
-  }
-
-  /**
-   * Handle cover letter upload
-   */
-  async handleCoverLetterUpload(
-    fileInput,
-    userDetails,
-    jobDescription,
-    fileUrls
-  ) {
-    try {
-      // For now, just upload the existing cover letter
-      // TODO: Implement AI-generated cover letters for Lever
-      if (fileUrls.length > 0) {
-        return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
-      }
-      return false;
-    } catch (error) {
-      console.error("Error handling cover letter upload:", error);
-      return false;
     }
   }
 
@@ -841,15 +869,12 @@ export default class LeverFileHandler {
   getFileUrls(userDetails, fileType) {
     switch (fileType) {
       case "resume":
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        return userDetails.resumeUrl;
+
       case "coverLetter":
-        return userDetails.coverLetterUrl ? [userDetails.coverLetterUrl] : [];
+        return userDetails.coverLetterUrl;
       default:
-        return userDetails.resumeUrl
-          ? [userDetails.resumeUrl]
-          : userDetails.resumeUrls || [];
+        return userDetails.resumeUrl;
     }
   }
 

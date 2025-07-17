@@ -8,10 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-//Application error: Error during application process: DomUtils is not defined ReferenceError: DomUtils is not defined at
-// FormUtils.findSubmitButton (chrome-extension://bjohmhedpgcadjaeakhcaei
-//   fijjbdefi/shared/utilities/form-utils.js:487:21) at
-//   WorkablePlatform.processApplication
+
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
