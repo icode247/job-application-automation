@@ -6,7 +6,7 @@ import {
   UserService,
 } from "../../services/index.js";
 //❌ No jobs found on this page
-//no Easy Apply button found 
+//no Easy Apply button found
 export default class GlassdoorPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -1288,5 +1288,650 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     this.searchProcessStarted = false;
 
     this.log("🧹 Glassdoor-specific cleanup completed");
+  }
+
+  //_+++++++++++++++++++++++++++++++++++
+
+  /**
+   * Enhanced process job card - clicks card first to reveal details
+   */
+  async processGlassdoorJobCard(jobData) {
+    const { card, url, cardId } = jobData;
+
+    this.statusOverlay.addInfo("Found Glassdoor job card - loading details...");
+    this.processedJobCards.add(cardId);
+
+    if (this.applicationState.isApplicationInProgress) {
+      this.log("Application became in progress, aborting new task");
+      return;
+    }
+
+    // Step 1: Click the job card first to expand details
+    this.markJobCardAsProcessing(card);
+
+    try {
+      this.statusOverlay.addInfo("Clicking job card to load details...");
+      await this.clickJobCardToExpandDetails(card);
+
+      // Step 2: Wait for job details to load
+      this.statusOverlay.addInfo("Waiting for job details to load...");
+      await this.waitForJobDetailsToLoad();
+
+      // Step 3: Check for Easy Apply after details are loaded
+      const hasEasyApplyNow = await this.checkForEasyApplyAfterExpansion();
+
+      if (!hasEasyApplyNow) {
+        this.statusOverlay.addWarning(
+          "No Easy Apply available for this job - skipping"
+        );
+        this.markJobCardAsSkipped(card, "No Easy Apply");
+        return;
+      }
+
+      // Step 4: Now proceed with application
+      this.statusOverlay.addSuccess(
+        "Easy Apply found - proceeding with application! 🎯"
+      );
+      await this.proceedWithJobApplication(card, url, cardId);
+    } catch (error) {
+      this.log("Error processing Glassdoor job card:", error);
+      this.handleJobCardError(card, error);
+    }
+  }
+
+  /**
+   * Click job card to expand and show details
+   */
+  async clickJobCardToExpandDetails(card) {
+    // Find the clickable area of the job card
+    const clickableSelectors = [
+      'a[data-test="job-link"]', // Main job link
+      ".JobCard_trackingLink__HMyun", // Glassdoor job card link
+      ".JobCard_jobTitle__GLyJ1 a", // Job title link
+      ".job-title a", // Generic job title
+      "h3 a", // Heading link
+      ".jobTitle a", // Alternative job title
+    ];
+
+    let clickableElement = null;
+
+    // Try to find a clickable element within the card
+    for (const selector of clickableSelectors) {
+      const element = card.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        clickableElement = element;
+        break;
+      }
+    }
+
+    // If no specific link found, try clicking the card itself
+    if (!clickableElement) {
+      clickableElement = card;
+    }
+
+    this.log(
+      `Clicking job card element: ${clickableElement.tagName}${
+        clickableElement.className ? "." + clickableElement.className : ""
+      }`
+    );
+
+    try {
+      // Scroll element into view
+      clickableElement.scrollIntoView({ behavior: "smooth", block: "center" });
+      await this.delay(500);
+
+      // Try multiple click strategies
+      await this.clickElementReliably(clickableElement);
+
+      this.log("✅ Job card clicked successfully");
+      return true;
+    } catch (error) {
+      throw new Error(`Failed to click job card: ${error.message}`);
+    }
+  }
+
+  /**
+   * Wait for job details to load after clicking card
+   */
+  async waitForJobDetailsToLoad(timeout = 10000) {
+    const startTime = Date.now();
+
+    this.log("⏳ Waiting for job details to load...");
+
+    while (Date.now() - startTime < timeout) {
+      // Check for various indicators that job details have loaded
+      const detailsLoaded = await this.checkIfJobDetailsLoaded();
+
+      if (detailsLoaded) {
+        this.log("✅ Job details loaded successfully");
+        return true;
+      }
+
+      await this.delay(500);
+    }
+
+    throw new Error("Timeout waiting for job details to load");
+  }
+
+  /**
+   * Check if job details have loaded
+   */
+  async checkIfJobDetailsLoaded() {
+    // Check for indicators that job details are now visible
+    const detailIndicators = [
+      'button[data-test="easyApply"]', // Easy Apply button
+      ".EasyApplyButton_content__1cGPo", // Easy Apply button content
+      ".jobDescriptionContent", // Job description
+      '[data-test="jobDescriptionText"]', // Job description text
+      ".JobDetails_jobDescription__uW_fK", // Job details description
+      ".applyButton", // Apply button
+      ".job-description", // Generic job description
+      '[data-test="detailSalary"]', // Salary details
+      ".JobCard_salaryEstimate__QpbTW", // Salary estimate
+    ];
+
+    for (const selector of detailIndicators) {
+      const element = document.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        this.log(`✅ Job details loaded - found: ${selector}`);
+        return true;
+      }
+    }
+
+    // Check if any new content appeared in the main content area
+    const mainContent = document.querySelector(
+      ".MainCol, .job-details, .jobsOverlayModal"
+    );
+    if (mainContent) {
+      const hasSignificantContent = mainContent.textContent.length > 500; // Arbitrary threshold
+      if (hasSignificantContent) {
+        this.log("✅ Job details loaded - significant content detected");
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check for Easy Apply button after job details expansion
+   */
+  async checkForEasyApplyAfterExpansion() {
+    const easyApplySelectors = [
+      'button[data-test="easyApply"]',
+      ".EasyApplyButton_content__1cGPo",
+      "button.applyButton",
+      '.apply-button[data-test="apply"]',
+      'button:contains("Easy Apply")',
+      'button:contains("Apply")',
+    ];
+
+    this.log("🔍 Checking for Easy Apply button after expansion...");
+
+    for (const selector of easyApplySelectors) {
+      // Handle text-based selectors
+      if (selector.includes(":contains(")) {
+        const text = selector.includes("Easy Apply") ? "easy apply" : "apply";
+        const buttons = document.querySelectorAll("button");
+
+        for (const button of buttons) {
+          if (this.isElementVisible(button) && !button.disabled) {
+            const buttonText = button.textContent?.toLowerCase().trim();
+            if (
+              buttonText === text ||
+              (text === "apply" && buttonText === "apply now")
+            ) {
+              this.log(`✅ Found Easy Apply button with text: "${buttonText}"`);
+              return true;
+            }
+          }
+        }
+      } else {
+        const elements = document.querySelectorAll(selector);
+        for (const element of elements) {
+          if (this.isElementVisible(element) && !element.disabled) {
+            this.log(`✅ Found Easy Apply button with selector: ${selector}`);
+            return true;
+          }
+        }
+      }
+    }
+
+    this.log("❌ No Easy Apply button found after expansion");
+    return false;
+  }
+
+  /**
+   * Proceed with job application after confirming Easy Apply is available
+   */
+  async proceedWithJobApplication(card, url, cardId) {
+    // Set application state
+    this.applicationState.isApplicationInProgress = true;
+    this.applicationState.applicationStartTime = Date.now();
+
+    if (!this.applicationState.processedUrls) {
+      this.applicationState.processedUrls = new Set();
+    }
+    this.applicationState.processedUrls.add(this.normalizeUrlFully(url));
+
+    this.setStuckDetectionTimeout();
+
+    try {
+      // Extract job title from the expanded details
+      const jobTitle =
+        this.extractJobTitleFromExpandedDetails() ||
+        this.getJobTitleFromCard(card) ||
+        "Job Application";
+
+      this.statusOverlay.addSuccess(`Applying to: ${jobTitle}`);
+
+      this.safeSendPortMessage({
+        type: this.getJobTaskMessageType(),
+        data: {
+          url,
+          title: jobTitle,
+        },
+      });
+    } catch (err) {
+      this.handleJobTaskError(err, url, card);
+    }
+  }
+
+  /**
+   * Extract job title from expanded job details
+   */
+  extractJobTitleFromExpandedDetails() {
+    const titleSelectors = [
+      'h1[data-test="job-title"]',
+      ".JobDetails_jobTitle__GLyJ1",
+      ".jobDescriptionContent h1",
+      ".jobDescriptionContent h2",
+      '[data-test="jobTitle"]',
+      ".job-title h1",
+      ".job-title h2",
+    ];
+
+    for (const selector of titleSelectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent) {
+        const title = element.textContent.trim();
+        if (title.length > 0) {
+          this.log(`📋 Extracted job title: ${title}`);
+          return title;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Handle job card processing errors
+   */
+  handleJobCardError(card, error) {
+    this.log(`❌ Error processing job card: ${error.message}`);
+    this.markJobCardAsSkipped(card, "Error");
+    this.statusOverlay.addError(`Error processing job: ${error.message}`);
+
+    // Reset application state
+    this.resetApplicationStateOnError();
+  }
+
+  /**
+   * Enhanced hasEasyApply method - checks both card and expanded state
+   */
+  hasEasyApply(card) {
+    // First check if Easy Apply is visible on the card itself (sometimes it is)
+    const cardEasyApply = this.hasEasyApplyOnCard(card);
+    if (cardEasyApply) {
+      return true;
+    }
+
+    // If not found on card, we'll need to click and check
+    // This will be handled in the main processing flow
+    return true; // Assume it might have Easy Apply, will verify after clicking
+  }
+
+  /**
+   * Check for Easy Apply button specifically on the job card (before expansion)
+   */
+  hasEasyApplyOnCard(card) {
+    const easyApplySelectors = [
+      'button[data-test="easyApply"]',
+      ".EasyApplyButton_content__1cGPo",
+      "button.applyButton",
+      "a.applyButton",
+    ];
+
+    for (const selector of easyApplySelectors) {
+      const button = card.querySelector(selector);
+      if (button && this.isElementVisible(button)) {
+        const buttonText = button.textContent?.trim().toLowerCase();
+        if (buttonText.includes("easy apply") || buttonText.includes("apply")) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Enhanced findUnprocessedJobCard to use the new click-first logic
+   */
+  findUnprocessedJobCard(jobCards) {
+    for (const card of jobCards) {
+      const cardId = this.getJobCardId(card);
+
+      if (this.processedJobCards.has(cardId)) {
+        continue;
+      }
+
+      const jobUrl = this.getJobUrlFromCard(card);
+      if (!jobUrl) continue;
+
+      const normalizedUrl = this.normalizeUrlFully(jobUrl);
+
+      // Check if already processed
+      if (this.isLinkProcessed(normalizedUrl)) {
+        this.processedJobCards.add(cardId);
+        continue;
+      }
+
+      // For Glassdoor, we'll assume the job might have Easy Apply
+      // We'll verify this after clicking the card
+      return { card, url: jobUrl, cardId };
+    }
+
+    return null;
+  }
+
+  /**
+   * Updated processGlassdoorJobCards method
+   */
+  async processGlassdoorJobCards() {
+    const jobCards = this.getGlassdoorJobCards();
+    this.log(`Found ${jobCards.length} job cards on Glassdoor`);
+
+    if (jobCards.length === 0) {
+      await this.handleNoJobCardsFound();
+      return;
+    }
+
+    // Find unprocessed job card
+    const unprocessedCard = this.findUnprocessedJobCard(jobCards);
+
+    if (unprocessedCard) {
+      // Use the new enhanced processing method
+      await this.processGlassdoorJobCard(unprocessedCard);
+    } else {
+      await this.handleNoUnprocessedJobCards();
+    }
+  }
+
+  /**
+   * Updated searchNext method to work with the new job card logic
+   */
+  async searchNext() {
+    try {
+      // Check if automation is paused
+      if (this.isPaused) {
+        this.log("Automation is paused, not searching");
+        return;
+      }
+
+      this.log("🔍 Executing Glassdoor searchNext");
+
+      if (this.applicationState.isApplicationInProgress) {
+        this.log("Application in progress, not searching for next job");
+        this.statusOverlay.addInfo(
+          "Application in progress, waiting to complete..."
+        );
+        this.safeSendPortMessage({ type: "CHECK_APPLICATION_STATUS" });
+        return;
+      }
+
+      this.statusOverlay.addInfo("Searching for job cards...");
+
+      // Check if we're on Glassdoor search results page
+      if (this.isGlassdoorSearchPage(window.location.href)) {
+        await this.processGlassdoorJobCards();
+      } else if (this.isGlassdoorJobPage(window.location.href)) {
+        // If we're on a specific job page (possibly after clicking a card)
+        this.statusOverlay.addInfo(
+          "On Glassdoor job page - processing application"
+        );
+        await this.startApplicationProcess();
+      } else {
+        // Fall back to standard Google search link processing
+        await super.searchNext();
+      }
+    } catch (err) {
+      this.log("Error in Glassdoor searchNext:", err);
+      this.statusOverlay.addError("Error in search: " + err.message);
+      this.resetApplicationStateOnError();
+      setTimeout(() => {
+        if (!this.isPaused) {
+          this.searchNext();
+        }
+      }, 5000);
+    }
+  }
+
+  /**
+   * Enhanced visual feedback methods
+   */
+  markJobCardAsProcessing(card) {
+    try {
+      card.style.border = "2px solid #2196F3";
+      card.style.backgroundColor = "rgba(33, 150, 243, 0.1)";
+      card.style.transform = "scale(1.02)";
+      card.style.transition = "all 0.3s ease";
+
+      const indicator = document.createElement("div");
+      indicator.className = "processing-indicator";
+      indicator.style.cssText = `
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: linear-gradient(135deg, #2196F3, #1976D2);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      animation: pulse 2s infinite;
+    `;
+      indicator.textContent = "Loading...";
+
+      // Add pulse animation
+      const style = document.createElement("style");
+      style.textContent = `
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.7; }
+        100% { opacity: 1; }
+      }
+    `;
+      document.head.appendChild(style);
+
+      card.style.position = "relative";
+      card.appendChild(indicator);
+    } catch (error) {
+      this.log("Error marking job card as processing:", error);
+    }
+  }
+
+  markJobCardAsSkipped(card, reason) {
+    try {
+      card.style.border = "2px solid #FF9800";
+      card.style.backgroundColor = "rgba(255, 152, 0, 0.1)";
+      card.style.opacity = "0.7";
+      card.style.transform = "scale(0.98)";
+
+      // Remove any existing indicators
+      const existingIndicator = card.querySelector(
+        ".processing-indicator, .skipped-indicator"
+      );
+      if (existingIndicator) {
+        existingIndicator.remove();
+      }
+
+      const indicator = document.createElement("div");
+      indicator.className = "skipped-indicator";
+      indicator.style.cssText = `
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: linear-gradient(135deg, #FF9800, #F57C00);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    `;
+      indicator.textContent = reason;
+
+      card.style.position = "relative";
+      card.appendChild(indicator);
+    } catch (error) {
+      this.log("Error marking job card as skipped:", error);
+    }
+  }
+
+  markJobCardAsSuccess(card) {
+    try {
+      card.style.border = "2px solid #4CAF50";
+      card.style.backgroundColor = "rgba(76, 175, 80, 0.1)";
+      card.style.transform = "scale(1.0)";
+
+      // Remove any existing indicators
+      const existingIndicator = card.querySelector(
+        ".processing-indicator, .skipped-indicator"
+      );
+      if (existingIndicator) {
+        existingIndicator.remove();
+      }
+
+      const indicator = document.createElement("div");
+      indicator.className = "success-indicator";
+      indicator.style.cssText = `
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: linear-gradient(135deg, #4CAF50, #388E3C);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    `;
+      indicator.textContent = "✓ Applied";
+
+      card.style.position = "relative";
+      card.appendChild(indicator);
+    } catch (error) {
+      this.log("Error marking job card as success:", error);
+    }
+  }
+
+  /**
+   * Enhanced handleSearchNext to mark cards appropriately
+   */
+  handleSearchNext(data) {
+    this.log("🔄 Received search next notification", data);
+
+    // Clear timeout first
+    if (this.sendCvPageNotRespondTimeout) {
+      clearTimeout(this.sendCvPageNotRespondTimeout);
+      this.sendCvPageNotRespondTimeout = null;
+    }
+
+    // Find and mark the job card based on the URL
+    if (data && data.url) {
+      const normalizedUrl = this.normalizeUrlFully(data.url);
+      const jobCards = this.getGlassdoorJobCards();
+
+      for (const card of jobCards) {
+        const cardUrl = this.getJobUrlFromCard(card);
+        if (cardUrl && this.normalizeUrlFully(cardUrl) === normalizedUrl) {
+          if (data.status === "SUCCESS") {
+            this.markJobCardAsSuccess(card);
+            this.statusOverlay.addSuccess(
+              "Application completed successfully! 🎉"
+            );
+          } else if (data.status === "ERROR") {
+            this.markJobCardAsSkipped(card, "Error");
+            this.statusOverlay.addError(
+              "Application failed - continuing with next job"
+            );
+          } else {
+            this.markJobCardAsSkipped(card, "Skipped");
+            this.statusOverlay.addWarning("Job skipped - moving to next one");
+          }
+          break;
+        }
+      }
+    }
+
+    // Reset application state
+    this.applicationState.isApplicationInProgress = false;
+    this.applicationState.applicationStartTime = null;
+    this.applicationState.processedLinksCount++;
+
+    // Notify background we're ready for next job
+    this.safeSendPortMessage({ type: "SEARCH_NEXT_READY" });
+
+    this.updateLinkStatus(data);
+    this.recordSubmission(data);
+
+    setTimeout(() => {
+      if (!this.isPaused) {
+        this.searchNext();
+      }
+    }, 2500);
+  }
+
+  /**
+   * Helper method to check if we're on a Glassdoor job listing page (after clicking a card)
+   */
+  isGlassdoorJobListingPage(url) {
+    return (
+      /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner)/.test(url) &&
+      !url.includes("/jobs.htm") &&
+      !url.includes("/apply") &&
+      (url.includes("jobListingId=") || url.match(/\/(job|Job)\/[^\/]+/))
+    );
+  }
+
+  /**
+   * Enhanced URL detection for different Glassdoor page types
+   */
+  detectPageTypeAndStart() {
+    const url = window.location.href;
+    this.log(`🔍 Detecting page type for: ${url}`);
+
+    if (url.includes("google.com/search")) {
+      this.statusOverlay.addInfo("Google search page detected");
+      return this.startSearchProcess();
+    } else if (this.isGlassdoorJobListingPage(url)) {
+      this.statusOverlay.addInfo("Glassdoor job listing page detected");
+      return this.startApplicationProcess();
+    } else if (this.isGlassdoorSearchPage(url)) {
+      this.statusOverlay.addInfo("Glassdoor search results page detected");
+      return this.startJobSearchProcess();
+    } else if (this.isGlassdoorApplicationPage(url)) {
+      this.statusOverlay.addInfo("Glassdoor application page detected");
+      return this.startApplicationProcess();
+    } else {
+      this.log("❓ Unknown page type, waiting for navigation");
+      return this.waitForValidPage();
+    }
   }
 }
