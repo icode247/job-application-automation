@@ -112,15 +112,6 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "anti_detection_rules",
-        "enabled": true,
-        "path": "rules/anti_detection.json"
-      }
-    ]
-  },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://fastapply.co https://*.fastapply.co http://localhost:3000"
   },
