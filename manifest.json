@@ -49,6 +49,7 @@
         "platforms/indeed/indeed.js",
         "platforms/recruitee/recruitee.js",
         "platforms/glassdoor/glassdoor.js",
+        "platforms/glassdoor/glassdoor-form-handler.js",
         "platforms/workday/workday.js",
         "platforms/lever/lever.js",
         "platforms/lever/lever-form-handler.js",

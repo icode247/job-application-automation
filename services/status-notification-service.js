@@ -31,6 +31,8 @@ class ChatbotStatusOverlay {
     this.isPaused = false;
     this.port = null;
     this.greetingShown = false; // Prevent duplicate greetings
+    this.isDestroyed = false; // ✅ ADD: Track if overlay is destroyed
+    this.pendingTimeouts = []; // ✅ ADD: Track timeouts for cleanup
 
     // Storage key
     this.storageKey = `chatbot_messages_${this.options.sessionId || "default"}`;
@@ -66,7 +68,7 @@ class ChatbotStatusOverlay {
    * Save messages to storage
    */
   async saveMessages() {
-    if (!this.options.persistMessages) return;
+    if (!this.options.persistMessages || this.isDestroyed) return;
 
     try {
       await chrome.storage.local.set({
@@ -81,6 +83,8 @@ class ChatbotStatusOverlay {
    * Clear all messages and storage
    */
   async clearMessages() {
+    if (this.isDestroyed) return; // ✅ FIX: Prevent operations on destroyed overlay
+
     this.messages = [];
     this.messageCount = 0;
     this.greetingShown = false; // Reset greeting flag
@@ -105,7 +109,7 @@ class ChatbotStatusOverlay {
     if (!this.options.persistMessages) return;
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
-      if (namespace !== "local") return;
+      if (namespace !== "local" || this.isDestroyed) return;
 
       if (changes[this.storageKey]) {
         const newMessages = changes[this.storageKey].newValue || [];
@@ -372,10 +376,14 @@ class ChatbotStatusOverlay {
    * Create the chatbot overlay
    */
   async create() {
-    // Prevent duplicate creation
-    if (document.getElementById(this.options.id)) {
-      console.warn("Chatbot overlay already exists, destroying old one");
-      this.destroy();
+    // Prevent duplicate creation or creation on destroyed overlay
+    if (document.getElementById(this.options.id) || this.isDestroyed) {
+      if (!this.isDestroyed) {
+        console.warn("Chatbot overlay already exists, destroying old one");
+        this.destroy();
+      } else {
+        return this;
+      }
     }
 
     // Create main container
@@ -458,18 +466,23 @@ class ChatbotStatusOverlay {
    * Initialize port connection
    */
   initializePortConnection() {
-    if (!chrome.runtime) return;
+    if (!chrome.runtime || this.isDestroyed) return;
 
     try {
       this.port = chrome.runtime.connect({ name: `chatbot-${Date.now()}` });
 
       this.port.onMessage.addListener((message) => {
-        this.handlePortMessage(message);
+        if (!this.isDestroyed) {
+          this.handlePortMessage(message);
+        }
       });
 
       this.port.onDisconnect.addListener(() => {
         this.port = null;
-        setTimeout(() => this.initializePortConnection(), 5000);
+        if (!this.isDestroyed) {
+          const timeoutId = setTimeout(() => this.initializePortConnection(), 5000);
+          this.pendingTimeouts.push(timeoutId);
+        }
       });
     } catch (error) {
       console.warn("Could not establish port connection:", error);
@@ -480,6 +493,8 @@ class ChatbotStatusOverlay {
    * Handle messages from automation system
    */
   handlePortMessage(message) {
+    if (this.isDestroyed) return; // ✅ FIX: Prevent handling messages on destroyed overlay
+
     const { type, data } = message;
 
     switch (type) {
@@ -511,13 +526,16 @@ class ChatbotStatusOverlay {
         this.addMessage("Automation stopped! 👋");
         this.updateControls();
         // Clear messages when automation stops
-        setTimeout(() => {
-          this.clearMessages();
-          // Reset to ready state after clearing
-          this.automationState = "ready";
-          this.updateStatus("ready");
-          this.updateControls();
+        const timeoutId = setTimeout(() => {
+          if (!this.isDestroyed) {
+            this.clearMessages();
+            // Reset to ready state after clearing
+            this.automationState = "ready";
+            this.updateStatus("ready");
+            this.updateControls();
+          }
         }, 2000);
+        this.pendingTimeouts.push(timeoutId);
         break;
     }
   }
@@ -526,6 +544,8 @@ class ChatbotStatusOverlay {
    * Send message to automation system
    */
   sendToAutomation(message) {
+    if (this.isDestroyed) return; // ✅ FIX: Prevent sending messages from destroyed overlay
+
     if (this.port) {
       try {
         this.port.postMessage(message);
@@ -547,7 +567,7 @@ class ChatbotStatusOverlay {
    * Load persisted messages
    */
   loadPersistedMessages() {
-    if (!this.chatContainer) return;
+    if (!this.chatContainer || this.isDestroyed) return;
 
     this.chatContainer.innerHTML = "";
 
@@ -667,10 +687,12 @@ class ChatbotStatusOverlay {
    * Update control buttons
    */
   updateControls() {
-    if (!this.controlsContainer) return;
+    if (!this.controlsContainer || this.isDestroyed) return;
 
     const actionBtn = this.controlsContainer.querySelector(".pause, .continue");
     const stopBtn = this.controlsContainer.querySelector(".stop");
+
+    if (!actionBtn || !stopBtn) return; // ✅ FIX: Add safety check
 
     // Update action button based on state
     if (this.isPaused) {
@@ -695,6 +717,8 @@ class ChatbotStatusOverlay {
    * Toggle automation (pause/continue)
    */
   toggleAutomation() {
+    if (this.isDestroyed) return;
+
     if (this.isPaused) {
       this.addMessage("Resuming automation... 🚀");
       this.sendToAutomation({ action: "resumeAutomation" });
@@ -714,6 +738,8 @@ class ChatbotStatusOverlay {
    * Stop automation
    */
   stopAutomation() {
+    if (this.isDestroyed) return;
+
     if (confirm("Are you sure you want to stop the automation?")) {
       this.addMessage("Stopping automation... 🛑");
       this.sendToAutomation({ action: "stopAutomation" });
@@ -728,17 +754,20 @@ class ChatbotStatusOverlay {
    * Add formatted message (preserves line breaks)
    */
   addFormattedMessage(message) {
-    if (!this.chatContainer || this.isMinimized) return this;
+    if (!this.chatContainer || this.isMinimized || this.isDestroyed) return this;
 
     this.showTypingIndicator();
 
-    setTimeout(() => {
-      this.hideTypingIndicator();
-      this._createFormattedMessage(message, "bot", true);
-      this._scrollToBottom();
-      this.messageCount++;
+    const timeoutId = setTimeout(() => {
+      if (!this.isDestroyed) {
+        this.hideTypingIndicator();
+        this._createFormattedMessage(message, "bot", true);
+        this._scrollToBottom();
+        this.messageCount++;
+      }
     }, 800 + Math.random() * 400);
 
+    this.pendingTimeouts.push(timeoutId);
     return this;
   }
 
@@ -746,17 +775,20 @@ class ChatbotStatusOverlay {
    * Add a message to the chat
    */
   addMessage(message) {
-    if (!this.chatContainer || this.isMinimized) return this;
+    if (!this.chatContainer || this.isMinimized || this.isDestroyed) return this;
 
     this.showTypingIndicator();
 
-    setTimeout(() => {
-      this.hideTypingIndicator();
-      this._createMessage(message, "bot", true);
-      this._scrollToBottom();
-      this.messageCount++;
+    const timeoutId = setTimeout(() => {
+      if (!this.isDestroyed) {
+        this.hideTypingIndicator();
+        this._createMessage(message, "bot", true);
+        this._scrollToBottom();
+        this.messageCount++;
+      }
     }, 800 + Math.random() * 400);
 
+    this.pendingTimeouts.push(timeoutId);
     return this;
   }
 
@@ -764,6 +796,8 @@ class ChatbotStatusOverlay {
    * Create formatted message element (preserves line breaks)
    */
   _createFormattedMessage(message, sender, persist = true) {
+    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+
     const messageElement = document.createElement("div");
     messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
 
@@ -792,10 +826,14 @@ class ChatbotStatusOverlay {
     messageWrapper.appendChild(timestamp);
 
     messageElement.appendChild(messageWrapper);
-    this.chatContainer.appendChild(messageElement);
+    
+    // ✅ FIX: Check if chatContainer still exists before appendChild
+    if (this.chatContainer && !this.isDestroyed) {
+      this.chatContainer.appendChild(messageElement);
+    }
 
     // Persist message only if enabled and requested
-    if (persist && this.options.persistMessages) {
+    if (persist && this.options.persistMessages && !this.isDestroyed) {
       this.messages.push({
         content: message,
         sender: sender,
@@ -810,6 +848,8 @@ class ChatbotStatusOverlay {
    * Legacy API compatibility methods
    */
   addBotMessage(message, type = "info") {
+    if (this.isDestroyed) return this; // ✅ FIX: Prevent operations on destroyed overlay
+
     // Extract emoji based on type for visual consistency
     const emoji = this._getEmojiForType(type);
     const finalMessage = emoji ? `${emoji} ${message}` : message;
@@ -817,18 +857,22 @@ class ChatbotStatusOverlay {
   }
 
   addError(message) {
+    if (this.isDestroyed) return this;
     return this.addMessage(`❌ ${message}`);
   }
 
   addSuccess(message) {
+    if (this.isDestroyed) return this;
     return this.addMessage(`✅ ${message}`);
   }
 
   addWarning(message) {
+    if (this.isDestroyed) return this;
     return this.addMessage(`⚠️ ${message}`);
   }
 
   addInfo(message) {
+    if (this.isDestroyed) return this;
     return this.addMessage(`ℹ️ ${message}`);
   }
 
@@ -836,6 +880,7 @@ class ChatbotStatusOverlay {
    * Show action preview (simplified version)
    */
   showActionPreview(action, details = {}, countdown = 3) {
+    if (this.isDestroyed) return this;
     const preview = details.url ? `${action}\n📍 ${details.url}` : action;
     return this.addMessage(`⏳ About to: ${preview}`);
   }
@@ -860,6 +905,8 @@ class ChatbotStatusOverlay {
    * Create message element
    */
   _createMessage(message, sender, persist = true) {
+    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+
     const messageElement = document.createElement("div");
     messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
 
@@ -887,10 +934,14 @@ class ChatbotStatusOverlay {
     messageWrapper.appendChild(timestamp);
 
     messageElement.appendChild(messageWrapper);
-    this.chatContainer.appendChild(messageElement);
+    
+    // ✅ FIX: Check if chatContainer still exists before appendChild
+    if (this.chatContainer && !this.isDestroyed) {
+      this.chatContainer.appendChild(messageElement);
+    }
 
     // Persist message only if enabled and requested
-    if (persist && this.options.persistMessages) {
+    if (persist && this.options.persistMessages && !this.isDestroyed) {
       this.messages.push({
         content: message,
         sender: sender,
@@ -904,7 +955,7 @@ class ChatbotStatusOverlay {
    * Update status
    */
   updateStatus(status) {
-    if (!this.statusBar) return this;
+    if (!this.statusBar || this.isDestroyed) return this;
 
     this.currentStatus = status;
 
@@ -919,8 +970,10 @@ class ChatbotStatusOverlay {
     const dot = this.statusBar.querySelector(".chatbot-status-dot");
     const text = this.statusBar.querySelector("span:last-child");
 
-    this.statusBar.className = `chatbot-status-indicator chatbot-status-${status}`;
-    text.textContent = statusConfig[status] || status;
+    if (dot && text) { // ✅ FIX: Add safety checks
+      this.statusBar.className = `chatbot-status-indicator chatbot-status-${status}`;
+      text.textContent = statusConfig[status] || status;
+    }
 
     return this;
   }
@@ -929,6 +982,8 @@ class ChatbotStatusOverlay {
    * Show typing indicator
    */
   showTypingIndicator() {
+    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+
     this.hideTypingIndicator();
 
     const indicator = document.createElement("div");
@@ -953,11 +1008,16 @@ class ChatbotStatusOverlay {
     typingContent.appendChild(dots);
     indicator.appendChild(avatar);
     indicator.appendChild(typingContent);
-    this.chatContainer.appendChild(indicator);
-    this._scrollToBottom();
+    
+    if (this.chatContainer && !this.isDestroyed) {
+      this.chatContainer.appendChild(indicator);
+      this._scrollToBottom();
+    }
   }
 
   hideTypingIndicator() {
+    if (this.isDestroyed) return; // ✅ FIX: Add safety check
+
     const existing = document.getElementById("chatbot-typing");
     if (existing) {
       existing.remove();
@@ -968,38 +1028,53 @@ class ChatbotStatusOverlay {
    * Initial greeting
    */
   addGreeting() {
-    setTimeout(() => {
-      this.addMessage(
-        `Hi! I'm ${this.options.botName}, your automation assistant! 👋`
-      );
-      setTimeout(() => {
+    if (this.isDestroyed) return; // ✅ FIX: Add safety check
+
+    const timeoutId1 = setTimeout(() => {
+      if (!this.isDestroyed) {
         this.addMessage(
-          "I'll help you track the job application process. Use the controls below to manage automation! 🚀"
+          `Hi! I'm ${this.options.botName}, your automation assistant! 👋`
         );
-      }, 1200);
+        const timeoutId2 = setTimeout(() => {
+          if (!this.isDestroyed) {
+            this.addMessage(
+              "I'll help you track the job application process. Use the controls below to manage automation! 🚀"
+            );
+          }
+        }, 1200);
+        this.pendingTimeouts.push(timeoutId2);
+      }
     }, 500);
+    this.pendingTimeouts.push(timeoutId1);
   }
 
   /**
    * Handle automation completion (called when automation stops)
    */
   async handleAutomationComplete() {
+    if (this.isDestroyed) return;
+
     this.automationState = "completed";
     this.isPaused = false;
     this.updateStatus("completed", "All done!");
     this.updateControls();
 
     // Clear messages after a delay
-    setTimeout(() => {
-      this.clearMessages();
-      this.greetingShown = false;
+    const timeoutId = setTimeout(() => {
+      if (!this.isDestroyed) {
+        this.clearMessages();
+        this.greetingShown = false;
+      }
     }, 3000);
+    this.pendingTimeouts.push(timeoutId);
   }
 
   /**
    * Simulate automation states for testing
    */
   startAutomation() {
+    if (this.isDestroyed) return;
+
     this.automationState = "searching";
     this.updateStatus("searching");
     this.updateControls();
@@ -1007,6 +1082,8 @@ class ChatbotStatusOverlay {
   }
 
   simulateApplying() {
+    if (this.isDestroyed) return;
+
     this.automationState = "applying";
     this.updateStatus("applying");
     this.updateControls();
@@ -1017,10 +1094,14 @@ class ChatbotStatusOverlay {
    * Toggle minimize state
    */
   toggleMinimize() {
+    if (this.isDestroyed) return this;
+
     this.isMinimized = !this.isMinimized;
 
-    const minimizeBtn = this.container.querySelector(".chatbot-minimize-btn");
-    minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
+    const minimizeBtn = this.container?.querySelector(".chatbot-minimize-btn");
+    if (minimizeBtn) {
+      minimizeBtn.innerHTML = this.isMinimized ? "▲" : "▼";
+    }
 
     if (this.chatContainer) {
       this.chatContainer.style.display = this.isMinimized ? "none" : "block";
@@ -1037,31 +1118,45 @@ class ChatbotStatusOverlay {
    * Helper methods
    */
   _scrollToBottom() {
-    if (this.chatContainer) {
-      setTimeout(() => {
+    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+
+    const timeoutId = setTimeout(() => {
+      // ✅ FIX: Double-check chatContainer still exists before accessing scrollHeight
+      if (!this.isDestroyed && this.chatContainer) {
         this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
-      }, 100);
-    }
+      }
+    }, 100);
+    this.pendingTimeouts.push(timeoutId);
   }
 
   show() {
-    if (!this.container) return this;
+    if (!this.container || this.isDestroyed) return this;
     this.isVisible = true;
     this.container.style.display = "block";
     return this;
   }
 
   hide() {
-    if (!this.container) return this;
+    if (!this.container || this.isDestroyed) return this;
     this.isVisible = false;
     this.container.style.display = "none";
     return this;
   }
 
   /**
-   * Destroy overlay
+   * Destroy overlay - ✅ ENHANCED cleanup
    */
   destroy() {
+    // Mark as destroyed first to prevent further operations
+    this.isDestroyed = true;
+
+    // Clear all pending timeouts
+    this.pendingTimeouts.forEach(timeoutId => {
+      clearTimeout(timeoutId);
+    });
+    this.pendingTimeouts = [];
+
+    // Disconnect port
     if (this.port) {
       try {
         this.port.disconnect();
@@ -1069,11 +1164,13 @@ class ChatbotStatusOverlay {
       this.port = null;
     }
 
+    // Remove DOM elements
     const existing = document.getElementById(this.options.id);
     if (existing) {
       existing.remove();
     }
 
+    // Clear references
     this.container = null;
     this.chatContainer = null;
     this.statusBar = null;
