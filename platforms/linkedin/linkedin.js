@@ -1364,29 +1364,24 @@ export default class LinkedInPlatform extends BasePlatform {
     return label.textContent.trim().replace(/\s+/g, " ");
   }
 
-  // ✅ FIXED: Use existing user profile in form filling
   async getAnswer(label, options = []) {
     const normalizedLabel = label?.toLowerCase()?.trim() || "";
 
-    // Check cache first
     if (this.answerCache.has(normalizedLabel)) {
       return this.answerCache.get(normalizedLabel);
     }
 
     try {
-      // FIXED: Add chatbot message when getting AI answer
       this.statusOverlay.addInfo(`Thinking about how to answer: "${label}"...`);
 
-      // ✅ FIXED: Use existing user profile
       const context = {
         platform: this.platform,
-        userData: this.userProfile, // ✅ Use existing profile instead of fetching
+        userData: this.userProfile,
         jobDescription: this.scrapeJobDescription(),
       };
 
       const answer = await this.aiService.getAnswer(label, options, context);
 
-      // FIXED: Add success message when AI answer is received
       this.statusOverlay.addSuccess(
         `Got the perfect answer for that question! ✨`
       );
@@ -1398,25 +1393,12 @@ export default class LinkedInPlatform extends BasePlatform {
       console.error("AI Answer Error:", error);
       this.statusOverlay.addInfo("Using my best guess for this question...");
 
-      // Fallback to simple default answers
-      const defaultAnswers = {
-        "work authorization": "Yes",
-        "authorized to work": "Yes",
-        "require sponsorship": "No",
-        "require visa": "No",
-        experience: "2 years",
-        "years of experience": "2 years",
-        phone: this.userProfile?.phoneNumber || "555-0123",
-        salary: "80000",
-      };
-
       for (const [key, value] of Object.entries(defaultAnswers)) {
         if (normalizedLabel.includes(key)) {
           return value;
         }
       }
 
-      // Return first option if available
       return options.length > 0 ? options[0] : "Yes";
     }
   }

@@ -998,7 +998,7 @@ class ContentScriptManager {
           console.warn("⚠️ Starting automation without complete user profile");
           sendResponse({
             success: false,
-            error: "Cannot start automation without complete user profile",
+            error: "Network error...., please check your internet and try again",
           });
           return;
         }

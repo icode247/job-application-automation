@@ -413,7 +413,7 @@ export default class MessageHandler {
         if (!userProfile?.email) missingFields.push('email');
         if (!userProfile?.name && !userProfile?.firstName && !userProfile?.fullName) missingFields.push('name');
         
-        const errorMessage = `Cannot start automation without complete user profile. Missing: ${missingFields.join(', ')}`;
+        const errorMessage = `Network Error, Please check your internet and try again....`;
         console.error("❌ " + errorMessage);
         console.error("❌ Available profile fields:", userProfile ? Object.keys(userProfile) : 'No profile');
         sendResponse({ status: "error", message: errorMessage });
