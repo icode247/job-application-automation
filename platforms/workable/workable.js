@@ -2,7 +2,7 @@
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import WorkableFormHandler from "./workable-form-handler.js";
 import WorkableFileHandler from "./workable-file-handler.js";
-import { UrlUtils, DomUtils, FormUtils } from "../../shared/utilities/index.js";
+import { UrlUtils, DomUtils } from "../../shared/utilities/index.js";
 import {
   AIService,
   ApplicationTrackerService,
@@ -570,6 +570,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     const jobDescription =
       this.cachedJobDescription || (await this.extractJobDescription());
 
+    console.log("Job description:", jobDescription);
     // Update form handler with job description
     if (this.formHandler) {
       this.formHandler.jobDescription = jobDescription;

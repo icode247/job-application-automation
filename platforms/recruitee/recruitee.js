@@ -9,7 +9,6 @@ import {
   UserService,
 } from "../../services/index.js";
 
-// Custom error types for Recruitee
 class ApplicationError extends Error {
   constructor(message, details) {
     super(message);
@@ -74,7 +73,6 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
           this.userProfile = sessionContext.userProfile;
           console.log("👤 User profile loaded from session context");
         } else {
-          // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
@@ -183,7 +181,6 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
         case "CONNECTION_ESTABLISHED":
           // Handle connection established message
           this.log("✅ Port connection established with background script");
-          this.statusOverlay?.addSuccess("Connection established");
           break;
 
         case "SEARCH_TASK_DATA":
@@ -264,12 +261,11 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       apiHost: this.getApiHost(),
     });
 
-    this.formHandler = new RecruiteeFormHandler({
-      logger: (message) => this.statusOverlay.addInfo(message),
-      host: this.getApiHost(),
-      userData: this.userProfile || {},
-      jobDescription: "",
-    });
+    this.formHandler = new RecruiteeFormHandler(
+      this.aiService,
+      this.userProfile || {},
+      (message) => this.statusOverlay.addInfo(message)
+    );
 
     this.statusOverlay.addSuccess("Recruitee-specific components initialized");
   }
@@ -402,11 +398,9 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
 
     if (url.includes("google.com/search")) {
       this.log("📊 Google search page detected");
-      this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
       this.log("📋 Recruitee job page detected");
-      this.statusOverlay.addInfo("Recruitee job page detected");
       await this.startApplicationProcess();
     } else {
       this.log("❓ Unknown page type, waiting for navigation");

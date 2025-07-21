@@ -1,8 +1,7 @@
-//John Doe
 export class RecruiteeFormHandler {
-  constructor(aiService, userService, logger) {
+  constructor(aiService, userData, logger) {
     this.aiService = aiService;
-    this.userService = userService;
+    this.userData = userData;
     this.logger = logger;
     this.answerCache = new Map();
   }
@@ -19,7 +18,6 @@ export class RecruiteeFormHandler {
 
   async processApplicationForm() {
     try {
-      this.log("🔍 Looking for Recruitee application form...");
       await this.delay(1000);
 
       // Find the specific Recruitee form
@@ -27,15 +25,11 @@ export class RecruiteeFormHandler {
         "form#offer-application-form"
       );
       if (!applicationForm) {
-        this.log("❌ No Recruitee application form found");
         return { success: false, reason: "no_form_found" };
       }
 
-      this.log("✅ Found Recruitee application form");
-
       // Grab all fields using adapted method
       const fields = await this.grabRecruiteeFields(applicationForm);
-      this.log(`📝 Found ${fields.length} form fields`);
 
       // Process each field
       for (const field of fields) {
@@ -49,7 +43,6 @@ export class RecruiteeFormHandler {
       // Find and click submit button
       const submitButton = this.findSubmitButton(applicationForm);
       if (submitButton && !submitButton.disabled) {
-        this.log("📤 Submitting application form");
         await this.clickElementReliably(submitButton);
         await this.delay(3000);
 
@@ -58,14 +51,12 @@ export class RecruiteeFormHandler {
           message: "Form processed successfully",
         };
       } else {
-        this.log("❌ Submit button not available or disabled");
         return {
           success: false,
           reason: "submit_button_disabled",
         };
       }
     } catch (error) {
-      this.log("❌ Error processing application form:", error.message);
       return {
         success: false,
         reason: "error",
@@ -83,10 +74,6 @@ export class RecruiteeFormHandler {
     );
     const directInputs = form.querySelectorAll(
       'input:not([type="hidden"]), select, textarea'
-    );
-
-    this.log(
-      `🔍 Found ${containers.length} containers and ${directInputs.length} direct inputs`
     );
 
     // Process containers first (for complex fields)
@@ -155,11 +142,6 @@ export class RecruiteeFormHandler {
             return input.value || "Unknown";
           });
 
-          this.log(
-            `📻 Radio group: ${
-              result.label
-            } with options: ${result.options.join(", ")}`
-          );
           container.setAttribute("data-processed", "true");
           return result;
         }
@@ -181,26 +163,18 @@ export class RecruiteeFormHandler {
           input.classList.contains("PhoneInputInput")
         ) {
           result.type = "phone";
-          this.log(`📞 Phone field: ${result.label}`);
         }
 
         // Handle file inputs
         if (result.type === "file") {
-          this.log(`📎 File field: ${result.label}`);
         }
 
         // Handle select options
         if (result.type === "select") {
           result.options = this.getSelectOptions(input);
-          this.log(
-            `📋 Select field: ${
-              result.label
-            } with options: ${result.options.join(", ")}`
-          );
         }
 
         if (result.label && result.type !== "file") {
-          this.log(`📝 Input field: ${result.label} (${result.type})`);
           input.setAttribute("data-processed", "true");
           container.setAttribute("data-processed", "true");
           return result;
@@ -209,7 +183,6 @@ export class RecruiteeFormHandler {
 
       return null;
     } catch (error) {
-      this.log(`❌ Error processing container: ${error.message}`);
       return null;
     }
   }
@@ -231,7 +204,6 @@ export class RecruiteeFormHandler {
 
       return result;
     } catch (error) {
-      this.log(`❌ Error processing direct input: ${error.message}`);
       return null;
     }
   }
@@ -292,11 +264,8 @@ export class RecruiteeFormHandler {
 
   async handleRecruiteeField(field) {
     try {
-      this.log(`🔧 Processing field: ${field.label} (${field.type})`);
-
       // Skip file fields
       if (field.type === "file") {
-        this.log(`⏭️ Skipping file field: ${field.label}`);
         return;
       }
 
@@ -310,13 +279,9 @@ export class RecruiteeFormHandler {
         ) {
           // Click first option for required fields with no answer
           field.element[0].click();
-          this.log(
-            `✅ Selected first option for required field: ${field.label}`
-          );
         } else {
-          this.log(`⏭️ Skipping field with no answer: ${field.label}`);
+          return;
         }
-        return;
       }
 
       // Handle different field types
@@ -367,15 +332,12 @@ export class RecruiteeFormHandler {
         ) {
           this.scrollToElement(radio);
           radio.click();
-          this.log(`✅ Selected "${labelText}" for: ${field.label}`);
           return;
         }
       }
     }
 
-    this.log(
-      `⚠️ Could not find matching option "${answer}" for: ${field.label}`
-    );
+    return;
   }
 
   async handleSelectField(field, answer) {
@@ -396,9 +358,6 @@ export class RecruiteeFormHandler {
       if (this.matchesValue(answerLower, optionText, optionValue)) {
         option.selected = true;
         optionSelected = true;
-        this.log(
-          `✅ Selected "${option.textContent.trim()}" for: ${field.label}`
-        );
         break;
       }
     }
@@ -409,11 +368,6 @@ export class RecruiteeFormHandler {
         if (option.value && option.value !== "" && option.value !== "null") {
           option.selected = true;
           optionSelected = true;
-          this.log(
-            `✅ Selected fallback "${option.textContent.trim()}" for: ${
-              field.label
-            }`
-          );
           break;
         }
       }
@@ -428,13 +382,11 @@ export class RecruiteeFormHandler {
   async handlePhoneField(field, answer) {
     const phoneInput = field.element;
 
-    // Get user phone data
-    const userData = await this.userService.getUserDetails();
-    const phoneCode = userData.phoneCode || userData.phoneCountryCode || "+1";
-    const phoneNumber = userData.phoneNumber || userData.phone || answer;
+    // Use user data directly instead of fetching
+    const phoneCode = this.userData.phoneCode || this.userData.phoneCountryCode || "+1";
+    const phoneNumber = this.userData.phoneNumber || this.userData.phone || answer;
 
     if (!phoneNumber) {
-      this.log(`⚠️ No phone number available for: ${field.label}`);
       return;
     }
 
@@ -444,26 +396,20 @@ export class RecruiteeFormHandler {
     const formattedPhone = `+${cleanCode}${cleanNumber}`;
 
     await this.fillInputField(phoneInput, formattedPhone);
-    this.log(`✅ Filled phone field "${field.label}" with: ${formattedPhone}`);
   }
 
   async handleTextareaField(field, answer) {
     await this.fillInputField(field.element, answer);
-    this.log(
-      `✅ Filled textarea "${field.label}" with ${answer.length} characters`
-    );
   }
 
   async handleNumberField(field, answer) {
     // Extract numbers from answer
     const numericValue = answer.toString().replace(/[^\d.]/g, "");
     await this.fillInputField(field.element, numericValue);
-    this.log(`✅ Filled number field "${field.label}" with: ${numericValue}`);
   }
 
   async handleTextInput(field, answer) {
     await this.fillInputField(field.element, answer);
-    this.log(`✅ Filled text field "${field.label}" with: ${answer}`);
   }
 
   async handleCheckboxField(field, answer) {
@@ -486,7 +432,6 @@ export class RecruiteeFormHandler {
       }
 
       await this.delay(200);
-      this.log(`✅ Set checkbox "${field.label}" to: ${shouldCheck}`);
     }
   }
 
@@ -510,15 +455,12 @@ export class RecruiteeFormHandler {
       await this.delay(100);
       return true;
     } catch (error) {
-      this.log(`Error filling input field: ${error.message}`);
       return false;
     }
   }
 
   async handleRequiredCheckboxes(form) {
     try {
-      this.log("🔍 Looking for required checkboxes");
-
       const requiredCheckboxes = form.querySelectorAll(
         'input[type="checkbox"][required], input[type="checkbox"][aria-required="true"]'
       );
@@ -530,13 +472,12 @@ export class RecruiteeFormHandler {
         const isAgreement = this.isAgreementCheckbox(label);
 
         if (isAgreement || checkbox.required) {
-          this.log(`✅ Checking required/agreement checkbox: ${label}`);
           await this.handleCheckboxField({ element: checkbox, label }, true);
           await this.delay(200);
         }
       }
     } catch (error) {
-      this.log(`❌ Error handling required checkboxes: ${error.message}`);
+      return;
     }
   }
 
@@ -578,16 +519,15 @@ export class RecruiteeFormHandler {
     const normalizedLabel = label?.toLowerCase()?.trim() || "";
 
     if (this.answerCache.has(normalizedLabel)) {
-      this.log(`🔄 Using cached answer for: ${label}`);
       return this.answerCache.get(normalizedLabel);
     }
 
     try {
-      this.log(`🤖 Getting AI answer for: "${label}"`);
+      this.log(`🤖 Thinking of answer for "${label}"...`);
 
       const context = {
         platform: "recruitee",
-        userData: await this.userService.getUserDetails(),
+        userData: this.userData,
         jobDescription: this.scrapeJobDescription(),
       };
 
@@ -595,49 +535,10 @@ export class RecruiteeFormHandler {
       const cleanedAnswer = answer.replace(/["*\-]/g, "");
 
       this.answerCache.set(normalizedLabel, cleanedAnswer);
-      this.log(`✅ Got AI answer for "${label}": ${cleanedAnswer}`);
       return cleanedAnswer;
     } catch (error) {
-      this.log(`❌ AI Answer Error for "${label}": ${error.message}`);
-      return this.getFallbackAnswer(normalizedLabel, options);
+      throw error;
     }
-  }
-
-  getFallbackAnswer(normalizedLabel, options = []) {
-    const defaultAnswers = {
-      "full name": "John Doe",
-      email: "john.doe@example.com",
-      phone: "555-0123",
-      location: "New York, USA",
-      "current location": "New York, USA",
-      "visa sponsorship": "No",
-      "need visa": "No",
-      linkedin: "https://linkedin.com/in/johndoe",
-      "linkedin profile": "https://linkedin.com/in/johndoe",
-      salary: "80000",
-      "expected salary": "80000",
-      "annual salary": "80000",
-      "how did you hear": "LinkedIn",
-      "hear about": "LinkedIn",
-      experience: "Yes",
-      "authorized to work": "Yes",
-      "work authorization": "Yes",
-    };
-
-    for (const [key, value] of Object.entries(defaultAnswers)) {
-      if (normalizedLabel.includes(key)) {
-        this.log(`🔄 Using fallback answer for "${normalizedLabel}": ${value}`);
-        return value;
-      }
-    }
-
-    if (options.length > 0) {
-      this.log(`🔄 Using first option for "${normalizedLabel}": ${options[0]}`);
-      return options[0];
-    }
-
-    this.log(`🔄 Using default fallback for "${normalizedLabel}": Yes`);
-    return "Yes";
   }
 
   scrapeJobDescription() {

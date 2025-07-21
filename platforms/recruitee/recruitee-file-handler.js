@@ -13,19 +13,16 @@ export class RecruiteeFileHandler {
   async handleFileUploads(form, userDetails, jobDescription) {
     try {
       if (!form) {
-        this.showStatus("No form provided for file uploads", "error");
         return false;
       }
 
       if (!userDetails) {
-        this.showStatus("No user details provided for file uploads", "error");
         return false;
       }
 
       // Find all file input fields
       const fileInputs = form.querySelectorAll('input[type="file"]');
       if (fileInputs.length === 0) {
-        this.showStatus("No file input fields found", "info");
         return true;
       }
 
@@ -51,18 +48,9 @@ export class RecruiteeFileHandler {
 
           if (result) {
             successCount++;
-            this.showStatus(
-              `✅ File input ${uploadCount} processed successfully`,
-              "success"
-            );
-          } else {
-            this.showStatus(
-              `⚠️ File input ${uploadCount} processing failed`,
-              "warning"
-            );
           }
         } catch (error) {
-          this.showStatus(
+          console.error(
             `File upload ${uploadCount} failed: ${error.message}`,
             "warning"
           );
@@ -70,17 +58,17 @@ export class RecruiteeFileHandler {
       }
 
       if (successCount > 0) {
-        this.showStatus(
+        console.log(
           `${successCount}/${uploadCount} file uploads completed`,
           "success"
         );
       } else if (uploadCount > 0) {
-        this.showStatus("File uploads failed", "error");
+        console.log("File uploads failed", "error");
       }
 
       return successCount > 0;
     } catch (error) {
-      this.showStatus("File upload process failed: " + error.message, "error");
+      console.error("File upload process failed: " + error.message, "error");
       return false;
     }
   }
@@ -108,7 +96,7 @@ export class RecruiteeFileHandler {
       const fileUrls = this.getFileUrls(userDetails, fileType);
       console.log("File URLS", fileUrls);
       if (!fileUrls || fileUrls.length === 0) {
-        this.showStatus(`No ${fileType} files available`, "warning");
+        console.log(`No ${fileType} files available`, "warning");
         return false;
       }
 
@@ -135,7 +123,7 @@ export class RecruiteeFileHandler {
         );
       }
     } catch (error) {
-      this.showStatus("Single file upload failed: " + error.message, "error");
+      console.error("Single file upload failed: " + error.message);
       return false;
     }
   }
@@ -178,8 +166,6 @@ export class RecruiteeFileHandler {
       if (blob.size === 0) {
         throw new Error("Generated PDF is empty");
       }
-
-      console.log("Creating PDF file object...");
 
       const fileName = "cover-letter.pdf";
       const file = new File([blob], fileName, {

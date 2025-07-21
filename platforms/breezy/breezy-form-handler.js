@@ -1,7 +1,8 @@
 // platforms/breezy/breezy-form-handler.js
 import { AIService } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
-//getAIAnswer
+
+//✅ User profile loaded successfully
 export class BreezyFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;

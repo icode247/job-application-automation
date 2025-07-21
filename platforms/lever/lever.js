@@ -117,17 +117,13 @@ export default class LeverPlatform extends BasePlatformAutomation {
   async detectPageTypeAndStart() {
     const url = window.location.href;
     this.log(`🔍 Detecting page type for: ${url}`);
-
     if (url.includes("google.com/search")) {
       this.log("📊 Google search page detected");
-      this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
     } else if (this.isLeverJobPage(url)) {
       this.log("📋 Lever job page detected");
-      this.statusOverlay.addInfo("Lever job page detected");
       await this.startApplicationProcess();
     } else {
-      this.log("❓ Unknown page type, waiting for navigation");
       await this.waitForValidPage();
     }
   }
@@ -147,8 +143,6 @@ export default class LeverPlatform extends BasePlatformAutomation {
       userData: this.userProfile || {},
       jobDescription: "",
     });
-
-    this.statusOverlay.addSuccess("Lever-specific components initialized");
   }
 
   // ========================================
@@ -309,10 +303,6 @@ export default class LeverPlatform extends BasePlatformAutomation {
           : this.getSearchLinkPattern(),
       };
 
-      this.log("✅ Search data initialized:", this.searchData);
-      this.statusOverlay.addSuccess("Search initialization complete");
-
-      // ✅ FIX: Start the search process after initialization
       setTimeout(() => this.searchNext(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
@@ -722,9 +712,6 @@ export default class LeverPlatform extends BasePlatformAutomation {
         .filter((text) => text.length > 0);
 
       if (errorMessages.length > 0) {
-        this.statusOverlay.addError(
-          "Form has validation errors: " + errorMessages.join(", ")
-        );
         return false;
       }
     }

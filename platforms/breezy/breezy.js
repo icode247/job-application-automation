@@ -1,5 +1,4 @@
 // platforms/breezy/breezy.js - FIXED VERSION
-//apply
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { BreezyFormHandler } from "./breezy-form-handler.js";
 import { BreezyFileHandler } from "./breezy-file-handler.js";
@@ -9,8 +8,6 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
-// Custom error types for Breezy
 class ApplicationError extends Error {
   constructor(message, details) {
     super(message);
@@ -189,8 +186,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       switch (type) {
         case "CONNECTION_ESTABLISHED":
-          this.log("✅ Port connection established with background script");
-          this.statusOverlay?.addSuccess("Connection established");
           break;
 
         case "SEARCH_TASK_DATA":
@@ -274,8 +269,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
     });
-
-    this.statusOverlay.addSuccess("Breezy-specific components initialized");
   }
 
   // ========================================
@@ -437,18 +430,11 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   async detectPageTypeAndStart() {
     const url = window.location.href;
-    this.log(`🔍 Detecting page type for: ${url}`);
-
     if (url.includes("google.com/search")) {
-      this.log("📊 Google search page detected");
-      this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
-      this.log("📋 Breezy job page detected");
-      this.statusOverlay.addInfo("Breezy job page detected");
       await this.startApplicationProcess();
     } else {
-      this.log("❓ Unknown page type, waiting for navigation");
       await this.waitForValidPage();
     }
   }
@@ -505,7 +491,6 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         );
         console.error("❌ Failed to obtain user profile");
       } else {
-        this.statusOverlay.addSuccess("User profile loaded successfully");
         console.log("✅ User profile available for Breezy");
       }
 
@@ -591,20 +576,18 @@ export default class BreezyPlatform extends BasePlatformAutomation {
           applyButton.click();
           await this.wait(3000);
         }
-      } else {
-        this.statusOverlay.addInfo(
-          "Already on application page, proceeding to form filling"
-        );
       }
 
       // Find application form
       const form = this.findApplicationForm();
+      console.log(form);
       if (!form) {
         throw new SkipApplicationError("Cannot find Breezy application form");
       }
 
       // Extract job description
       const jobDescription = this.extractJobDescription();
+      console.log(jobDescription);
 
       // Process the form
       const result = await this.processApplicationForm(
@@ -686,16 +669,16 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       });      
 
       // Handle file uploads (resume)
-      // await this.fileHandler.handleFileUploads(form, profile, jobDescription);
+      await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
       // Fill out form fields using AI-enhanced BreezyFormHandler
-      // await this.formHandler.fillFormWithProfile(form, profile);
+      await this.formHandler.fillFormWithProfile(form, profile);
 
       // Handle required checkboxes
-      // await this.formHandler.handleRequiredCheckboxes(form);
+      await this.formHandler.handleRequiredCheckboxes(form);
 
       // Submit the form
-      // return await this.formHandler.submitForm(form);
+      return await this.formHandler.submitForm(form);
     } catch (error) {
       console.error("Error processing Breezy application form:", error);
       this.statusOverlay.addError(
