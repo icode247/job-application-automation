@@ -1,17 +1,23 @@
 // platforms/breezy/breezy-form-handler.js
-import { AIService } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
 
-//✅ User profile loaded successfully
 export class BreezyFormHandler {
-  constructor(options = {}) {
-    this.logger = options.logger || console.log;
-    this.host = options.host || "http://localhost:3000";
-    this.userData = options.userData || {};
-    this.jobDescription = options.jobDescription || "";
-    this.aiService = new AIService({ apiHost: this.host });
+  constructor(aiService, userData, logger) {
+    this.aiService = aiService;
+    this.userData = userData;
+    this.logger = logger || console.log;
     this.answerCache = new Map();
     this.utils = new Utils();
+  }
+
+  log(message, data = {}) {
+    if (typeof this.logger === "function") {
+      this.logger(message);
+    } else if (this.logger && this.logger.log) {
+      this.logger.log(message, data);
+    } else {
+      console.log(`🤖 [BreezyHandler] ${message}`, data);
+    }
   }
 
   /**
@@ -134,15 +140,15 @@ export class BreezyFormHandler {
 
   async fillFormWithProfile(form, profile) {
     try {
-      this.logger("Filling Breezy form with user profile data");
+      this.log("Filling Breezy form with user profile data");
       this.userData = profile;
 
       const formFields = this.getAllFormFields(form);
-      this.logger(`Found ${formFields.length} form fields to process`);
+      this.log(`Found ${formFields.length} form fields to process`);
 
       let filledCount = 0;
-      const processedFields = new Set(); // Track what we've already processed
-      const failedFields = new Map(); // Track failures to avoid infinite retries
+      const processedFields = new Set();
+      const failedFields = new Map();
 
       for (const field of formFields) {
         if (!field.label) continue;
@@ -156,28 +162,25 @@ export class BreezyFormHandler {
           continue;
         }
 
-        // Create field identifier for tracking
         const fieldIdentifier = `${field.type}:${this.cleanLabelText(
           field.label
         )}`;
 
-        // Skip if already processed successfully
         if (processedFields.has(fieldIdentifier)) {
-          this.logger(`Skipping already processed field: ${field.label}`);
+          this.log(`Skipping already processed field: ${field.label}`);
           continue;
         }
 
-        // Skip if failed too many times
         const failureCount = failedFields.get(fieldIdentifier) || 0;
         if (failureCount >= 3) {
-          this.logger(
+          this.log(
             `Skipping field after ${failureCount} failures: ${field.label}`
           );
           continue;
         }
 
         try {
-          this.logger(`Processing ${field.type} field: ${field.label}`);
+          this.log(`Processing ${field.type} field: ${field.label}`);
 
           const options = this.getFieldOptions(field.element);
           const fieldContext = `This is a ${field.type} field${
@@ -192,7 +195,7 @@ export class BreezyFormHandler {
           );
 
           if (answer) {
-            this.logger(
+            this.log(
               `Got AI answer for "${field.label}": ${answer.substring(0, 50)}${
                 answer.length > 50 ? "..." : ""
               }`
@@ -201,8 +204,8 @@ export class BreezyFormHandler {
             const success = await this.fillField(field.element, answer);
             if (success) {
               filledCount++;
-              processedFields.add(fieldIdentifier); // Mark as successfully processed
-              this.logger(`✅ Successfully filled field: ${field.label}`);
+              processedFields.add(fieldIdentifier);
+              this.log(`✅ Successfully filled field: ${field.label}`);
             } else {
               throw new Error("Failed to fill field with answer");
             }
@@ -212,15 +215,12 @@ export class BreezyFormHandler {
 
           await this.wait(300);
         } catch (fieldError) {
-          // Track the failure
           failedFields.set(fieldIdentifier, failureCount + 1);
-          this.logger(
+          this.log(
             `❌ Error processing field "${field.label}" (attempt ${
               failureCount + 1
             }): ${fieldError.message}`
           );
-
-          // Don't immediately retry, continue to next field
           continue;
         }
       }
@@ -228,20 +228,20 @@ export class BreezyFormHandler {
       // Handle required checkboxes
       await this.handleRequiredCheckboxes(form);
 
-      this.logger(`Successfully filled ${filledCount} fields`);
-      this.logger(
+      this.log(`Successfully filled ${filledCount} fields`);
+      this.log(
         `Processed fields: ${Array.from(processedFields).join(", ")}`
       );
 
       if (failedFields.size > 0) {
-        this.logger(
+        this.log(
           `Failed fields: ${Array.from(failedFields.keys()).join(", ")}`
         );
       }
 
       return true;
     } catch (error) {
-      this.logger(`Error filling form: ${error.message}`);
+      this.log(`Error filling form: ${error.message}`);
       return false;
     }
   }
@@ -256,25 +256,22 @@ export class BreezyFormHandler {
     fieldContext = ""
   ) {
     try {
-      this.logger(`Requesting AI answer for "${question}"`);
+      this.log(`Requesting AI answer for "${question}"`);
 
-      // Create a cache key that includes all relevant parameters
       const cacheKey = JSON.stringify({
         question: this.cleanLabelText(question),
-        options: options.sort(), // Sort to ensure consistent ordering
+        options: options.sort(),
         fieldType,
         fieldContext,
       });
 
-      // Check cache first
       if (this.answerCache.has(cacheKey)) {
-        this.logger(`Using cached answer for "${question}"`);
+        this.log(`Using cached answer for "${question}"`);
         return this.answerCache.get(cacheKey);
       }
 
-      const userDataForContext = this.utils.getUserDetailsForContext(
-        this.userData
-      );
+      // Use userData directly instead of calling getUserDetailsForContext
+      const userDataForContext = this.userData;
 
       // Special handling for salary fields
       if (
@@ -287,15 +284,13 @@ export class BreezyFormHandler {
           {
             platform: "breezy",
             userData: userDataForContext,
-            jobDescription: this.jobDescription,
+            jobDescription: this.jobDescription || "",
             fieldType,
             fieldContext: fieldContext + " - numeric only",
           }
         );
 
         const numericAnswer = this.extractNumericSalary(answer);
-
-        // Cache the result
         this.answerCache.set(cacheKey, numericAnswer);
         return numericAnswer;
       }
@@ -303,17 +298,16 @@ export class BreezyFormHandler {
       const answer = await this.aiService.getAnswer(question, options, {
         platform: "breezy",
         userData: userDataForContext,
-        jobDescription: this.jobDescription,
+        jobDescription: this.jobDescription || "",
         fieldType,
         fieldContext,
       });
 
-      // Cache the result
       this.answerCache.set(cacheKey, answer);
       return answer;
     } catch (error) {
-      this.logger(
-        `I'm having trouble finding the right answer: ${error.message}`
+      this.log(
+        `Error getting AI answer: ${error.message}`
       );
       return null;
     }
@@ -329,7 +323,7 @@ export class BreezyFormHandler {
       }
 
       const fieldType = this.getFieldType(element);
-      this.logger(`Hang on while I fill in the ${fieldType} field`);
+      this.log(`Filling ${fieldType} field with value: "${value}"`);
 
       switch (fieldType) {
         case "text":
@@ -365,8 +359,8 @@ export class BreezyFormHandler {
           return false;
       }
     } catch (error) {
-      this.logger(
-        `I'm having trouble finding the right answer: ${error.message}`
+      this.log(
+        `Error filling field: ${error.message}`
       );
       return false;
     }
@@ -413,8 +407,8 @@ export class BreezyFormHandler {
       await this.wait(100);
       return true;
     } catch (error) {
-      this.logger(
-        `I'm having trouble finding the right answer: ${error.message}`
+      this.log(
+        `Error filling input field: ${error.message}`
       );
       return false;
     }
@@ -452,18 +446,13 @@ export class BreezyFormHandler {
   extractNumericSalary(salaryValue) {
     if (!salaryValue) return "";
 
-    // Convert to string and extract only numbers
-    const numericOnly = String(salaryValue).replace(/[^\d]/g, ""); // Remove all non-digit characters
+    const numericOnly = String(salaryValue).replace(/[^\d]/g, "");
 
-    // Return empty string if no numbers found
     if (!numericOnly) return "";
 
-    // Ensure it's a reasonable salary range (between 1000 and 999999999)
     const numValue = parseInt(numericOnly, 10);
     if (numValue < 1000 || numValue > 999999999) {
-      // If unreasonable, try to extract a more reasonable number
       if (numericOnly.length > 6) {
-        // Take first 6 digits for very long numbers
         return numericOnly.substring(0, 6);
       }
       return numericOnly;
@@ -526,7 +515,7 @@ export class BreezyFormHandler {
 
       return false;
     } catch (error) {
-      this.logger(`Error filling select field: ${error.message}`);
+      this.log(`Error filling select field: ${error.message}`);
       return false;
     }
   }
@@ -581,7 +570,7 @@ export class BreezyFormHandler {
 
       return await this.fillInputField(element, value);
     } catch (error) {
-      this.logger(`Error filling phone field: ${error.message}`);
+      this.log(`Error filling phone field: ${error.message}`);
       return false;
     }
   }
@@ -635,7 +624,7 @@ export class BreezyFormHandler {
 
       return await this.fillInputField(element, value);
     } catch (error) {
-      this.logger(`Error filling date field: ${error.message}`);
+      this.log(`Error filling date field: ${error.message}`);
       return false;
     }
   }
@@ -726,22 +715,22 @@ export class BreezyFormHandler {
    */
   async submitForm(form) {
     try {
-      this.logger("Attempting to submit form");
+      this.log("Attempting to submit form");
 
       const submitButton = this.findSubmitButton(form);
       if (!submitButton) {
-        this.logger("No submit button found");
+        this.log("No submit button found");
         return false;
       }
 
-      this.logger(
+      this.log(
         `Found submit button: ${
           submitButton.textContent || submitButton.value || "Unnamed button"
         }`
       );
 
       if (!this.isElementVisible(submitButton) || submitButton.disabled) {
-        this.logger("Submit button is not clickable");
+        this.log("Submit button is not clickable");
         return false;
       }
 
@@ -749,12 +738,12 @@ export class BreezyFormHandler {
       await this.wait(500);
 
       submitButton.click();
-      this.logger("Clicked submit button");
+      this.log("Clicked submit button");
 
       await this.wait(3000);
       return true;
     } catch (error) {
-      this.logger(`Error submitting form: ${error.message}`);
+      this.log(`Error submitting form: ${error.message}`);
       return false;
     }
   }
@@ -810,53 +799,17 @@ export class BreezyFormHandler {
   }
 
   /**
-   * Utility methods
-   */
-  isElementVisible(element) {
-    if (!element) return false;
-
-    const style = window.getComputedStyle(element);
-    return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      style.opacity !== "0"
-    );
-  }
-
-  scrollToElement(element) {
-    if (!element) return;
-
-    try {
-      element.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-    } catch (error) {
-      try {
-        element.scrollIntoView();
-      } catch (e) {
-        // Silent fail
-      }
-    }
-  }
-
-  wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  /**
    * Enhanced getAllFormFields to better detect Breezy field structures
    */
   getAllFormFields(form) {
     try {
-      this.logger(
-        "Let me find all the form fields in this Breezy application form"
+      this.log(
+        "Finding all form fields in this Breezy application form"
       );
 
       const fields = [];
-      const processedFields = new Set(); // Track processed fields
+      const processedFields = new Set();
 
-      // Enhanced selectors to include Breezy-specific structures
       const formElements = form.querySelectorAll(
         'input:not([type="hidden"]), select, textarea, ' +
           '[role="radio"], [role="checkbox"], ' +
@@ -869,18 +822,15 @@ export class BreezyFormHandler {
       for (const element of formElements) {
         if (!this.isElementVisible(element)) continue;
 
-        // Create a unique identifier for this field
         const fieldId = this.createFieldIdentifier(element);
         if (processedFields.has(fieldId)) {
-          this.logger(`Skipping duplicate field: ${fieldId}`);
+          this.log(`Skipping duplicate field: ${fieldId}`);
           continue;
         }
 
-        // Process field based on type...
         const fieldInfo = this.processFormElement(element);
 
         if (fieldInfo && fieldInfo.label) {
-          // Additional deduplication check based on label
           const labelKey = `${fieldInfo.type}:${this.cleanLabelText(
             fieldInfo.label
           )}`;
@@ -892,22 +842,36 @@ export class BreezyFormHandler {
         }
       }
 
-      // Final deduplication pass for radio groups
       return this.deduplicateRadioGroups(fields);
     } catch (error) {
-      this.logger(`Error getting form fields: ${error.message}`);
+      this.log(`Error getting form fields: ${error.message}`);
       return [];
     }
   }
 
+  processFormElement(element) {
+    try {
+      const label = this.getFieldLabel(element);
+      if (!label) return null;
+
+      return {
+        element: element,
+        type: this.getFieldType(element),
+        label: label,
+        required: this.isFieldRequired(element),
+        options: this.getFieldOptions(element),
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
   createFieldIdentifier(element) {
-    // Create unique identifier based on element properties
     const id = element.id || "";
     const name = element.name || "";
     const className = element.className || "";
     const tagName = element.tagName.toLowerCase();
 
-    // For containers, use their position in the DOM
     if (
       element.classList.contains("multiplechoice") ||
       element.classList.contains("dropdown") ||
@@ -945,7 +909,6 @@ export class BreezyFormHandler {
    */
   getFieldLabel(element, container = null) {
     try {
-      // Use provided container or find the appropriate container
       const fieldContainer =
         container ||
         element.closest(".multiplechoice") ||
@@ -991,12 +954,10 @@ export class BreezyFormHandler {
           return this.cleanLabelText(h3Element.textContent);
         }
 
-        // Also look at the label text for additional context
         const label = fieldContainer.querySelector("label");
         if (label) {
           const labelText = label.textContent.trim();
           if (labelText.length > 10) {
-            // If substantial text
             return this.cleanLabelText("Privacy Notice Consent");
           }
         }
@@ -1072,7 +1033,7 @@ export class BreezyFormHandler {
 
       return "";
     } catch (error) {
-      this.logger(`I'm having trouble getting the field label`);
+      this.log(`Error getting field label: ${error.message}`);
       return "";
     }
   }
@@ -1090,14 +1051,12 @@ export class BreezyFormHandler {
           Array.from(element.options).forEach((option) => {
             const text = option.textContent.trim();
             const value = option.value.trim();
-            // Skip empty, undefined, or placeholder options
             if (text && value && value !== "? undefined:undefined ?") {
               options.push(text);
             }
           });
         }
       } else if (fieldType === "radio" || fieldType === "checkbox") {
-        // Find the container for this radio/checkbox group
         const container =
           element.closest(".multiplechoice") ||
           element.closest(".gdpr-accept") ||
@@ -1105,7 +1064,6 @@ export class BreezyFormHandler {
           element.closest(".custom-radio-group");
 
         if (container) {
-          // Look for Breezy-style options in ul.options
           const optionsList = container.querySelector("ul.options");
           if (optionsList) {
             const optionItems = optionsList.querySelectorAll("li.option");
@@ -1114,7 +1072,6 @@ export class BreezyFormHandler {
               if (span) {
                 options.push(span.textContent.trim());
               } else {
-                // Fallback to any text in the li
                 const text = li.textContent.trim();
                 if (text) {
                   options.push(text);
@@ -1122,7 +1079,6 @@ export class BreezyFormHandler {
               }
             });
           } else {
-            // Standard radio/checkbox handling
             const inputs = container.querySelectorAll(
               `input[type="${fieldType}"]`
             );
@@ -1145,7 +1101,7 @@ export class BreezyFormHandler {
 
       return options;
     } catch (error) {
-      this.logger(`Error getting field options: ${error.message}`);
+      this.log(`Error getting field options: ${error.message}`);
       return [];
     }
   }
@@ -1156,16 +1112,14 @@ export class BreezyFormHandler {
   async fillRadioField(element, value) {
     try {
       const valueStr = String(value).toLowerCase().trim();
-      this.logger(`Filling radio field with value: "${valueStr}"`);
+      this.log(`Filling radio field with value: "${valueStr}"`);
 
-      // Find the container for this radio group
       const container =
         element.closest(".multiplechoice") ||
         element.closest("fieldset") ||
         element.closest(".custom-radio-group");
 
       if (container) {
-        // Handle Breezy multiplechoice structure
         if (container.classList.contains("multiplechoice")) {
           const optionsList = container.querySelector("ul.options");
           if (optionsList) {
@@ -1179,11 +1133,9 @@ export class BreezyFormHandler {
                 const optionText = span.textContent.trim().toLowerCase();
                 const optionValue = radioInput.value.toLowerCase();
 
-                // Enhanced matching logic
                 if (this.matchesValue(valueStr, optionText, optionValue)) {
                   this.scrollToElement(li);
 
-                  // Click the label if it exists, otherwise click the input
                   const label = li.querySelector("label");
                   if (label) {
                     label.click();
@@ -1199,7 +1151,6 @@ export class BreezyFormHandler {
           }
         }
 
-        // Fallback to standard radio handling
         const radios = container.querySelectorAll('input[type="radio"]');
         for (const radio of radios) {
           const label =
@@ -1225,7 +1176,7 @@ export class BreezyFormHandler {
 
       return false;
     } catch (error) {
-      this.logger(`Error filling radio field: ${error.message}`);
+      this.log(`Error filling radio field: ${error.message}`);
       return false;
     }
   }
@@ -1236,9 +1187,8 @@ export class BreezyFormHandler {
   async fillCheckboxField(element, value) {
     try {
       const shouldCheck = this.shouldCheckValue(value);
-      this.logger(`Filling checkbox field, should check: ${shouldCheck}`);
+      this.log(`Filling checkbox field, should check: ${shouldCheck}`);
 
-      // Handle GDPR consent checkbox
       const gdprContainer = element.closest(".gdpr-accept");
       if (gdprContainer) {
         const label = gdprContainer.querySelector("label");
@@ -1250,7 +1200,6 @@ export class BreezyFormHandler {
         }
       }
 
-      // Handle Breezy multiplechoice checkbox structure
       const multiplechoiceContainer = element.closest(".multiplechoice");
       if (multiplechoiceContainer) {
         const optionsList = multiplechoiceContainer.querySelector("ul.options");
@@ -1259,14 +1208,12 @@ export class BreezyFormHandler {
           if (optionItem) {
             this.scrollToElement(optionItem);
 
-            // Check current state
             const isCurrentlyChecked = element.checked;
 
             if (
               (shouldCheck && !isCurrentlyChecked) ||
               (!shouldCheck && isCurrentlyChecked)
             ) {
-              // Try clicking the span or the checkbox itself
               const span = optionItem.querySelector("span.ng-binding");
               if (span) {
                 span.click();
@@ -1276,7 +1223,6 @@ export class BreezyFormHandler {
 
               await this.wait(200);
 
-              // Verify the state changed
               if (element.checked !== shouldCheck) {
                 element.checked = shouldCheck;
                 element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1288,11 +1234,9 @@ export class BreezyFormHandler {
         }
       }
 
-      // Standard checkbox handling (existing code)
       let checkboxInput = element;
       if (element.tagName.toLowerCase() !== "input") {
         checkboxInput = element.querySelector('input[type="checkbox"]');
-        // ... rest of existing checkbox handling
       }
 
       if (
@@ -1321,7 +1265,7 @@ export class BreezyFormHandler {
 
       return true;
     } catch (error) {
-      this.logger(`Error filling checkbox field: ${error.message}`);
+      this.log(`Error filling checkbox field: ${error.message}`);
       return false;
     }
   }
@@ -1331,11 +1275,10 @@ export class BreezyFormHandler {
    */
   async handleRequiredCheckboxes(form) {
     try {
-      this.logger("Handling required checkboxes");
+      this.log("Handling required checkboxes");
 
       const checkboxFields = [];
 
-      // Specifically look for GDPR consent checkboxes
       const gdprContainers = form.querySelectorAll(".gdpr-accept");
       for (const container of gdprContainers) {
         const checkbox = container.querySelector('input[type="checkbox"]');
@@ -1350,14 +1293,12 @@ export class BreezyFormHandler {
         }
       }
 
-      // Standard checkboxes
       const standardCheckboxes = form.querySelectorAll(
         'input[type="checkbox"]'
       );
       for (const checkbox of standardCheckboxes) {
         if (!this.isElementVisible(checkbox)) continue;
 
-        // Skip if already handled as GDPR
         if (checkbox.closest(".gdpr-accept")) continue;
 
         const label = this.getFieldLabel(checkbox);
@@ -1375,7 +1316,6 @@ export class BreezyFormHandler {
         }
       }
 
-      // Breezy custom checkboxes
       const customCheckboxes = form.querySelectorAll(
         '.custom-checkbox, [role="checkbox"]'
       );
@@ -1399,14 +1339,13 @@ export class BreezyFormHandler {
         }
       }
 
-      this.logger(
+      this.log(
         `Found ${checkboxFields.length} required/agreement checkboxes`
       );
 
       for (const field of checkboxFields) {
         let shouldCheck = field.isRequired || field.isAgreement || field.isGDPR;
 
-        // For GDPR, always check
         if (field.isGDPR) {
           shouldCheck = true;
         } else if (!shouldCheck) {
@@ -1420,14 +1359,14 @@ export class BreezyFormHandler {
           shouldCheck = answer === "yes" || answer === "true";
         }
 
-        this.logger(
+        this.log(
           `${shouldCheck ? "Checking" : "Unchecking"} checkbox: ${field.label}`
         );
         await this.fillCheckboxField(field.element, shouldCheck);
         await this.wait(200);
       }
     } catch (error) {
-      this.logger(`Error handling required checkboxes: ${error.message}`);
+      this.log(`Error handling required checkboxes: ${error.message}`);
     }
   }
 
@@ -1453,16 +1392,13 @@ export class BreezyFormHandler {
    * Enhanced value matching for radio buttons and select options
    */
   matchesValue(aiValue, optionText, optionValue) {
-    // Direct matches
     if (aiValue === optionText || aiValue === optionValue) return true;
 
-    // Partial matches
     if (optionText.includes(aiValue) || aiValue.includes(optionText))
       return true;
     if (optionValue.includes(aiValue) || aiValue.includes(optionValue))
       return true;
 
-    // Special cases for yes/no
     if (
       (aiValue === "yes" || aiValue === "true") &&
       (optionText === "yes" || optionValue === "yes")
@@ -1475,5 +1411,40 @@ export class BreezyFormHandler {
       return true;
 
     return false;
+  }
+
+  /**
+   * Utility methods
+   */
+  isElementVisible(element) {
+    if (!element) return false;
+
+    const style = window.getComputedStyle(element);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0"
+    );
+  }
+
+  scrollToElement(element) {
+    if (!element) return;
+
+    try {
+      element.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    } catch (error) {
+      try {
+        element.scrollIntoView();
+      } catch (e) {
+        // Silent fail
+      }
+    }
+  }
+
+  wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

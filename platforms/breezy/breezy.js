@@ -8,6 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
+
 class ApplicationError extends Error {
   constructor(message, details) {
     super(message);
@@ -66,7 +67,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       if (sessionContext.platform) this.platform = sessionContext.platform;
       if (sessionContext.userId) this.userId = sessionContext.userId;
 
-      // Set user profile with priority handling
+      // Set user profile with priority handling - follow Recruitee pattern
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
@@ -108,7 +109,10 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.sessionApiHost = sessionContext.apiHost;
       }
 
-      // Update form handler if it exists
+      // Update AI service with correct API host
+      this.aiService = new AIService({ apiHost: this.getApiHost() });
+
+      // Update form handler if it exists - follow Recruitee pattern
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
@@ -186,6 +190,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       switch (type) {
         case "CONNECTION_ESTABLISHED":
+          this.log("✅ Port connection established with background script");
           break;
 
         case "SEARCH_TASK_DATA":
@@ -269,6 +274,15 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
     });
+
+    // Initialize form handler following Recruitee pattern
+    this.formHandler = new BreezyFormHandler(
+      this.aiService,
+      this.userProfile || {},
+      (message) => this.statusOverlay.addInfo(message)
+    );
+
+    this.statusOverlay.addSuccess("Breezy-specific components initialized");
   }
 
   // ========================================
@@ -288,13 +302,11 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       this.handleApplicationTaskData(data);
     } else if (!data || Object.keys(data).length === 0) {
       // Empty response - automation session not ready yet
-      console.warn("⚠️ Received empty SUCCESS response from background script");
-      this.statusOverlay.addWarning("Automation session not ready, waiting...");
 
       // Don't retry immediately, just wait for the next attempt
       setTimeout(() => {
         if (window.location.href.includes("google.com/search")) {
-          this.statusOverlay.addInfo("Retrying search initialization...");
+          this.log("Retrying search initialization...");
           this.startSearchProcess();
         }
       }, 3000);
@@ -331,7 +343,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ✅ FIX: Simplified handleSearchTaskData without retry logic
+  // ✅ FIX: Simplified handleSearchTaskData following Recruitee pattern
   handleSearchTaskData(data) {
     try {
       this.log("📊 Processing Breezy search task data:", data);
@@ -358,6 +370,11 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       if (data.profile && !this.userProfile) {
         this.userProfile = data.profile;
         this.log("👤 User profile loaded from search task data");
+
+        // Update form handler with user profile
+        if (this.formHandler) {
+          this.formHandler.userData = this.userProfile;
+        }
       }
 
       this.log("✅ Breezy search data initialized:", this.searchData);
@@ -382,7 +399,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.log("👤 User profile loaded from application task data");
       }
 
-      // Update form handler
+      // Update form handler following Recruitee pattern
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
@@ -430,11 +447,16 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   async detectPageTypeAndStart() {
     const url = window.location.href;
+    this.log(`🔍 Detecting page type for: ${url}`);
+
     if (url.includes("google.com/search")) {
+      this.log("📊 Google search page detected");
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
+      this.log("📋 Breezy job page detected");
       await this.startApplicationProcess();
     } else {
+      this.log("❓ Unknown page type, waiting for navigation");
       await this.waitForValidPage();
     }
   }
@@ -458,7 +480,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ✅ FIX: Simplified fetchSearchTaskData without timeout retry
+  // ✅ FIX: Simplified fetchSearchTaskData following Recruitee pattern
   async fetchSearchTaskData() {
     this.log("📡 Fetching Breezy search task data from background");
     this.statusOverlay.addInfo("Fetching search task data...");
@@ -479,7 +501,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
-      // Validate user profile
+      // Validate user profile - follow Recruitee pattern
       if (!this.userProfile) {
         console.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchApplicationTaskData();
@@ -491,6 +513,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         );
         console.error("❌ Failed to obtain user profile");
       } else {
+        this.statusOverlay.addSuccess("User profile loaded successfully");
         console.log("✅ User profile available for Breezy");
       }
 
@@ -549,13 +572,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       // Extract job ID from URL (Breezy-specific)
       const jobId = UrlUtils.extractJobId(window.location.href, "breezy");
-      console.log(this.applicationState);
-      // check if we have already applied for this job
-      // if (this.applicationState.appliedJobs.has(jobId)) {
-      //   throw new SkipApplicationError("Already applied for this job");
-      // }
-
-      console.log(this.userProfile);
+      console.log("Extracted Breezy job ID:", jobId);
 
       // Wait for page to fully load
       await this.wait(3000);
@@ -580,14 +597,14 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       // Find application form
       const form = this.findApplicationForm();
-      console.log(form);
+      console.log("Found form:", form);
       if (!form) {
         throw new SkipApplicationError("Cannot find Breezy application form");
       }
 
       // Extract job description
       const jobDescription = this.extractJobDescription();
-      console.log(jobDescription);
+      console.log("Job description:", jobDescription);
 
       // Process the form
       const result = await this.processApplicationForm(
@@ -659,14 +676,18 @@ export default class BreezyPlatform extends BasePlatformAutomation {
     );
 
     try {
-      // Initialize/update form handler
-
-      this.formHandler = new BreezyFormHandler({
-        logger: (message) => this.statusOverlay.addInfo(message),
-        host: this.getApiHost(),
-        userData: profile,
-        jobDescription,
-      });      
+      // ✅ FIX: Ensure form handler has current user data and job description
+      if (!this.formHandler) {
+        this.formHandler = new BreezyFormHandler(
+          this.aiService,
+          profile,
+          (message) => this.statusOverlay.addInfo(message)
+        );
+      } else {
+        // Update existing form handler with current data
+        this.formHandler.userData = profile;
+        this.formHandler.jobDescription = jobDescription;
+      }
 
       // Handle file uploads (resume)
       await this.fileHandler.handleFileUploads(form, profile, jobDescription);

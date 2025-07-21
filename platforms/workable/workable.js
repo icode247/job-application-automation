@@ -570,7 +570,6 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     const jobDescription =
       this.cachedJobDescription || (await this.extractJobDescription());
 
-    console.log("Job description:", jobDescription);
     // Update form handler with job description
     if (this.formHandler) {
       this.formHandler.jobDescription = jobDescription;
@@ -621,7 +620,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
     // 7. Submit the form
     const submitted = await this.formHandler.submitForm(form, {
-      dryRun: true,
+      dryRun: false,
     });
     return submitted;
   }
