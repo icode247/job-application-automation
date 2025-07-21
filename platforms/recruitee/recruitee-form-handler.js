@@ -598,7 +598,6 @@ export class RecruiteeFormHandler {
       this.log(`✅ Got AI answer for "${label}": ${cleanedAnswer}`);
       return cleanedAnswer;
     } catch (error) {
-      console.log("error", error)
       this.log(`❌ AI Answer Error for "${label}": ${error.message}`);
       return this.getFallbackAnswer(normalizedLabel, options);
     }

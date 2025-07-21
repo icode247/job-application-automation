@@ -49,7 +49,7 @@
         "platforms/indeed/indeed.js",
         "platforms/recruitee/recruitee.js",
         "platforms/glassdoor/glassdoor.js",
-        "platforms/glassdoor/glassdoor-form-handler.js",
+
         "platforms/workday/workday.js",
         "platforms/lever/lever.js",
         "platforms/lever/lever-form-handler.js",
@@ -76,6 +76,7 @@
         "shared/utilities/dom-utils.js",
         "shared/utilities/form-utils.js",
         "shared/utilities/file-utils.js",
+        "shared/indeed_glassdoors/form-handler.js",
         "shared/base/base-platform-automation.js",
         "shared/base/base-platform.js",
         "platforms/breezy/breezy.js",

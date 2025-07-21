@@ -2,25 +2,27 @@
  * Enhanced FormHandler class for automated form filling on both Indeed and Glassdoor
  * Specifically handles the SmartApply interface (https://smartapply.indeed.com/...)
  */
-class GlassdoorFormHandler {
+
+class FormHandler {
   /**
    * Initialize the FormHandler with necessary configuration
    * @param {Object} config Configuration options
    */
   constructor(config = {}) {
-    this.enableDebug = config.enableDebug || false; // Add debug flag
-    this.logger = this.enableDebug ? config.logger || console.log : () => {}; // Only log if debugging is enabled
-    this.host = config.host
+    this.enableDebug = config.enableDebug || false;
+    this.logger = console.log;
+    this.host = config.host;
     this.userData = config.userData || {};
     this.jobDescription = config.jobDescription || "";
     this.platform = config.platform || "glassdoor";
+    this.aiBaseUrl = "https://resumify.fastapply.co/api";
 
     // Setup selectors based on both platforms
     this.selectors = {
       COMMON: {
-        // Form elements
+        // Form elements - Added date input selector
         INPUTS:
-          'input[type="text"], input[type="email"], input[type="tel"], input[type="number"], input[type="radio"], input[type="checkbox"], input[type="password"]',
+          'input[type="text"], input[type="email"], input[type="tel"], input[type="number"], input[type="radio"], input[type="checkbox"], input[type="password"], input[type="date"], input[placeholder*="MM/DD/YYYY"], input[placeholder*="mm/dd/yyyy"]',
         SELECTS: "select",
         TEXTAREAS: "textarea",
 
@@ -32,7 +34,7 @@ class GlassdoorFormHandler {
         RESUME_RADIO_INDEED: 'input[value="INDEED_RESUME"]',
         RESUME_RADIO_FILE: 'input[value="SAVED_FILE_RESUME"]',
 
-        // Buttons
+        // Buttons - Enhanced button selectors
         SUBMIT_BUTTON:
           '[data-testid="indeed-apply-button"], button[type="submit"]',
         CONTINUE_BUTTON:
@@ -73,37 +75,836 @@ class GlassdoorFormHandler {
   }
 
   /**
-   * Extracts the job description from an Indeed job page with proper formatting
-   * @returns {string} The formatted job description or an empty string if not found
+   * Show status message to user (placeholder - implement as needed)
+   * @param {string} message - Status message
+   * @param {string} type - Message type (info, success, error, warning)
    */
-  extractIndeedJobDescription() {
-    const jobDescContainer = document.getElementById("jobDescriptionText");
+  showStatus(message, type) {
+    this.logger(`🤖 ${message}`);
+    // Implement your status display logic here
+  }
 
-    if (!jobDescContainer) {
-      const fallbackSelectors = [
-        // New selectors based on the provided HTML structure
-        ".ia-JobDescription",
-        "[data-testid='JobInfoCard-wrapper'] .ia-JobDescription",
-        "aside .ia-JobDescription",
-        // Keep original fallback selectors
-        ".jobsearch-JobComponent-description",
-        '[data-testid="jobDescriptionText"]',
-        ".job-description",
-      ];
+  /**
+   * Enhanced button clicking with multiple interaction methods
+   * @param {HTMLElement} button - Button element to click
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async clickButton(button) {
+    if (!button || !this.isElementVisible(button)) {
+      return false;
+    }
 
-      for (const selector of fallbackSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          this.logger(`Found job description with selector: ${selector}`);
-          return this.processJobDescription(element);
+    try {
+      // Method 1: Focus and programmatic click
+      button.focus();
+      await this.sleep(100);
+      button.click();
+      await this.sleep(200);
+
+      // Method 2: If first method didn't work, try mouse event simulation
+      const clickEvent = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+        buttons: 1,
+        clientX: button.getBoundingClientRect().left + button.offsetWidth / 2,
+        clientY: button.getBoundingClientRect().top + button.offsetHeight / 2,
+      });
+      button.dispatchEvent(clickEvent);
+      await this.sleep(200);
+
+      // Method 3: Try triggering via pointer events
+      button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      await this.sleep(100);
+
+      // Method 4: Try keyboard activation (Enter key)
+      const enterEvent = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      button.dispatchEvent(enterEvent);
+
+      this.showStatus(
+        `Clicked button: ${button.textContent?.trim() || "Continue"}`,
+        "info"
+      );
+      return true;
+    } catch (error) {
+      this.logger(`Error clicking button: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Handle date input fields with proper MM/DD/YYYY formatting
+   * @param {HTMLElement} element - Date input element
+   * @param {string} value - Date value to input
+   * @returns {Promise<void>}
+   */
+  async handleDateInput(element, value) {
+    try {
+      // Parse and format the date value
+      const formattedDate = this.formatDateForInput(value);
+      if (!formattedDate) {
+        this.showStatus(`Could not format date: ${value}`, "warning");
+        return;
+      }
+
+      this.showStatus(`Filling date field with: ${formattedDate}`, "info");
+
+      // Clear the field first
+      element.focus();
+      await this.sleep(100);
+
+      // Select all and delete
+      element.select();
+      document.execCommand("delete");
+
+      // Set the value directly
+      element.value = formattedDate;
+
+      // Dispatch input events
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+
+      // Simulate typing for better compatibility
+      for (let i = 0; i < formattedDate.length; i++) {
+        const char = formattedDate[i];
+        const keydownEvent = new KeyboardEvent("keydown", {
+          key: char,
+          code: `Digit${char}`,
+          bubbles: true,
+        });
+        const inputEvent = new InputEvent("input", {
+          inputType: "insertText",
+          data: char,
+          bubbles: true,
+        });
+
+        element.dispatchEvent(keydownEvent);
+        element.dispatchEvent(inputEvent);
+        await this.sleep(50);
+      }
+
+      element.blur();
+      await this.sleep(200);
+    } catch (error) {
+      this.logger(`Error handling date input: ${error.message}`);
+    }
+  }
+
+  /**
+   * Format date value to MM/DD/YYYY format
+   * @param {string} value - Input date value
+   * @returns {string} Formatted date or empty string
+   */
+  formatDateForInput(value) {
+    if (!value) return "";
+
+    try {
+      // Try to parse various date formats
+      let date;
+
+      // If already in MM/DD/YYYY format
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+        return value;
+      }
+
+      // If in YYYY-MM-DD format
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const parts = value.split("-");
+        return `${parts[1]}/${parts[2]}/${parts[0]}`;
+      }
+
+      // Try parsing as a date
+      date = new Date(value);
+
+      if (isNaN(date.getTime())) {
+        // Try extracting numbers and creating a reasonable date
+        const numbers = value.match(/\d+/g);
+        if (numbers && numbers.length >= 3) {
+          const month = numbers[0].padStart(2, "0");
+          const day = numbers[1].padStart(2, "0");
+          let year = numbers[2];
+
+          // Handle 2-digit years
+          if (year.length === 2) {
+            const currentYear = new Date().getFullYear();
+            const century = Math.floor(currentYear / 100) * 100;
+            year = century + parseInt(year);
+            if (year > currentYear + 10) {
+              year -= 100;
+            }
+          }
+
+          return `${month}/${day}/${year}`;
+        }
+        return "";
+      }
+
+      // Format as MM/DD/YYYY
+      const month = (date.getMonth() + 1).toString().padStart(2, "0");
+      const day = date.getDate().toString().padStart(2, "0");
+      const year = date.getFullYear();
+
+      return `${month}/${day}/${year}`;
+    } catch (error) {
+      this.logger(`Error formatting date: ${error.message}`);
+      return "";
+    }
+  }
+
+  /**
+   * Check if input is a date field
+   * @param {HTMLElement} element - Input element
+   * @returns {boolean} True if it's a date field
+   */
+  isDateField(element) {
+    if (!element) return false;
+
+    return (
+      element.type === "date" ||
+      element.placeholder?.includes("MM/DD/YYYY") ||
+      element.placeholder?.includes("mm/dd/yyyy") ||
+      element.placeholder?.includes("MM-DD-YYYY") ||
+      element.name?.toLowerCase().includes("date") ||
+      element.id?.toLowerCase().includes("date")
+    );
+  }
+
+  /**
+   * Upload blob to file input
+   * @param {HTMLElement} fileInput - File input element
+   * @param {Blob} blob - File blob
+   * @param {string} fileName - File name
+   * @returns {Promise<void>}
+   */
+  async uploadBlob(fileInput, blob, fileName) {
+    try {
+      const file = new File([blob], fileName, {
+        type: blob.type || "application/pdf",
+        lastModified: Date.now(),
+      });
+
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      fileInput.files = dataTransfer.files;
+
+      // Dispatch events
+      await this.sleep(200);
+      fileInput.dispatchEvent(new Event("focus", { bubbles: true }));
+      await this.sleep(200);
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await this.sleep(200);
+      fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+      this.showStatus(`Resume uploaded successfully: ${fileName}`, "success");
+    } catch (error) {
+      this.showStatus(`Failed to upload resume: ${error.message}`, "error");
+      throw error;
+    }
+  }
+
+  /**
+   * Generate and upload custom resume for unlimited users
+   * @param {HTMLElement} fileInput - File input element
+   * @param {Object} userDetails - User details
+   * @param {string} jobDescription - Job description
+   * @param {Array} fileUrls - Array of resume URLs
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async generateAndUploadCustomResume(
+    fileInput,
+    userDetails,
+    jobDescription,
+    fileUrls
+  ) {
+    try {
+      this.showStatus(
+        "Generating custom resume tailored for this job...",
+        "info"
+      );
+
+      const parseResponse = await fetch(`${this.aiBaseUrl}/parse-resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_url: fileUrls[fileUrls.length - 1],
+        }),
+      });
+
+      if (!parseResponse.ok) {
+        throw new Error(`Resume parsing failed: ${parseResponse.status}`);
+      }
+
+      const { text: parsedResumeText } = await parseResponse.json();
+
+      const optimizeResponse = await fetch(
+        `${this.aiBaseUrl}/optimize-resume`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resume_text: parsedResumeText,
+            job_description: jobDescription,
+            user_data: {
+              summary: userDetails.summary,
+              projects: userDetails.projects,
+              fullPositions: userDetails.fullPositions,
+              education: userDetails.education,
+              educationStartMonth: userDetails.educationStartMonth,
+              educationStartYear: userDetails.educationStartYear,
+              educationEndMonth: userDetails.educationEndMonth,
+              educationEndYear: userDetails.educationEndYear,
+            },
+          }),
+        }
+      );
+
+      if (!optimizeResponse.ok) {
+        throw new Error(
+          `Resume optimization failed: ${optimizeResponse.status}`
+        );
+      }
+
+      const resumeData = await optimizeResponse.json();
+
+      const generateResponse = await fetch(
+        `${this.aiBaseUrl}/generate-resume-pdf`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_data: {
+              author:
+                userDetails.name ||
+                `${userDetails.firstName} ${userDetails.lastName}`,
+              email: userDetails.email,
+              phone: `${userDetails.phoneCountryCode || ""}${
+                userDetails.phoneNumber || ""
+              }`,
+              address: userDetails.streetAddress || userDetails.country,
+            },
+            resume_data: resumeData.data,
+          }),
+        }
+      );
+
+      if (!generateResponse.ok) {
+        this.showStatus(
+          "Custom resume generation failed, using original resume",
+          "error"
+        );
+        throw new Error(`Resume generation failed: ${generateResponse.status}`);
+      }
+
+      const blob = await generateResponse.blob();
+
+      if (blob.size === 0) {
+        throw new Error("Generated PDF is empty");
+      }
+
+      const fileName = `${userDetails.name || "resume"}.pdf`;
+      await this.uploadBlob(fileInput, blob, fileName);
+
+      this.showStatus(
+        "Custom resume generated and uploaded successfully!",
+        "success"
+      );
+      return true;
+    } catch (error) {
+      this.showStatus(
+        "Custom resume generation failed, using existing resume",
+        "warning"
+      );
+      // Fallback to regular upload
+      return await this.uploadFileFromURL(fileInput, this.userData);
+    }
+  }
+
+  /**
+   * Match and upload resume (existing functionality)
+   * @param {HTMLElement} fileInput - File input element
+   * @param {Object} userDetails - User details
+   * @param {string} jobDescription - Job description
+   * @param {Array} fileUrls - Array of resume URLs
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async matchAndUploadResume(fileInput, userDetails, jobDescription, fileUrls) {
+    try {
+      this.showStatus("Finding the best resume match for this job...", "info");
+
+      // Use the existing uploadFileFromURL logic
+      return await this.uploadFileFromURL(fileInput, this.userData);
+    } catch (error) {
+      this.showStatus("Resume matching failed: " + error.message, "error");
+      return false;
+    }
+  }
+
+  /**
+   * Handle resume upload with custom generation support
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async handleResumeUpload() {
+    try {
+      this.showStatus(`Looking for resume upload section...`, "info");
+
+      // Platform-specific handling
+      if (this.platform === "glassdoor") {
+        // Glassdoor-specific upload flow
+        return await this.handleGlassdoorResumeStep();
+      }
+
+      // Indeed-specific upload flow
+      // First look for resume options button
+      const resumeOptionsBtn = document.querySelector(
+        this.selectors.COMMON.RESUME_OPTIONS
+      );
+      if (resumeOptionsBtn) {
+        this.showStatus("Found resume options menu", "info");
+        await this.clickButton(resumeOptionsBtn);
+        await this.sleep(this.timeouts.SHORT);
+
+        // Look for upload option in menu
+        const uploadOption =
+          document.querySelector(this.selectors.COMMON.RESUME_UPLOAD_BUTTON) ||
+          this.findElementByAttribute("role", "menuitem", "Upload");
+
+        if (uploadOption) {
+          this.showStatus("Selecting upload resume option", "info");
+          await this.clickButton(uploadOption);
+          await this.sleep(this.timeouts.SHORT);
+        }
+      } else {
+        // Try to find direct upload button
+        const uploadButton =
+          this.findButtonByText("Upload resume") ||
+          this.findButtonByText("Upload Resume") ||
+          document.querySelector(
+            this.selectors.INDEED.INDEED_RESUME_UPLOAD_BUTTON
+          );
+
+        if (uploadButton) {
+          this.showStatus("Found upload button", "info");
+          await this.clickButton(uploadButton);
+          await this.sleep(this.timeouts.SHORT);
         }
       }
 
-      this.logger("No job description element found with any selector");
-      return "";
-    }
+      // Now look for file input - try multiple times
+      let fileInput = null;
+      let attempts = 0;
+      const maxAttempts = 5;
 
-    return this.processJobDescription(jobDescContainer);
+      while (!fileInput && attempts < maxAttempts) {
+        fileInput = document.querySelector(this.selectors.COMMON.FILE_INPUT);
+
+        if (!fileInput) {
+          attempts++;
+          this.showStatus(
+            `Waiting for file upload field... (${attempts}/${maxAttempts})`,
+            "info"
+          );
+          await this.sleep(1000);
+        }
+      }
+
+      if (!fileInput) {
+        this.showStatus(
+          "No file upload field found, looking for skip option",
+          "warning"
+        );
+
+        // Look for skip option
+        const skipButton =
+          this.findButtonByText("Skip") ||
+          this.findLinkByText("Skip this step");
+
+        if (skipButton) {
+          this.showStatus("Skipping resume upload step", "info");
+          await this.clickButton(skipButton);
+          await this.sleep(this.timeouts.STANDARD);
+          return true;
+        }
+
+        return false;
+      }
+
+      // Get resume URL from user data
+      if (!this.userData.cv?.url && !this.userData.resumeUrl) {
+        this.showStatus("No resume found in user data", "error");
+        return false;
+      }
+
+      // Handle custom resume generation or regular upload
+      try {
+        const fileUrls = this.userData.resumeUrl || [this.userData.cv.url];
+
+        if (
+          this.userData.plan === "unlimited" &&
+          this.userData.jobPreferences?.useCustomResume === true &&
+          this.jobDescription
+        ) {
+          // Generate custom resume
+          const uploaded = await this.generateAndUploadCustomResume(
+            fileInput,
+            this.userData,
+            this.jobDescription,
+            Array.isArray(fileUrls) ? fileUrls : [fileUrls]
+          );
+
+          if (uploaded) {
+            this.showStatus("Custom resume uploaded successfully!", "success");
+          } else {
+            this.showStatus(
+              "Custom resume upload failed, trying regular upload",
+              "warning"
+            );
+            // Fallback to regular upload
+            const regularUploaded = await this.uploadFileFromURL(
+              fileInput,
+              this.userData
+            );
+            if (!regularUploaded) {
+              this.showStatus("Resume upload failed completely", "error");
+              return false;
+            }
+          }
+        } else {
+          // Regular resume upload with matching
+          const uploaded = await this.matchAndUploadResume(
+            fileInput,
+            this.userData,
+            this.jobDescription,
+            Array.isArray(fileUrls) ? fileUrls : [fileUrls]
+          );
+
+          if (!uploaded) {
+            this.showStatus("Resume upload failed", "error");
+            return false;
+          }
+        }
+      } catch (error) {
+        this.showStatus(`Error in resume upload: ${error.message}`, "error");
+        return false;
+      }
+
+      // Wait for upload processing
+      await this.sleep(this.timeouts.STANDARD);
+
+      // Find and click continue
+      const continueButton =
+        document.querySelector(this.selectors.COMMON.CONTINUE_BUTTON) ||
+        this.findButtonByText("Continue") ||
+        this.findButtonByText("Next") ||
+        this.findActionButton();
+
+      if (continueButton) {
+        this.showStatus("Continuing to next step...", "info");
+        await this.clickButton(continueButton);
+        await this.sleep(this.timeouts.STANDARD);
+      }
+
+      return true;
+    } catch (error) {
+      this.showStatus(`Resume upload error: ${error.message}`, "error");
+      return false;
+    }
+  }
+
+  /**
+   * Handle Glassdoor-specific resume upload step - ALWAYS upload a new resume
+   * Enhanced with custom resume generation support
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async handleGlassdoorResumeStep() {
+    try {
+      this.showStatus("Processing Glassdoor resume upload...", "info");
+
+      // First look for hidden file inputs - they often exist but are triggered by other buttons
+      const hiddenFileInputs = [
+        document.querySelector(
+          'input[type="file"][data-testid="FileResumeCard-file-input"]'
+        ),
+        document.querySelector('input[type="file"][style*="display: none"]'),
+        document.querySelector('input[type="file"][style*="display:none"]'),
+      ].filter((input) => input !== null);
+
+      if (hiddenFileInputs.length > 0) {
+        this.showStatus("Found hidden file input, activating it...", "info");
+
+        // Look for the trigger button that would normally activate this input
+        const triggerButtons = [
+          document.querySelector('[data-testid="FileResumeCard-label"]'),
+          document.querySelector('[for="' + hiddenFileInputs[0].id + '"]'),
+          this.findButtonByText("Upload Resume"),
+          this.findButtonByText("Upload resume"),
+          this.findButtonByText("Upload"),
+          document.querySelector('[data-testid="ResumeOptionsMenu-btn"]'),
+        ].filter((btn) => btn && this.isElementVisible(btn));
+
+        if (triggerButtons.length > 0) {
+          this.showStatus("Clicking upload trigger button...", "info");
+          await this.clickButton(triggerButtons[0]);
+          await this.sleep(this.timeouts.SHORT);
+        }
+
+        // Use the hidden file input directly
+        const fileInput = hiddenFileInputs[0];
+
+        // Get resume URL from user data
+        if (!this.userData.cv?.url && !this.userData.resumeUrl) {
+          this.showStatus("No resume URL found in user data", "error");
+          return false;
+        }
+
+        // Handle custom resume generation or regular upload
+        let uploaded = false;
+        try {
+          const fileUrls = this.userData.resumeUrl || [this.userData.cv.url];
+          if (
+            this.userData.plan === "unlimited" &&
+            this.userData.jobPreferences?.useCustomResume === true &&
+            this.jobDescription
+          ) {
+            // Generate custom resume
+            uploaded = await this.generateAndUploadCustomResume(
+              fileInput,
+              this.userData,
+              this.jobDescription,
+              Array.isArray(fileUrls) ? fileUrls : [fileUrls]
+            );
+          } else {
+            // Regular resume upload with matching
+            uploaded = await this.matchAndUploadResume(
+              fileInput,
+              this.userData,
+              this.jobDescription,
+              Array.isArray(fileUrls) ? fileUrls : [fileUrls]
+            );
+          }
+        } catch (error) {
+          this.showStatus(`Glassdoor upload error: ${error.message}`, "error");
+          // Fallback to original method
+          uploaded = await this.uploadFileFromURL(
+            fileInput,
+            this.userData,
+            true // Pass true to bypass visibility check
+          );
+        }
+
+        if (uploaded) {
+          this.showStatus(
+            "Resume uploaded to Glassdoor successfully!",
+            "success"
+          );
+
+          // Wait longer for Glassdoor processing
+          await this.sleep(this.timeouts.EXTENDED);
+
+          // Find and click continue
+          const continueButton =
+            document.querySelector(this.selectors.COMMON.CONTINUE_BUTTON) ||
+            this.findButtonByText("Continue") ||
+            this.findButtonByText("Next") ||
+            this.findButtonByText("Save and Continue") ||
+            this.findActionButton();
+
+          if (continueButton) {
+            this.showStatus("Proceeding to next step...", "info");
+            await this.clickButton(continueButton);
+            await this.sleep(this.timeouts.STANDARD);
+          }
+
+          return true;
+        }
+      }
+
+      // Continue with normal flow if hidden inputs didn't work
+      // First check if there's an existing resume preview
+      const resumePreview =
+        document.querySelector(".resumePreview") ||
+        document.querySelector(".uploadedResume") ||
+        document.querySelector("[data-test='resume-preview']");
+
+      if (resumePreview) {
+        this.showStatus(
+          "Found existing resume, attempting to replace it...",
+          "info"
+        );
+
+        // Look for replace options
+        const replaceButtons = [
+          this.findButtonByText("Replace"),
+          this.findButtonByText("Change"),
+          this.findButtonByText("Update"),
+          this.findButtonByText("Edit resume"),
+          this.findButtonByText("Upload new"),
+        ].filter((btn) => btn && this.isElementVisible(btn));
+
+        if (replaceButtons.length > 0) {
+          this.showStatus("Replacing existing resume...", "info");
+          await this.clickButton(replaceButtons[0]);
+          await this.sleep(this.timeouts.STANDARD);
+        }
+      }
+
+      // Look for Glassdoor-specific upload button
+      const gdUploadButton = document.querySelector(
+        this.selectors.GLASSDOOR.GD_RESUME_UPLOAD
+      );
+
+      if (gdUploadButton) {
+        this.showStatus("Found Glassdoor upload button", "info");
+        await this.clickButton(gdUploadButton);
+        await this.sleep(this.timeouts.STANDARD);
+      }
+
+      // Look for file input - check multiple selectors
+      let fileInput = null;
+      const possibleFileInputs = [
+        document.querySelector(this.selectors.GLASSDOOR.GD_FILE_INPUT),
+        document.querySelector(this.selectors.COMMON.FILE_INPUT),
+        document.querySelector('input[type="file"]'),
+        document.querySelector('input[accept=".pdf,.doc,.docx,.rtf,.txt"]'),
+      ];
+
+      for (const input of possibleFileInputs) {
+        if (input && this.isElementVisible(input)) {
+          fileInput = input;
+          this.showStatus("Found Glassdoor file input", "info");
+          break;
+        }
+      }
+
+      if (!fileInput) {
+        // If no file input is visible, try clicking any buttons that might reveal it
+        const uploadButtons = [
+          this.findButtonByText("Upload Resume"),
+          this.findButtonByText("Upload resume"),
+          this.findButtonByText("Upload"),
+          this.findButtonByText("Add resume"),
+          this.findButtonByText("Add Resume"),
+        ].filter((btn) => btn && this.isElementVisible(btn));
+
+        if (uploadButtons.length > 0) {
+          this.showStatus("Clicking button to reveal file input...", "info");
+          await this.clickButton(uploadButtons[0]);
+          await this.sleep(this.timeouts.STANDARD);
+
+          // Check again for file input
+          for (const selector of [
+            'input[type="file"]',
+            'input[accept*=".pdf"]',
+            'input[accept*=".doc"]',
+          ]) {
+            fileInput = document.querySelector(selector);
+            if (fileInput && this.isElementVisible(fileInput)) {
+              this.showStatus(`Found file input: ${selector}`, "info");
+              break;
+            }
+          }
+        }
+      }
+
+      if (!fileInput) {
+        this.showStatus(
+          "No file input found, looking for skip option...",
+          "warning"
+        );
+
+        // Look for skip option
+        const skipButton =
+          this.findButtonByText("Skip") ||
+          this.findLinkByText("Skip this step");
+        if (skipButton) {
+          this.showStatus("Skipping resume step", "info");
+          await this.clickButton(skipButton);
+          await this.sleep(this.timeouts.STANDARD);
+          return true;
+        }
+
+        return false;
+      }
+
+      // Get resume URL from user data
+      if (!this.userData.cv?.url && !this.userData.resumeUrl) {
+        this.showStatus("No resume URL available", "error");
+        return false;
+      }
+
+      // Handle custom resume generation or regular upload
+      let uploaded = false;
+      try {
+        const fileUrls = this.userData.resumeUrl || [this.userData.cv.url];
+
+        if (
+          this.userData.plan === "unlimited" &&
+          this.userData.jobPreferences?.useCustomResume === true &&
+          this.jobDescription
+        ) {
+          // Generate custom resume
+          uploaded = await this.generateAndUploadCustomResume(
+            fileInput,
+            this.userData,
+            this.jobDescription,
+            Array.isArray(fileUrls) ? fileUrls : [fileUrls]
+          );
+        } else {
+          // Regular resume upload with matching
+          uploaded = await this.matchAndUploadResume(
+            fileInput,
+            this.userData,
+            this.jobDescription,
+            Array.isArray(fileUrls) ? fileUrls : [fileUrls]
+          );
+        }
+      } catch (error) {
+        this.showStatus(
+          `Glassdoor upload process error: ${error.message}`,
+          "error"
+        );
+        // Fallback to original method
+        uploaded = await this.uploadFileFromURL(fileInput, this.userData);
+      }
+
+      if (uploaded) {
+        this.showStatus(
+          "Resume uploaded to Glassdoor successfully!",
+          "success"
+        );
+
+        // Wait longer for Glassdoor processing
+        await this.sleep(this.timeouts.EXTENDED);
+
+        // Find and click continue
+        const continueButton =
+          document.querySelector(this.selectors.COMMON.CONTINUE_BUTTON) ||
+          this.findButtonByText("Continue") ||
+          this.findButtonByText("Next") ||
+          this.findButtonByText("Save and Continue") ||
+          this.findActionButton();
+
+        if (continueButton) {
+          this.showStatus("Moving to next step...", "info");
+          await this.clickButton(continueButton);
+          await this.sleep(this.timeouts.STANDARD);
+        }
+
+        return true;
+      } else {
+        this.showStatus("Glassdoor resume upload failed", "error");
+        return false;
+      }
+    } catch (error) {
+      this.showStatus(`Glassdoor resume step error: ${error.message}`, "error");
+      return false;
+    }
   }
 
   /**
@@ -136,9 +937,7 @@ class GlassdoorFormHandler {
    */
   async fillCompleteForm(formData = {}) {
     try {
-      this.logger("Starting form filling process");
-
-      this.jobDescription = this.extractIndeedJobDescription();
+      this.showStatus("Starting automated form filling...", "info");
 
       // Wait for form to be fully loaded
       await this.sleep(this.timeouts.STANDARD);
@@ -153,7 +952,10 @@ class GlassdoorFormHandler {
 
       while (!isLastStep && currentStep < maxSteps) {
         currentStep++;
-        this.logger(`Processing form step ${currentStep}`);
+        this.showStatus(
+          `Processing application step ${currentStep}...`,
+          "info"
+        );
 
         // Find the form container
         const formContainer = this.findFormContainer();
@@ -170,29 +972,42 @@ class GlassdoorFormHandler {
         if (!actionButton) {
           // Check if this is the success page
           if (this.isSuccessPage()) {
-            this.logger("Success page detected, form submission complete");
+            this.showStatus(
+              "Application submitted successfully! 🎉",
+              "success"
+            );
             isLastStep = true;
             return true;
           } else {
-            this.logger(
-              "No action button found, checking for success indicators"
+            this.showStatus(
+              "Looking for any available action button...",
+              "info"
             );
             // Wait briefly to see if success indicators appear
             await this.sleep(this.timeouts.STANDARD);
 
             if (this.isSuccessPage()) {
-              this.logger("Success page detected after waiting");
+              this.showStatus(
+                "Application submitted successfully! 🎉",
+                "success"
+              );
               isLastStep = true;
               return true;
             } else {
               // Try to find any clickable element as a last resort
               const anyButton = this.findAnyButton();
               if (anyButton) {
-                this.logger("Found a possible button, attempting to click it");
-                anyButton.click();
+                this.showStatus(
+                  "Found possible button, attempting to click...",
+                  "info"
+                );
+                await this.clickButton(anyButton);
                 await this.sleep(this.timeouts.STANDARD);
               } else {
-                this.logger("No buttons found, form may be complete or stuck");
+                this.showStatus(
+                  "No buttons found - form may be complete",
+                  "warning"
+                );
                 isLastStep = true;
               }
             }
@@ -201,24 +1016,32 @@ class GlassdoorFormHandler {
           // Check if this is the final submit button
           const buttonText = actionButton.textContent.trim().toLowerCase();
           if (this.isFinalSubmitButton(actionButton)) {
-            this.logger("Found final submit button, submitting application");
+            this.showStatus("Submitting final application...", "info");
             isLastStep = true;
+          } else {
+            this.showStatus("Continuing to next step...", "info");
           }
 
-          // Click the button
-          this.logger(`Clicking ${buttonText} button`);
-          actionButton.click();
+          // Click the button using enhanced method
+          await this.clickButton(actionButton);
 
           // Wait for next page to load
           await this.sleep(this.timeouts.STANDARD);
         }
       }
 
-      // Final success check
+      //Final success check
       await this.sleep(this.timeouts.STANDARD);
-      return this.isSuccessPage();
+      const success = this.isSuccessPage();
+      if (success) {
+        this.showStatus(
+          "Application process completed successfully! 🎉",
+          "success"
+        );
+      }
+      return success;
     } catch (error) {
-      this.logger(`Error filling form: ${error.message}`);
+      this.showStatus(`Form filling error: ${error.message}`, "error");
       return false;
     }
   }
@@ -304,7 +1127,7 @@ class GlassdoorFormHandler {
           checkbox.closest(".required");
 
         if (isRequired && !checkbox.checked) {
-          this.logger("Checking required checkbox");
+          this.showStatus("Checking required checkbox", "info");
           checkbox.click();
           await this.sleep(200);
         }
@@ -379,8 +1202,9 @@ class GlassdoorFormHandler {
       element.closest('[aria-required="true"]')
     ) {
       if (radioGroup.length > 0) {
-        this.logger(
-          `No matching radio option found for "${value}", selecting first option as fallback`
+        this.showStatus(
+          `No matching radio option found for "${value}", selecting first option as fallback`,
+          "warning"
         );
         radioGroup[0].focus();
         radioGroup[0].click();
@@ -408,11 +1232,11 @@ class GlassdoorFormHandler {
     if (shouldBeChecked && !element.checked) {
       element.focus();
       element.click();
-      this.logger(`Checked checkbox: ${labelText}`);
+      this.showStatus(`Checked: ${labelText}`, "info");
     } else if (!shouldBeChecked && element.checked) {
       element.focus();
       element.click();
-      this.logger(`Unchecked checkbox: ${labelText}`);
+      this.showStatus(`Unchecked: ${labelText}`, "info");
     }
   }
 
@@ -569,8 +1393,6 @@ class GlassdoorFormHandler {
    */
   async getAIAnswer(question, options = []) {
     try {
-      this.logger(`Requesting AI answer for "${question}"`);
-
       // Make API request to get answer
       const response = await fetch(`${this.host}/api/ai-answer`, {
         method: "POST",
@@ -753,7 +1575,12 @@ class GlassdoorFormHandler {
             case "text":
             case "email":
             case "tel":
-              await this.simulateHumanInput(element, strValue);
+              // Check if this is a date field
+              if (this.isDateField(element)) {
+                await this.handleDateInput(element, strValue);
+              } else {
+                await this.simulateHumanInput(element, strValue);
+              }
               break;
 
             case "number":
@@ -838,23 +1665,21 @@ class GlassdoorFormHandler {
       element.value = selectedOption.value;
       element.dispatchEvent(new Event("change", { bubbles: true }));
       element.dispatchEvent(new Event("input", { bubbles: true }));
-      this.logger(
-        `Selected option: "${selectedOption.text}" for field: ${labelText}`
+      this.showStatus(
+        `Selected "${selectedOption.text}" for: ${labelText}`,
+        "info"
       );
     } else {
       // If no match found and this is not the first option (placeholder),
       // select the first valid option as fallback
       if (startIndex < element.options.length) {
-        this.logger(
-          `No matching option found for: "${value}" in field: ${labelText}, selecting first option as fallback`
+        this.showStatus(
+          `No matching option for "${value}" in ${labelText}, using first option`,
+          "warning"
         );
         element.value = element.options[startIndex].value;
         element.dispatchEvent(new Event("change", { bubbles: true }));
         element.dispatchEvent(new Event("input", { bubbles: true }));
-      } else {
-        this.logger(
-          `No matching option found for: "${value}" in field: ${labelText} and no valid fallback options`
-        );
       }
     }
   }
@@ -890,19 +1715,16 @@ class GlassdoorFormHandler {
    */
   async handleResumeStep() {
     try {
-      this.logger(
-        `Checking for resume upload/selection step on ${this.platform}`
-      );
+      this.showStatus(`Checking for resume section...`, "info");
 
       // Check if we're on the resume step
       const isResumeStep = this.isResumeStep();
 
       if (!isResumeStep) {
-        this.logger("Not on resume step, continuing with form");
         return true;
       }
 
-      this.logger(`Detected resume step for ${this.platform}, handling it`);
+      this.showStatus(`Found resume section, processing...`, "info");
       // Platform-specific handling
       if (this.platform === "glassdoor") {
         return await this.handleGlassdoorResumeStep();
@@ -914,7 +1736,7 @@ class GlassdoorFormHandler {
         document.querySelector("[aria-roledescription='document']");
 
       if (resumePreview) {
-        this.logger("Resume already showing in preview");
+        this.showStatus("Resume already uploaded, continuing...", "info");
 
         // Find and click continue button
         const continueButton =
@@ -923,8 +1745,7 @@ class GlassdoorFormHandler {
           this.findButtonByText("Next");
 
         if (continueButton) {
-          this.logger("Clicking continue with existing resume");
-          continueButton.click();
+          await this.clickButton(continueButton);
           await this.sleep(this.timeouts.STANDARD);
         }
 
@@ -937,8 +1758,9 @@ class GlassdoorFormHandler {
       );
 
       if (resumeOptions && resumeOptions.length > 0) {
-        this.logger(
-          `Found ${resumeOptions.length} existing resumes, selecting first one`
+        this.showStatus(
+          `Found existing resumes, selecting the first one...`,
+          "info"
         );
         resumeOptions[0].click();
         await this.sleep(this.timeouts.SHORT);
@@ -950,8 +1772,7 @@ class GlassdoorFormHandler {
           this.findButtonByText("Next");
 
         if (continueButton) {
-          this.logger("Clicking continue after selecting resume");
-          continueButton.click();
+          await this.clickButton(continueButton);
           await this.sleep(this.timeouts.STANDARD);
         }
 
@@ -968,7 +1789,7 @@ class GlassdoorFormHandler {
 
       if (indeedResumeRadio && fileResumeRadio) {
         // Prefer file upload since we have control over it
-        this.logger("Found resume type radio buttons, selecting file resume");
+        this.showStatus("Selecting file resume option...", "info");
         fileResumeRadio.click();
         await this.sleep(this.timeouts.SHORT);
 
@@ -979,7 +1800,7 @@ class GlassdoorFormHandler {
       // If no radio buttons, look for direct upload options
       return await this.handleResumeUpload();
     } catch (error) {
-      this.logger(`Error handling resume step: ${error.message}`);
+      this.showStatus(`Resume step error: ${error.message}`, "error");
       return false;
     }
   }
@@ -1041,130 +1862,6 @@ class GlassdoorFormHandler {
   }
 
   /**
-   * Handle resume upload
-   * @returns {Promise<boolean>} Success or failure
-   */
-  async handleResumeUpload() {
-    try {
-      this.logger(`Handling resume upload for ${this.platform}`);
-
-      // Platform-specific handling
-      if (this.platform === "glassdoor") {
-        // Glassdoor-specific upload flow
-        return await this.handleGlassdoorResumeStep();
-      }
-
-      // Indeed-specific upload flow
-      // First look for resume options button
-      const resumeOptionsBtn = document.querySelector(
-        this.selectors.COMMON.RESUME_OPTIONS
-      );
-      if (resumeOptionsBtn) {
-        this.logger("Found resume options button, clicking it");
-        resumeOptionsBtn.click();
-        await this.sleep(this.timeouts.SHORT);
-
-        // Look for upload option in menu
-        const uploadOption =
-          document.querySelector(this.selectors.COMMON.RESUME_UPLOAD_BUTTON) ||
-          this.findElementByAttribute("role", "menuitem", "Upload");
-
-        if (uploadOption) {
-          this.logger("Found upload option in menu, clicking it");
-          uploadOption.click();
-          await this.sleep(this.timeouts.SHORT);
-        }
-      } else {
-        // Try to find direct upload button
-        const uploadButton =
-          this.findButtonByText("Upload resume") ||
-          this.findButtonByText("Upload Resume") ||
-          document.querySelector(
-            this.selectors.INDEED.INDEED_RESUME_UPLOAD_BUTTON
-          );
-
-        if (uploadButton) {
-          this.logger("Found upload button, clicking it");
-          uploadButton.click();
-          await this.sleep(this.timeouts.SHORT);
-        }
-      }
-
-      // Now look for file input - try multiple times
-      let fileInput = null;
-      let attempts = 0;
-      const maxAttempts = 5;
-
-      while (!fileInput && attempts < maxAttempts) {
-        fileInput = document.querySelector(this.selectors.COMMON.FILE_INPUT);
-
-        if (!fileInput) {
-          attempts++;
-          this.logger(
-            `No file input found yet, waiting... (attempt ${attempts}/${maxAttempts})`
-          );
-          await this.sleep(1000);
-        }
-      }
-
-      if (!fileInput) {
-        this.logger("No file input found after multiple attempts");
-
-        // Look for skip option
-        const skipButton =
-          this.findButtonByText("Skip") ||
-          this.findLinkByText("Skip this step");
-
-        if (skipButton) {
-          this.logger("Found skip button, clicking it");
-          skipButton.click();
-          await this.sleep(this.timeouts.STANDARD);
-          return true;
-        }
-
-        return false;
-      }
-
-      // Get resume URL from user data
-      if (!this.userData.cv.url) {
-        this.logger("No resume URL in user data");
-        return false;
-      }
-
-      // Upload resume
-      const uploaded = await this.uploadFileFromURL(fileInput, this.userData);
-
-      if (uploaded) {
-        this.logger("Resume uploaded successfully");
-
-        // Wait for upload processing
-        await this.sleep(this.timeouts.STANDARD);
-
-        // Find and click continue
-        const continueButton =
-          document.querySelector(this.selectors.COMMON.CONTINUE_BUTTON) ||
-          this.findButtonByText("Continue") ||
-          this.findButtonByText("Next") ||
-          this.findActionButton();
-
-        if (continueButton) {
-          this.logger("Clicking continue after upload");
-          continueButton.click();
-          await this.sleep(this.timeouts.STANDARD);
-        }
-
-        return true;
-      } else {
-        this.logger("Resume upload failed");
-        return false;
-      }
-    } catch (error) {
-      this.logger(`Error in resume upload: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
    * Wait for file upload to complete
    * @param {HTMLElement} fileInput The file input element
    * @returns {Promise<boolean>} Success or failure
@@ -1176,15 +1873,11 @@ class GlassdoorFormHandler {
     while (Date.now() - startTime < this.timeouts.UPLOAD) {
       // Only log progress occasionally and only if debugging is enabled
       if (this.enableDebug && logCounter % 10 === 0) {
-        this.logger(
-          `Waiting for upload to complete: ${Math.round(
+        this.showStatus(
+          `Waiting for upload... ${Math.round(
             (Date.now() - startTime) / 1000
-          )}s - Platform: ${this.platform}`
-        );
-        this.logger(
-          `File input status: ${
-            fileInput.files.length > 0 ? "Has file" : "No file"
-          }`
+          )}s`,
+          "info"
         );
       }
       logCounter++;
@@ -1201,7 +1894,7 @@ class GlassdoorFormHandler {
           ];
 
           if (successIndicators.some((el) => el && this.isElementVisible(el))) {
-            this.logger("Found Glassdoor upload success indicator");
+            this.showStatus("Resume upload completed successfully!", "success");
             return true;
           }
         } else {
@@ -1212,7 +1905,7 @@ class GlassdoorFormHandler {
             document.querySelector("[data-testid='ResumeThumbnail']");
 
           if (successIndicator) {
-            this.logger("Found Indeed upload success indicator");
+            this.showStatus("Resume upload completed successfully!", "success");
             return true;
           }
         }
@@ -1222,9 +1915,7 @@ class GlassdoorFormHandler {
           "[aria-roledescription='document'], .resume-preview"
         );
         if (previewElements.length > 0) {
-          this.logger(
-            "Found generic upload success indicator (document preview)"
-          );
+          this.showStatus("Resume upload completed successfully!", "success");
           return true;
         }
       }
@@ -1233,7 +1924,7 @@ class GlassdoorFormHandler {
     }
 
     // If timeout reached
-    this.logger(`Upload wait timeout reached (${this.timeouts.UPLOAD}ms)`);
+    this.showStatus(`Upload wait timeout reached`, "warning");
 
     // For Glassdoor, check one more time for anything that might indicate success
     if (this.platform === "glassdoor") {
@@ -1243,7 +1934,7 @@ class GlassdoorFormHandler {
         document.querySelector(".uploadedResume");
 
       if (anyPreview) {
-        this.logger("Found Glassdoor resume preview element after timeout");
+        this.showStatus("Found resume preview after timeout", "success");
         return true;
       }
     }
@@ -1259,7 +1950,7 @@ class GlassdoorFormHandler {
    */
   async fillFormStep(container) {
     try {
-      this.logger(`Filling form step for ${this.platform}`);
+      this.showStatus(`Filling form fields...`, "info");
       let hasVisibleFields = false;
 
       // FIRST PASS: Process all fieldsets (radio groups) as a single unit
@@ -1274,16 +1965,12 @@ class GlassdoorFormHandler {
             'fieldset, .css-1ciavar, [data-testid^="input-q_"]'
           )
         );
-        this.logger(
-          `No standard fieldsets found, found ${altFieldsets.length} alternative fieldsets`
-        );
         fieldsets.push(...altFieldsets);
       }
 
       for (const fieldset of fieldsets) {
         // Only process visible fieldsets
         if (!this.isElementVisible(fieldset)) {
-          this.logger("Skipping invisible fieldset");
           continue;
         }
 
@@ -1332,11 +2019,10 @@ class GlassdoorFormHandler {
         }
 
         if (!questionText) {
-          this.logger("Could not find question text for fieldset, skipping");
           continue;
         }
 
-        this.logger(`Found radio question: "${questionText}"`);
+        this.showStatus(`Processing question: "${questionText}"`, "info");
 
         // Get all available options from the radio buttons
         const optionLabels = [];
@@ -1370,29 +2056,22 @@ class GlassdoorFormHandler {
         }
 
         if (optionLabels.length === 0) {
-          this.logger("No options found for radio group, skipping");
           continue;
         }
 
         // Make a SINGLE API call with the proper question and all options
-        this.logger(
-          `Getting answer for "${questionText}" with options: ${JSON.stringify(
-            optionLabels
-          )}`
-        );
         const answer = await this.getValueForField(questionText, optionLabels);
 
         if (!answer) {
-          this.logger(`No answer received for question: "${questionText}"`);
-
           // If no answer received and this is a required field, select the first option
           if (
             fieldset.getAttribute("aria-required") === "true" ||
             fieldset.classList.contains("required")
           ) {
             if (radioInputs.length > 0) {
-              this.logger(
-                "Selecting first option as fallback for required field"
+              this.showStatus(
+                "Selecting first option for required field",
+                "warning"
               );
               radioInputs[0].click();
             }
@@ -1407,16 +2086,14 @@ class GlassdoorFormHandler {
         // First try exact match
         if (optionMap.has(answer)) {
           optionMap.get(answer).click();
-          this.logger(`Selected option: "${answer}" (exact match)`);
+          this.showStatus(`Selected: "${answer}"`, "info");
           foundMatch = true;
         } else {
           // Try case-insensitive match
           for (const [optionText, radio] of optionMap.entries()) {
             if (optionText.toLowerCase() === normalizedAnswer) {
               radio.click();
-              this.logger(
-                `Selected option: "${optionText}" (case-insensitive match)`
-              );
+              this.showStatus(`Selected: "${optionText}"`, "info");
               foundMatch = true;
               break;
             }
@@ -1430,7 +2107,10 @@ class GlassdoorFormHandler {
                 normalizedAnswer.includes(optionText.toLowerCase())
               ) {
                 radio.click();
-                this.logger(`Selected option: "${optionText}" (partial match)`);
+                this.showStatus(
+                  `Selected: "${optionText}" (partial match)`,
+                  "info"
+                );
                 foundMatch = true;
                 break;
               }
@@ -1444,8 +2124,9 @@ class GlassdoorFormHandler {
                 for (const word of answerWords) {
                   if (word.length > 3 && optionLower.includes(word)) {
                     radio.click();
-                    this.logger(
-                      `Selected option: "${optionText}" (keyword match with "${word}")`
+                    this.showStatus(
+                      `Selected: "${optionText}" (keyword match)`,
+                      "info"
                     );
                     foundMatch = true;
                     break;
@@ -1458,13 +2139,10 @@ class GlassdoorFormHandler {
         }
 
         if (!foundMatch) {
-          this.logger(
-            `Could not find matching option for answer: "${answer}" - selecting first option as fallback`
-          );
           // Select first option as fallback
           if (radioInputs.length > 0) {
             radioInputs[0].click();
-            this.logger(`Selected first option as fallback`);
+            this.showStatus(`Selected first option as fallback`, "warning");
           }
         }
 
@@ -1480,6 +2158,10 @@ class GlassdoorFormHandler {
         { selector: 'input[type="tel"]', type: "tel" },
         { selector: 'input[type="number"]', type: "number" },
         { selector: 'input[type="checkbox"]', type: "checkbox" },
+        // Added date field selectors
+        { selector: 'input[type="date"]', type: "date" },
+        { selector: 'input[placeholder*="MM/DD/YYYY"]', type: "date" },
+        { selector: 'input[placeholder*="mm/dd/yyyy"]', type: "date" },
       ];
 
       for (const { selector, type } of elementTypes) {
@@ -1503,7 +2185,12 @@ class GlassdoorFormHandler {
           const labelText = this.extractLabelText(label);
           if (!labelText) continue;
 
-          this.logger(`Processing ${type} field: "${labelText}"`);
+          this.showStatus(
+            `Processing ${
+              type === "date" ? "date" : type
+            } field: "${labelText}"`,
+            "info"
+          );
 
           // Get options for selects
           let options = [];
@@ -1517,14 +2204,18 @@ class GlassdoorFormHandler {
           const value = await this.getValueForField(labelText, options);
           if (!value) continue;
 
-          // Apply value
-          await this.applyValueToElement(element, value, labelText);
+          // Apply value - handle date fields specially
+          if (type === "date" || this.isDateField(element)) {
+            await this.handleDateInput(element, value);
+          } else {
+            await this.applyValueToElement(element, value, labelText);
+          }
         }
       }
 
       return hasVisibleFields;
     } catch (error) {
-      this.logger(`Error filling form step: ${error.message}`);
+      this.showStatus(`Error filling form step: ${error.message}`, "error");
       return false;
     }
   }
@@ -1606,234 +2297,6 @@ class GlassdoorFormHandler {
   }
 
   /**
-   * Handle Glassdoor-specific resume upload step - ALWAYS upload a new resume
-   * @returns {Promise<boolean>} Success or failure
-   */
-  async handleGlassdoorResumeStep() {
-    try {
-      this.logger("Handling Glassdoor resume step - will upload a new resume");
-
-      // First look for hidden file inputs - they often exist but are triggered by other buttons
-      const hiddenFileInputs = [
-        document.querySelector(
-          'input[type="file"][data-testid="FileResumeCard-file-input"]'
-        ),
-        document.querySelector('input[type="file"][style*="display: none"]'),
-        document.querySelector('input[type="file"][style*="display:none"]'),
-      ].filter((input) => input !== null);
-
-      if (hiddenFileInputs.length > 0) {
-        this.logger(
-          `Found hidden file input: ${hiddenFileInputs[0].outerHTML}`
-        );
-
-        // Look for the trigger button that would normally activate this input
-        const triggerButtons = [
-          document.querySelector('[data-testid="FileResumeCard-label"]'),
-          document.querySelector('[for="' + hiddenFileInputs[0].id + '"]'),
-          this.findButtonByText("Upload Resume"),
-          this.findButtonByText("Upload resume"),
-          this.findButtonByText("Upload"),
-          document.querySelector('[data-testid="ResumeOptionsMenu-btn"]'),
-        ].filter((btn) => btn && this.isElementVisible(btn));
-
-        if (triggerButtons.length > 0) {
-          this.logger("Found trigger button, clicking it first");
-          triggerButtons[0].click();
-          await this.sleep(this.timeouts.SHORT);
-        }
-
-        // Use the hidden file input directly - we'll bypass the visibility check
-        const fileInput = hiddenFileInputs[0];
-        this.logger("Will use hidden file input directly");
-
-        // Get resume URL from user data
-        if (!this.userData.cv.url) {
-          this.logger("No resume URL in user data");
-          return false;
-        }
-
-        // Upload resume using the hidden input
-        const uploaded = await this.uploadFileFromURL(
-          fileInput,
-          this.userData,
-          true
-        ); // Pass true to bypass visibility check
-
-        if (uploaded) {
-          this.logger(
-            "Resume uploaded successfully to hidden input on Glassdoor"
-          );
-
-          // Wait longer for Glassdoor processing
-          await this.sleep(this.timeouts.EXTENDED);
-
-          // Find and click continue
-          const continueButton =
-            document.querySelector(this.selectors.COMMON.CONTINUE_BUTTON) ||
-            this.findButtonByText("Continue") ||
-            this.findButtonByText("Next") ||
-            this.findButtonByText("Save and Continue") ||
-            this.findActionButton();
-
-          if (continueButton) {
-            this.logger("Clicking continue after Glassdoor upload");
-            continueButton.click();
-            await this.sleep(this.timeouts.STANDARD);
-          }
-
-          return true;
-        }
-      }
-
-      // Continue with normal flow if hidden inputs didn't work
-      // First check if there's an existing resume preview
-      const resumePreview =
-        document.querySelector(".resumePreview") ||
-        document.querySelector(".uploadedResume") ||
-        document.querySelector("[data-test='resume-preview']");
-
-      if (resumePreview) {
-        this.logger(
-          "Existing resume found on Glassdoor. Will try to replace it"
-        );
-
-        // Look for replace options
-        const replaceButtons = [
-          this.findButtonByText("Replace"),
-          this.findButtonByText("Change"),
-          this.findButtonByText("Update"),
-          this.findButtonByText("Edit resume"),
-          this.findButtonByText("Upload new"),
-        ].filter((btn) => btn && this.isElementVisible(btn));
-
-        if (replaceButtons.length > 0) {
-          this.logger("Found replace button, clicking it");
-          replaceButtons[0].click();
-          await this.sleep(this.timeouts.STANDARD);
-        }
-      }
-
-      // Look for Glassdoor-specific upload button
-      const gdUploadButton = document.querySelector(
-        this.selectors.GLASSDOOR.GD_RESUME_UPLOAD
-      );
-
-      if (gdUploadButton) {
-        this.logger("Found Glassdoor upload button, clicking it");
-        gdUploadButton.click();
-        await this.sleep(this.timeouts.STANDARD);
-      } else {
-        this.logger("No Glassdoor upload button found, looking for file input");
-      }
-
-      // Look for file input - check multiple selectors
-      let fileInput = null;
-      const possibleFileInputs = [
-        document.querySelector(this.selectors.GLASSDOOR.GD_FILE_INPUT),
-        document.querySelector(this.selectors.COMMON.FILE_INPUT),
-        document.querySelector('input[type="file"]'),
-        document.querySelector('input[accept=".pdf,.doc,.docx,.rtf,.txt"]'),
-      ];
-
-      for (const input of possibleFileInputs) {
-        if (input && this.isElementVisible(input)) {
-          fileInput = input;
-          this.logger("Found Glassdoor file input");
-          break;
-        }
-      }
-
-      if (!fileInput) {
-        // If no file input is visible, try clicking any buttons that might reveal it
-        const uploadButtons = [
-          this.findButtonByText("Upload Resume"),
-          this.findButtonByText("Upload resume"),
-          this.findButtonByText("Upload"),
-          this.findButtonByText("Add resume"),
-          this.findButtonByText("Add Resume"),
-        ].filter((btn) => btn && this.isElementVisible(btn));
-
-        if (uploadButtons.length > 0) {
-          this.logger("Clicking button to reveal file input");
-          uploadButtons[0].click();
-          await this.sleep(this.timeouts.STANDARD);
-
-          // Check again for file input
-          for (const selector of [
-            'input[type="file"]',
-            'input[accept*=".pdf"]',
-            'input[accept*=".doc"]',
-          ]) {
-            fileInput = document.querySelector(selector);
-            if (fileInput && this.isElementVisible(fileInput)) {
-              this.logger(
-                `Found file input after clicking upload button: ${selector}`
-              );
-              break;
-            }
-          }
-        }
-      }
-
-      if (!fileInput) {
-        this.logger("No file input found on Glassdoor");
-
-        // Look for skip option
-        const skipButton =
-          this.findButtonByText("Skip") ||
-          this.findLinkByText("Skip this step");
-        if (skipButton) {
-          this.logger("Found skip button, clicking it");
-          skipButton.click();
-          await this.sleep(this.timeouts.STANDARD);
-          return true;
-        }
-
-        return false;
-      }
-
-      // Get resume URL from user data
-      if (!this.userData.cv.url) {
-        this.logger("No resume URL in user data");
-        return false;
-      }
-
-      // Upload resume
-      const uploaded = await this.uploadFileFromURL(fileInput, this.userData);
-
-      if (uploaded) {
-        this.logger("Resume uploaded successfully on Glassdoor");
-
-        // Wait longer for Glassdoor processing
-        await this.sleep(this.timeouts.EXTENDED);
-
-        // Find and click continue
-        const continueButton =
-          document.querySelector(this.selectors.COMMON.CONTINUE_BUTTON) ||
-          this.findButtonByText("Continue") ||
-          this.findButtonByText("Next") ||
-          this.findButtonByText("Save and Continue") ||
-          this.findActionButton();
-
-        if (continueButton) {
-          this.logger("Clicking continue after Glassdoor upload");
-          continueButton.click();
-          await this.sleep(this.timeouts.STANDARD);
-        }
-
-        return true;
-      } else {
-        this.logger("Resume upload failed on Glassdoor");
-        return false;
-      }
-    } catch (error) {
-      this.logger(`Error handling Glassdoor resume step: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
    * Upload file from URL to a file input element
    * @param {HTMLElement} fileInput The file input element
    * @param {Object} userData User data containing resume URL
@@ -1844,16 +2307,15 @@ class GlassdoorFormHandler {
     try {
       // Skip visibility check if explicitly told to bypass it
       if (!bypassVisibilityCheck && !this.isElementVisibleOrHidden(fileInput)) {
-        this.logger("File input is not accessible");
         return false;
       }
 
-      this.logger(`Starting resume upload for ${this.platform}`);
+      this.showStatus(`Uploading resume file...`, "info");
 
       // Try to use AI matching if job description is available
-      let resumeUrl = userData.cv.url;
+      let resumeUrl = userData.resumeUrl || userData.cv?.url;
 
-      if (this.jobDescription) {
+      if (this.jobDescription && resumeUrl) {
         try {
           const matchedUrl = `https://resumify.fastapply.co/api/match`;
           const res = await fetch(matchedUrl, {
@@ -1862,7 +2324,7 @@ class GlassdoorFormHandler {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              resume_urls: resumeUrl,
+              resume_urls: Array.isArray(resumeUrl) ? resumeUrl : [resumeUrl],
               job_description: this.jobDescription,
             }),
           });
@@ -1870,26 +2332,35 @@ class GlassdoorFormHandler {
           const data = await res.json();
           if (data && data.highest_ranking_resume) {
             resumeUrl = data.highest_ranking_resume;
-            this.logger("Using AI-matched resume");
+            this.showStatus("Using AI-matched resume", "info");
           }
         } catch (error) {
           this.logger(`Error in resume matching: ${error.message}`);
-          // Continue with original resume URL (already timestamped)
+          // Continue with original resume URL
         }
+      }
+
+      // Use the first URL if resumeUrl is an array
+      const finalResumeUrl = Array.isArray(resumeUrl)
+        ? resumeUrl[0]
+        : resumeUrl;
+
+      if (!finalResumeUrl) {
+        this.showStatus("No resume URL available", "error");
+        return false;
       }
 
       // Use proxy to fetch the file
       const proxyURL = `${this.host}/api/proxy-file?url=${encodeURIComponent(
-        resumeUrl
+        finalResumeUrl
       )}&fresh=true&platform=${this.platform}`;
-
-      this.logger(`Fetching resume via proxy: ${proxyURL.substring(0, 50)}...`);
 
       const response = await fetch(proxyURL);
 
       if (!response.ok) {
-        this.logger(
-          `Failed to fetch file: ${response.status} ${response.statusText} - Platform: ${this.platform}`
+        this.showStatus(
+          `Failed to fetch resume file: ${response.status}`,
+          "error"
         );
         throw new Error(`Failed to fetch file: ${response.statusText}`);
       }
@@ -1897,13 +2368,9 @@ class GlassdoorFormHandler {
       const blob = await response.blob();
 
       if (blob.size === 0) {
-        this.logger("Error: Received empty file blob");
+        this.showStatus("Received empty resume file", "error");
         throw new Error("Received empty file blob");
       }
-
-      this.logger(
-        `Received file blob of size: ${blob.size} bytes and type: ${blob.type}`
-      );
 
       let filename = `${userData.firstName || "Resume"} ${
         userData.lastName || ""
@@ -1930,8 +2397,6 @@ class GlassdoorFormHandler {
       );
       filename = `${filenameWithoutExt}_${timestamp}${fileExt}`;
 
-      this.logger(`Using filename: ${filename}`);
-
       // Create file object with sanitized filename
       const file = new File([blob], filename, {
         type: blob.type || "application/pdf",
@@ -1939,18 +2404,14 @@ class GlassdoorFormHandler {
       });
 
       if (file.size === 0) {
-        this.logger("Error: Created file is empty");
+        this.showStatus("Created file is empty", "error");
         throw new Error("Created file is empty");
       }
-
-      this.logger(`Created File object of size: ${file.size} bytes`);
 
       // Add file to input
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(file);
       fileInput.files = dataTransfer.files;
-
-      this.logger("File added to input, dispatching events");
 
       // Dispatch events in sequence with small delays
       await this.sleep(200);
@@ -1964,14 +2425,17 @@ class GlassdoorFormHandler {
       const uploadComplete = await this.waitForUploadComplete(fileInput);
 
       if (!uploadComplete) {
-        this.logger(`Upload completion check timed out for ${this.platform}`);
+        this.showStatus(
+          `Resume upload may not have completed fully`,
+          "warning"
+        );
         // For Glassdoor, we'll try to proceed anyway as their upload confirmation UI can be inconsistent
         return this.platform === "glassdoor";
       }
 
       return true;
     } catch (error) {
-      this.logger(`Error uploading resume: ${error.message}`);
+      this.showStatus(`Resume upload failed: ${error.message}`, "error");
       try {
         fileInput.value = "";
       } catch (e) {
@@ -1991,4 +2455,4 @@ class GlassdoorFormHandler {
   }
 }
 
-export default GlassdoorFormHandler;
+export default FormHandler;

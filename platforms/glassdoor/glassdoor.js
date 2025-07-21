@@ -1,6 +1,6 @@
 // platforms/glassdoor/glassdoor.js - Glassdoor Platform Automation (CLEANED)
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
-import GlassdoorFormHandler from "./glassdoor-form-handler.js";
+import FormHandler from "../../shared/indeed_glassdoors/form-handler.js";
 import {
   AIService,
   ApplicationTrackerService,
@@ -67,7 +67,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
 
         // Job description
         jobDescription:
-          ".jobDescriptionContent, [data-test='description'], [data-test='jobDescriptionText']",
+          ".JobDetails_jobDescription__uW_fK, [class*='jobDescription'], [data-test='description'], [data-test='jobDescriptionText']",
 
         // Filters and pagination
         easyApplyFilter:
@@ -141,8 +141,213 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     } else {
       this.init();
     }
+  }
 
-    this.showUserMessage("Glassdoor automation ready! 🏢");
+  async checkAuthenticationAndCaptcha() {
+    try {
+      const captchaCheck = this.checkForCaptcha();
+      if (!captchaCheck.isValid) {
+        this.showUserMessage(captchaCheck.message, "warning");
+        return {
+          canProceed: false,
+          reason: "captcha",
+          message: captchaCheck.message,
+        };
+      }
+
+      const loginCheck = this.checkLoginStatus();
+      if (!loginCheck.isLoggedIn) {
+        this.showUserMessage(loginCheck.message, "warning");
+        return {
+          canProceed: false,
+          reason: "login",
+          message: loginCheck.message,
+        };
+      }
+
+      this.showUserMessage(
+        "✅ Authentication verified - ready to proceed!",
+        "success"
+      );
+      return {
+        canProceed: true,
+        reason: "authenticated",
+        message: "Ready to start job search",
+      };
+    } catch (error) {
+      const errorMessage =
+        "❌ Error checking authentication status - please refresh and try again";
+      this.showUserMessage(errorMessage, "error");
+      return { canProceed: false, reason: "error", message: errorMessage };
+    }
+  }
+
+  checkForCaptcha() {
+    const captchaSelectors = [
+      'p:contains("Please help us protect Glassdoor by verifying that you\'re a real person")',
+      '[class*="captcha"]',
+      '[id*="captcha"]',
+      '[data-test*="captcha"]',
+      ".g-recaptcha",
+      "#recaptcha",
+      ".h-captcha",
+      "[data-ray]",
+      ".cf-browser-verification",
+      '[data-test="verification"]',
+      ".verification-challenge",
+    ];
+
+    for (const selector of captchaSelectors) {
+      let element;
+
+      if (selector.includes(":contains")) {
+        const text = selector.match(/contains\("(.+)"\)/)[1];
+        element = Array.from(document.querySelectorAll("p")).find((p) =>
+          p.textContent.includes(text)
+        );
+      } else {
+        element = document.querySelector(selector);
+      }
+
+      if (element && this.isElementVisible(element)) {
+        return {
+          isValid: false,
+          message:
+            "🛡️ CAPTCHA verification required. Please complete the verification challenge before continuing.",
+          element: element,
+        };
+      }
+    }
+
+    const protectionTexts = [
+      "please help us protect glassdoor",
+      "verify that you're a real person",
+      "verification required",
+      "complete the challenge",
+      "prove you're human",
+    ];
+
+    const bodyText = document.body.textContent.toLowerCase();
+    for (const text of protectionTexts) {
+      if (bodyText.includes(text)) {
+        return {
+          isValid: false,
+          message:
+            "🛡️ Verification challenge detected. Please complete the human verification before proceeding.",
+          element: null,
+        };
+      }
+    }
+
+    return { isValid: true, message: "No CAPTCHA detected" };
+  }
+
+  checkLoginStatus() {
+    const loginIndicators = {
+      signInButtons: [
+        'button[aria-label="sign in"]',
+        'button:contains("Sign in")',
+        'a:contains("Sign in")',
+        '[data-test="sign-in"]',
+        ".sign-in-button",
+        "button.Qjj2Q_nVhoQ0W7y9NvKF",
+      ],
+
+      loginPageElements: [
+        '[data-test="login-form"]',
+        "#LoginForm",
+        ".login-container",
+        'input[name="username"]',
+        'input[name="password"]',
+        'form[action*="login"]',
+      ],
+
+      userProfileElements: [
+        '[data-test="user-menu"]',
+        ".user-menu",
+        '[data-test="profile-menu"]',
+        ".profile-dropdown",
+        '[aria-label*="profile"]',
+        '[data-test="account-menu"]',
+      ],
+    };
+
+    for (const selector of loginIndicators.userProfileElements) {
+      let element;
+
+      if (selector.includes(":contains")) {
+        const text = selector.match(/contains\("(.+)"\)/)[1];
+        element = Array.from(document.querySelectorAll("*")).find(
+          (el) => el.textContent.trim() === text
+        );
+      } else {
+        element = document.querySelector(selector);
+      }
+
+      if (element && this.isElementVisible(element)) {
+        return {
+          isLoggedIn: true,
+          message: "✅ User is logged in",
+          element: element,
+        };
+      }
+    }
+
+    for (const selector of loginIndicators.signInButtons) {
+      let element;
+
+      if (selector.includes(":contains")) {
+        const text = selector.match(/contains\("(.+)"\)/)[1];
+        element = Array.from(document.querySelectorAll("button, a")).find(
+          (el) =>
+            el.textContent.trim().toLowerCase().includes(text.toLowerCase())
+        );
+      } else {
+        element = document.querySelector(selector);
+      }
+
+      if (element && this.isElementVisible(element)) {
+        return {
+          isLoggedIn: false,
+          message:
+            "🔐 Please log in to your Glassdoor account before starting the job search automation.",
+          element: element,
+        };
+      }
+    }
+
+    for (const selector of loginIndicators.loginPageElements) {
+      const element = document.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        return {
+          isLoggedIn: false,
+          message:
+            "🔐 Login required. Please sign in to your Glassdoor account to continue.",
+          element: element,
+        };
+      }
+    }
+
+    const currentUrl = window.location.href.toLowerCase();
+    const loginUrlPatterns = ["/login", "/signin", "/auth", "/account/login"];
+
+    for (const pattern of loginUrlPatterns) {
+      if (currentUrl.includes(pattern)) {
+        return {
+          isLoggedIn: false,
+          message:
+            "🔐 You are on the login page. Please sign in to continue with job applications.",
+          element: null,
+        };
+      }
+    }
+
+    return {
+      isLoggedIn: true,
+      message:
+        "⚠️ Login status unclear - proceeding with caution. If you encounter issues, please ensure you're logged in.",
+      element: null,
+    };
   }
 
   async start(params = {}) {
@@ -151,27 +356,44 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
         return true;
       }
 
+      const authCheck = await this.checkAuthenticationAndCaptcha();
+      if (!authCheck.canProceed) {
+        this.showUserMessage(
+          "❌ Cannot start automation: " + authCheck.message,
+          "error"
+        );
+        return false;
+      }
+
       this.isRunning = true;
       this.state.isRunning = true;
 
       this.showUserMessage("Starting Glassdoor automation...", "info");
 
-      // Ensure user profile is available
       if (!this.userProfile && this.userId) {
         try {
+          this.showUserMessage(
+            "🔄 Attempting to fetch user profile during start...",
+            "info"
+          );
           this.userProfile = await this.userService.getUserDetails();
           this.profile = this.userProfile;
-          this.showUserMessage("Profile loaded successfully ✅", "success");
+          this.showUserMessage(
+            "✅ User profile fetched during start",
+            "success"
+          );
         } catch (error) {
           this.showUserMessage(
-            "Warning: Could not load user profile",
+            "❌ Failed to fetch user profile during start: " + error.message,
             "warning"
           );
+          console.error("❌ Failed to fetch user profile during start:", error);
         }
+      } else if (this.userProfile) {
+        this.showUserMessage("✅ User profile already available", "success");
       }
 
-      // Initialize FormHandler with user data
-      this.initializeFormHandler();
+      await this.initializeFormHandler();
 
       this.config = { ...this.config, ...params };
 
@@ -197,13 +419,15 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     }
   }
 
-  initializeFormHandler() {
-    this.formHandler = new GlassdoorFormHandler({
+  async initializeFormHandler() {
+    const jobDescription = await this.getStoredJobData();
+
+    this.formHandler = new FormHandler({
       platform: "glassdoor",
       userData: this.profile,
       enableDebug: this.config.debug,
       host: this.getApiHost(),
-      jobDescription: this.state.currentJobDescription,
+      jobDescription: jobDescription,
     });
   }
 
@@ -290,12 +514,18 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
           : this.getSearchLinkPattern(),
       };
 
+      // Only use profile from search data if we don't already have one
       if (data.profile && !this.userProfile) {
         this.userProfile = data.profile;
         this.profile = data.profile;
-        this.showUserMessage("Profile loaded from search data ✅", "success");
+        this.showUserMessage(
+          "👤 User profile loaded from search data",
+          "success"
+        );
         // Reinitialize FormHandler with profile data
         this.initializeFormHandler();
+      } else if (this.userProfile) {
+        this.showUserMessage("👤 Using existing user profile", "success");
       }
 
       this.showUserMessage(
@@ -433,9 +663,9 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       this.state.currentRedirectAttempts = 0;
 
       this.state.processedCards.add(this.getJobCardId(jobCard));
+      this.storeJobData();
 
       applyButton.click();
-
     } catch (error) {
       this.showUserMessage(`Error processing job: ${error.message}`, "error");
       this.resetApplicationState();
@@ -550,15 +780,30 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
 
   async handleFormWithFormHandler() {
     try {
+      // Get the latest job description FIRST
+      const latestJobDescription = await this.getStoredJobData();
+      console.log(
+        "Latest job description retrieved:",
+        latestJobDescription
+          ? latestJobDescription.substring(0, 100) + "..."
+          : "EMPTY"
+      );
+
       // Update FormHandler with latest job description and user data
       if (this.formHandler) {
         this.formHandler.userData = this.profile;
-        this.formHandler.jobDescription = this.state.currentJobDescription;
+        this.formHandler.jobDescription = latestJobDescription;
       } else {
-        this.initializeFormHandler();
+        this.formHandler = new FormHandler({
+          platform: "glassdoor",
+          userData: this.profile,
+          enableDebug: this.config.debug,
+          host: this.getApiHost(),
+          jobDescription: latestJobDescription,
+        });
       }
 
-      // Use FormHandler to fill the complete form
+      // Now FormHandler has the correct job description
       const success = await this.formHandler.fillCompleteForm();
       return success;
     } catch (error) {
@@ -613,6 +858,28 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     } catch (error) {
       return false;
     }
+  }
+  storeJobData() {
+    const jobData = {
+      description: this.extractJobDescription(),
+      timestamp: Date.now(),
+    };
+    chrome.storage.local.set({ currentJobData: jobData });
+  }
+
+  getStoredJobData() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(["currentJobData"], (result) => {
+        if (result.currentJobData) {
+          const jobData = result.currentJobData;
+          if (Date.now() - jobData.timestamp < 300000) {
+            resolve(jobData.description);
+            return;
+          }
+        }
+        resolve("");
+      });
+    });
   }
 
   extractJobDescription() {
@@ -1220,14 +1487,31 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
 
   handleApplicationTaskData(data) {
     try {
+      this.log("📊 Processing Glassdoor application task data:", data);
+
+      // Only use profile from application data if we don't already have one
       if (data?.profile && !this.userProfile) {
         this.userProfile = data.profile;
         this.profile = data.profile;
-        this.showUserMessage("Profile loaded successfully ✅", "success");
-        this.initializeFormHandler();
+        this.showUserMessage(
+          "👤 User profile loaded from application task data",
+          "success"
+        );
+
+        // Update form handler
+        if (this.formHandler) {
+          this.formHandler.userData = this.userProfile;
+        }
+      } else if (this.userProfile) {
+        this.showUserMessage("👤 Using existing user profile", "success");
       }
+
+      this.showUserMessage("Application initialization complete", "success");
     } catch (error) {
-      // Silently fail
+      this.showUserMessage(
+        "❌ Error processing application task data: " + error.message,
+        "error"
+      );
     }
   }
 
@@ -1279,7 +1563,70 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
   // ========================================
 
   async setSessionContext(sessionContext) {
-    await super.setSessionContext(sessionContext);
+    try {
+      await super.setSessionContext(sessionContext);
+
+      this.sessionContext = sessionContext;
+      this.hasSessionContext = true;
+
+      // Update basic properties
+      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
+      if (sessionContext.platform) this.platform = sessionContext.platform;
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+
+      // Set user profile with priority handling
+      if (sessionContext.userProfile) {
+        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
+          this.userProfile = sessionContext.userProfile;
+          this.profile = sessionContext.userProfile;
+        } else {
+          // Merge profiles, preferring non-null values from session context
+          this.userProfile = {
+            ...this.userProfile,
+            ...sessionContext.userProfile,
+          };
+          this.profile = this.userProfile;
+        }
+      }
+
+      // Fetch user profile if still missing and we have a userId
+      if (!this.userProfile && this.userId) {
+        try {
+          this.userProfile = await this.userService.getUserDetails();
+          this.profile = this.userProfile;
+        } catch (error) {
+          console.error("❌ Failed to fetch user profile:", error);
+        }
+      }
+
+      // Update services with user context
+      if (this.userId) {
+        this.applicationTracker = new ApplicationTrackerService({
+          userId: this.userId,
+        });
+        this.userService = new UserService({ userId: this.userId });
+      }
+
+      // Store API host from session context
+      if (sessionContext.apiHost) {
+        this.sessionApiHost = sessionContext.apiHost;
+      }
+
+      // Update form handler if it exists
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      console.log("✅ Glassdoor session context set successfully", {
+        hasUserProfile: !!this.userProfile,
+        userId: this.userId,
+        sessionId: this.sessionId,
+        profileName: this.userProfile?.name || this.userProfile?.firstName,
+        profileEmail: this.userProfile?.email,
+      });
+    } catch (error) {
+      console.error("❌ Error setting Glassdoor session context:", error);
+    }
   }
 
   cleanup() {

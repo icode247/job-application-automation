@@ -1,6 +1,11 @@
 // core/automation-orchestrator.js
 import WindowManager from "../background/window-manager.js";
 import Logger from "./logger.js";
+import {
+  getGlassdoorJobURL,
+  getIndeedJobURL,
+  COUNTRY_CODES,
+} from "../shared/utilities/url-resolver.js";
 
 export default class AutomationOrchestrator {
   constructor() {
@@ -18,6 +23,7 @@ export default class AutomationOrchestrator {
       jobsToApply,
       preferences = {},
       apiHost,
+      userProfile,
     } = params;
 
     try {
@@ -32,7 +38,8 @@ export default class AutomationOrchestrator {
         platform,
         sessionId,
         userId,
-        preferences
+        preferences,
+        userProfile.country
       );
 
       if (!automationWindow) {
@@ -86,9 +93,15 @@ export default class AutomationOrchestrator {
     }
   }
 
-  async createAutomationWindow(platform, sessionId, userId, preferences) {
+  async createAutomationWindow(
+    platform,
+    sessionId,
+    userId,
+    preferences,
+    country
+  ) {
     try {
-      const startUrl = this.buildStartingUrl(platform, preferences);
+      const startUrl = this.buildStartingUrl(platform, preferences, country);
 
       const window = await chrome.windows.create({
         url: startUrl,
@@ -331,16 +344,16 @@ export default class AutomationOrchestrator {
     }
   }
 
-  buildStartingUrl(platform, preferences) {
+  buildStartingUrl(platform, preferences, country) {
     switch (platform) {
       case "linkedin":
-        return this.buildLinkedInUrl(preferences);
+        return this.buildLinkedInUrl(preferences, country);
       case "indeed":
-        return this.buildIndeedUrl(preferences);
+        return this.buildIndeedUrl(preferences, country);
       case "ziprecruiter":
         return this.buildZipRecruiterUrl(preferences);
       case "glassdoor":
-        return this.buildGlassdoorUrl(preferences);
+        return this.buildGlassdoorUrl(preferences, country);
       case "workday":
         return this.buildWorkdayUrl(preferences);
       case "recruitee":
@@ -360,46 +373,336 @@ export default class AutomationOrchestrator {
     }
   }
 
-  buildGlassdoorUrl(preferences) {
+  buildGlassdoorUrl(preferences, country) {
     const params = new URLSearchParams();
 
-    // Keywords
-    if (preferences.positions?.length) {
-      const keywords = preferences.positions.join(" ");
-      params.set("sc.keyword", keywords);
-      params.set("typedKeyword", keywords);
+    const getFirstOrString = (value) => {
+      if (Array.isArray(value)) {
+        return value.length > 0 ? value[value.length - 1] : null;
+      }
+      return value || null;
+    };
+
+    params.set("applicationType", "1");
+    if (preferences.remoteOnly === true) {
+      params.set("remoteWorkType", "1");
     }
 
-    // Location
-    if (preferences.location?.length && !preferences.remoteOnly) {
-      params.set("locT", "C");
-      params.set("locId", preferences.location[0]);
+    if (
+      preferences.salary &&
+      Array.isArray(preferences.salary) &&
+      preferences.salary.length === 2
+    ) {
+      const [minSalary, maxSalary] = preferences.salary;
+      if (minSalary) {
+        params.set("minSalary", minSalary.toString());
+      }
+      if (maxSalary) {
+        params.set("maxSalary", maxSalary.toString());
+      }
     }
 
-    // Job type
+    if (
+      preferences.companyRating &&
+      preferences.companyRating !== "Any rating"
+    ) {
+      const ratingMatch = preferences.companyRating.match(/(\d+(?:\.\d+)?)/);
+      if (ratingMatch) {
+        const rating = parseFloat(ratingMatch[1]);
+        params.set("minRating", rating.toFixed(1));
+      }
+    }
+
+    const datePostedMap = {
+      "Past 24 hours": "1",
+      "Past 3 days": "3",
+      "Past week": "7",
+      "Past 2 weeks": "14",
+      "Past month": "30",
+    };
+
+    if (
+      preferences.datePosted &&
+      preferences.datePosted !== "Any time" &&
+      datePostedMap[preferences.datePosted]
+    ) {
+      params.set("fromAge", datePostedMap[preferences.datePosted]);
+    }
+
     const jobTypeMap = {
-      "Full-time": "full-time",
-      "Part-time": "part-time",
+      "Full-time": "fulltime",
+      "Part-time": "parttime",
       Contract: "contract",
       Internship: "internship",
     };
 
-    if (preferences.jobType?.length) {
-      const glassdoorJobType = preferences.jobType
+    if (
+      preferences.jobType &&
+      Array.isArray(preferences.jobType) &&
+      preferences.jobType.length > 0
+    ) {
+      const glassdoorJobTypes = preferences.jobType
         .map((type) => jobTypeMap[type])
-        .filter(Boolean)[0];
+        .filter(Boolean);
 
-      if (glassdoorJobType) {
-        params.set("jobType", glassdoorJobType);
+      if (glassdoorJobTypes.length > 0) {
+        params.set("jobType", glassdoorJobTypes.join(","));
       }
     }
 
-    // Default params
-    params.set("suggestCount", "0");
-    params.set("suggestChosen", "false");
-    params.set("clickSource", "searchBtn");
+    const experience = getFirstOrString(preferences.experience);
+    if (experience) {
+      const experienceMap = {
+        "Entry level": "entrylevel",
+        Associate: "associate",
+        Internship: "internship",
+        "Mid-Senior level": "midseniorlevel",
+        Director: "director",
+        Executive: "executive",
+      };
 
-    return `https://www.glassdoor.com/Job/jobs.htm?${params.toString()}`;
+      const glassdoorExperience = experienceMap[experience];
+      if (glassdoorExperience) {
+        params.set("seniorityType", glassdoorExperience);
+      }
+    }
+
+    const firstLocation = getFirstOrString(preferences.location);
+    const firstPosition = getFirstOrString(preferences.positions);
+
+    let baseUrl = "https://www.glassdoor.com/Job/jobs.htm";
+    // let baseUrl =  `${getGlassdoorJobURL(country)}/Job/jobs.htm`;
+
+    if (firstLocation && firstPosition) {
+      const locationSlug = firstLocation
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-]/g, "");
+
+      const positionSlug = firstPosition
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-]/g, "");
+
+      const countryCode = COUNTRY_CODES[firstLocation] || "IN1";
+      const locationLength = locationSlug.length;
+      const positionStart = locationLength + 1;
+      const positionEnd = positionStart + positionSlug.length - 1;
+
+      baseUrl = `https://www.glassdoor.com/Job/${locationSlug}-${positionSlug}-jobs-SRCH_IL.0,${locationLength}_${countryCode}_KO${positionStart},${positionEnd}.htm`;
+    }
+
+    return `${baseUrl}?${params.toString()}`;
+  }
+
+  buildLinkedInUrl(preferences, country) {
+    const baseUrl = "https://www.linkedin.com/jobs/search/?";
+    const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
+    const params = new URLSearchParams();
+
+    params.append("f_AL", "true"); // Keep the Easy Apply filter
+
+    // Handle positions
+    if (preferences.positions?.length) {
+      params.append("keywords", joinWithOR(preferences.positions));
+    }
+
+    if (preferences.location) {
+      // GeoId mapping for countries
+      const geoIdMap = {
+        Nigeria: "105365761",
+        Netherlands: "102890719",
+        "United States": "103644278",
+        "United Kingdom": "101165590",
+        Canada: "101174742",
+        Australia: "101452733",
+        Germany: "101282230",
+        France: "105015875",
+        India: "102713980",
+        Singapore: "102454443",
+        "South Africa": "104035573",
+        Ireland: "104738515",
+        "New Zealand": "105490917",
+      };
+
+      if (preferences.location === "Remote") {
+        params.append("f_WT", "2");
+      } else if (geoIdMap[preferences.location]) {
+        params.append("geoId", geoIdMap[preferences.location]);
+      } else {
+        params.append("location", preferences.location);
+      }
+    }
+
+    const workModeMap = {
+      Remote: "2",
+      Hybrid: "3",
+      "On-site": "1",
+    };
+
+    if (preferences.workMode?.length) {
+      const workModeCodes = preferences.workMode
+        .map((mode) => workModeMap[mode])
+        .filter(Boolean);
+      if (workModeCodes.length) {
+        params.append("f_WT", workModeCodes.join(","));
+      }
+    }
+
+    const datePostedMap = {
+      "Any time": "",
+      "Past month": "r2592000",
+      "Past week": "r604800",
+      "Past 24 hours": "r86400",
+      "Few Minutes Ago": "r3600",
+    };
+
+    if (preferences.datePosted) {
+      const dateCode = datePostedMap[preferences.datePosted];
+      if (dateCode) {
+        params.append("f_TPR", dateCode);
+      }
+    }
+
+    const experienceLevelMap = {
+      Internship: "1",
+      "Entry level": "2",
+      Associate: "3",
+      "Mid-Senior level": "4",
+      Director: "5",
+      Executive: "6",
+    };
+
+    if (preferences.experience?.length) {
+      const experienceCodes = preferences.experience
+        .map((level) => experienceLevelMap[level])
+        .filter(Boolean);
+      if (experienceCodes.length) {
+        params.append("f_E", experienceCodes.join(","));
+      }
+    }
+
+    // Job Type Mapping
+    const jobTypeMap = {
+      "Full-time": "F",
+      "Part-time": "P",
+      Contract: "C",
+      Temporary: "T",
+      Internship: "I",
+      Volunteer: "V",
+    };
+
+    if (preferences.jobType?.length) {
+      const jobTypeCodes = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean);
+      if (jobTypeCodes.length) {
+        params.append("f_JT", jobTypeCodes.join(","));
+      }
+    }
+
+    // Salary Range Mapping
+    if (preferences.salary?.length === 2) {
+      const [min] = preferences.salary;
+      const salaryBuckets = {
+        40000: "1",
+        60000: "2",
+        80000: "3",
+        100000: "4",
+        120000: "5",
+        140000: "6",
+        160000: "7",
+        180000: "8",
+        200000: "9",
+      };
+
+      const bucketValue = Object.entries(salaryBuckets)
+        .reverse()
+        .find(([threshold]) => min >= parseInt(threshold))?.[1];
+
+      if (bucketValue) {
+        params.append("f_SB", bucketValue);
+      }
+    }
+
+    // Sorting
+    params.append("sortBy", "R");
+
+    return baseUrl + params.toString();
+  }
+
+  buildIndeedUrl(preferences, country) {
+    const params = new URLSearchParams();
+
+    // Keywords from positions
+    if (preferences.positions?.length) {
+      params.set("q", preferences.positions.join(" OR "));
+    }
+
+    console.log(preferences.positions);
+    // Location
+    // if an array, show the first
+    if (Array.isArray(preferences.location)) {
+      params.set("l", preferences.location[0]);
+    } else {
+      params.set("l", preferences.location);
+    }
+
+    // Remote work
+    if (preferences.remoteOnly || preferences.workMode?.includes("Remote")) {
+      params.set("remotejob", "1");
+    }
+
+    // Date posted
+    const datePostedMap = {
+      "Any time": "",
+      "Past month": "14",
+      "Past week": "7",
+      "Past 24 hours": "1",
+      "Past 3 days": "3",
+      "Few Minutes Ago": "1",
+    };
+
+    if (preferences.datePosted && datePostedMap[preferences.datePosted]) {
+      params.set("fromage", datePostedMap[preferences.datePosted]);
+    }
+
+    // Job type using sc parameter
+    const jobTypeMap = {
+      "Full-time": "CF3CP",
+      "Part-time": "75GKK",
+      Contract: "NJXCK",
+      Temporary: "4HKF7",
+      Internship: "internship",
+    };
+
+    if (preferences.jobType?.length) {
+      const jobTypeCodes = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean);
+
+      if (jobTypeCodes.length > 0) {
+        let scValue;
+        if (jobTypeCodes.length === 1) {
+          scValue = `0kf%3Aattr%28${jobTypeCodes[0]}%29%3B`;
+        } else {
+          const joinedCodes = jobTypeCodes.join("%7C");
+          scValue = `0kf%3Aattr%28${joinedCodes}%252COR%29%3B`;
+        }
+        params.set("sc", scValue);
+      }
+    }
+
+    if (preferences.salary?.length === 2) {
+      const [minSalary] = preferences.salary;
+      if (minSalary > 0) {
+        params.set("salary", minSalary.toString());
+      }
+    }
+
+    params.set("sort", "date");
+
+    return `${getIndeedJobURL(country)}/jobs?${params.toString()}`;
   }
 
   buildGenericSearchUrl(preferences) {
@@ -429,7 +732,7 @@ export default class AutomationOrchestrator {
     }
 
     // Location
-    if (preferences.location?.length && !preferences.remoteOnly) {
+    if (Array.isArray(preferences.location) && !preferences.remoteOnly) {
       params.set("location", preferences.location[0]);
     }
 
@@ -535,206 +838,6 @@ export default class AutomationOrchestrator {
     // ✅ FIX: Properly encode the entire search query
     const fullQuery = `site:breezy.hr "${keywords}"${location}${remoteKeyword}`;
     return `https://www.google.com/search?q=${encodeURIComponent(fullQuery)}`;
-  }
-
-  buildLinkedInUrl(preferences) {
-    const baseUrl = "https://www.linkedin.com/jobs/search/?";
-    const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
-    const params = new URLSearchParams();
-    params.append("f_AL", "true"); // Easy Apply filter
-
-    // Handle positions
-    if (preferences.positions?.length) {
-      params.append("keywords", joinWithOR(preferences.positions));
-    }
-
-    if (preferences.location) {
-      const geoIdMap = {
-        Nigeria: "105365761",
-        Netherlands: "102890719",
-        "United States": "103644278",
-        "United Kingdom": "101165590",
-        Canada: "101174742",
-        Australia: "101452733",
-        Germany: "101282230",
-        France: "105015875",
-        India: "102713980",
-        Singapore: "102454443",
-        "South Africa": "104035573",
-        Ireland: "104738515",
-        "New Zealand": "105490917",
-      };
-
-      if (preferences.location === "Remote") {
-        params.append("f_WT", "2");
-      } else if (geoIdMap[preferences.location]) {
-        params.append("geoId", geoIdMap[preferences.location]);
-      } else {
-        params.append("location", preferences.location);
-      }
-    }
-
-    // Handle work mode (removed conflicting remoteOnly logic)
-    const workModeMap = {
-      Remote: "2",
-      Hybrid: "3",
-      "On-site": "1",
-    };
-
-    if (preferences.workMode?.length) {
-      const workModeCodes = preferences.workMode
-        .map((mode) => workModeMap[mode])
-        .filter(Boolean);
-      if (workModeCodes.length) {
-        params.append("f_WT", workModeCodes.join(","));
-      }
-    }
-
-    // Handle date posted
-    const datePostedMap = {
-      "Any time": "",
-      "Past month": "r2592000",
-      "Past week": "r604800",
-      "Past 24 hours": "r86400",
-      "Few Minutes Ago": "r3600",
-    };
-
-    if (preferences.datePosted) {
-      const dateCode = datePostedMap[preferences.datePosted];
-      if (dateCode) {
-        params.append("f_TPR", dateCode);
-      }
-    }
-
-    // Handle experience level
-    const experienceLevelMap = {
-      Internship: "1",
-      "Entry level": "2",
-      Associate: "3",
-      "Mid-Senior level": "4",
-      Director: "5",
-      Executive: "6",
-    };
-
-    if (preferences.experience?.length) {
-      const experienceCodes = preferences.experience
-        .map((level) => experienceLevelMap[level])
-        .filter(Boolean);
-      if (experienceCodes.length) {
-        params.append("f_E", experienceCodes.join(","));
-      }
-    }
-
-    // Handle job type
-    const jobTypeMap = {
-      "Full-time": "F",
-      "Part-time": "P",
-      Contract: "C",
-      Temporary: "T",
-      Internship: "I",
-      Volunteer: "V",
-    };
-
-    if (preferences.jobType?.length) {
-      const jobTypeCodes = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean);
-      if (jobTypeCodes.length) {
-        params.append("f_JT", jobTypeCodes.join(","));
-      }
-    }
-
-    // Handle salary range
-    if (preferences.salary?.length === 2) {
-      const [min] = preferences.salary;
-      const salaryBuckets = {
-        40000: "1",
-        60000: "2",
-        80000: "3",
-        100000: "4",
-        120000: "5",
-        140000: "6",
-        160000: "7",
-        180000: "8",
-        200000: "9",
-      };
-
-      const bucketValue = Object.entries(salaryBuckets)
-        .reverse()
-        .find(([threshold]) => min >= parseInt(threshold))?.[1];
-
-      if (bucketValue) {
-        params.append("f_SB", bucketValue);
-      }
-    }
-
-    // Sorting
-    params.append("sortBy", "R");
-
-    return baseUrl + params.toString();
-  }
-
-  buildIndeedUrl(preferences) {
-    const params = new URLSearchParams();
-
-    // Keywords from positions
-    if (preferences.positions?.length) {
-      params.set("q", preferences.positions.join(" OR "));
-    }
-
-    // Location
-    if (preferences.location?.length && !preferences.remoteOnly) {
-      params.set("l", preferences.location[0]);
-    }
-
-    // Remote work
-    if (preferences.remoteOnly || preferences.workMode?.includes("Remote")) {
-      params.set("remotejob", "1");
-    }
-
-    // Date posted
-    const datePostedMap = {
-      "Any time": "",
-      "Past month": "14",
-      "Past week": "7",
-      "Past 24 hours": "1",
-      "Few Minutes Ago": "1",
-    };
-
-    if (preferences.datePosted && datePostedMap[preferences.datePosted]) {
-      params.set("fromage", datePostedMap[preferences.datePosted]);
-    }
-
-    // Job type
-    const jobTypeMap = {
-      "Full-time": "fulltime",
-      "Part-time": "parttime",
-      Contract: "contract",
-      Temporary: "temporary",
-      Internship: "internship",
-    };
-
-    if (preferences.jobType?.length) {
-      const indeedJobType = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean)[0]; // Indeed typically takes one job type
-
-      if (indeedJobType) {
-        params.set("jt", indeedJobType);
-      }
-    }
-
-    // Salary
-    if (preferences.salary?.length === 2) {
-      const [minSalary] = preferences.salary;
-      if (minSalary > 0) {
-        params.set("salary", minSalary.toString());
-      }
-    }
-
-    params.set("sort", "date");
-
-    return `https://www.indeed.com/jobs?${params.toString()}`;
   }
 
   buildWorkdayUrl(preferences) {

@@ -1,5 +1,5 @@
 /**
- * Simplified ChatbotStatusOverlay - Clean automation assistant
+ * Simplified ChatbotStatusOverlay - Clean automation assistant without control buttons
  * Persists only during active automation, clears when stopped
  */
 class ChatbotStatusOverlay {
@@ -21,7 +21,6 @@ class ChatbotStatusOverlay {
     this.container = null;
     this.chatContainer = null;
     this.statusBar = null;
-    this.controlsContainer = null;
     this.isVisible = true;
     this.isMinimized = false;
     this.messageCount = 0;
@@ -31,8 +30,8 @@ class ChatbotStatusOverlay {
     this.isPaused = false;
     this.port = null;
     this.greetingShown = false; // Prevent duplicate greetings
-    this.isDestroyed = false; // ✅ ADD: Track if overlay is destroyed
-    this.pendingTimeouts = []; // ✅ ADD: Track timeouts for cleanup
+    this.isDestroyed = false; // Track if overlay is destroyed
+    this.pendingTimeouts = []; // Track timeouts for cleanup
 
     // Storage key
     this.storageKey = `chatbot_messages_${this.options.sessionId || "default"}`;
@@ -83,7 +82,7 @@ class ChatbotStatusOverlay {
    * Clear all messages and storage
    */
   async clearMessages() {
-    if (this.isDestroyed) return; // ✅ FIX: Prevent operations on destroyed overlay
+    if (this.isDestroyed) return;
 
     this.messages = [];
     this.messageCount = 0;
@@ -269,57 +268,6 @@ class ChatbotStatusOverlay {
       .chatbot-typing-dot:nth-child(2) { animation-delay: 0.2s; }
       .chatbot-typing-dot:nth-child(3) { animation-delay: 0.4s; }
 
-      .chatbot-controls {
-        padding: 16px;
-        background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
-        border-top: 1px solid #e2e8f0;
-        display: flex;
-        gap: 12px;
-        align-items: center;
-      }
-
-      .chatbot-control-btn {
-        padding: 10px 20px;
-        border: none;
-        border-radius: 8px;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.2s;
-        flex: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-      }
-
-      .chatbot-control-btn:hover:not(:disabled) {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      }
-
-      .chatbot-control-btn.pause {
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        color: white;
-      }
-
-      .chatbot-control-btn.continue {
-        background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-        color: white;
-      }
-
-      .chatbot-control-btn.stop {
-        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-        color: white;
-      }
-
-      .chatbot-control-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none !important;
-        box-shadow: none !important;
-      }
-
       .chatbot-status-indicator {
         display: inline-flex;
         align-items: center;
@@ -426,12 +374,6 @@ class ChatbotStatusOverlay {
     const header = this.createHeader();
     this.container.appendChild(header);
 
-    // Create controls
-    if (this.options.enableControls) {
-      this.controlsContainer = this.createControls();
-      this.container.appendChild(this.controlsContainer);
-    }
-
     // Create chat container
     this.chatContainer = document.createElement("div");
     this.chatContainer.style.cssText = `
@@ -457,7 +399,6 @@ class ChatbotStatusOverlay {
     }
 
     this.updateStatus(this.currentStatus);
-    this.updateControls();
 
     return this;
   }
@@ -493,7 +434,7 @@ class ChatbotStatusOverlay {
    * Handle messages from automation system
    */
   handlePortMessage(message) {
-    if (this.isDestroyed) return; // ✅ FIX: Prevent handling messages on destroyed overlay
+    if (this.isDestroyed) return;
 
     const { type, data } = message;
 
@@ -501,7 +442,6 @@ class ChatbotStatusOverlay {
       case "AUTOMATION_STATE_CHANGED":
         this.automationState = data.state;
         this.updateStatus(data.state);
-        this.updateControls();
         break;
 
       case "AUTOMATION_PAUSED":
@@ -509,7 +449,6 @@ class ChatbotStatusOverlay {
         this.automationState = "paused";
         this.updateStatus("paused");
         this.addMessage("Automation paused! 🤚");
-        this.updateControls();
         break;
 
       case "AUTOMATION_RESUMED":
@@ -517,14 +456,12 @@ class ChatbotStatusOverlay {
         this.automationState = "applying"; // Resume to applying state
         this.updateStatus("applying");
         this.addMessage("Automation resumed! 🚀");
-        this.updateControls();
         break;
 
       case "AUTOMATION_STOPPED":
         this.automationState = "stopped";
         this.isPaused = false; // Reset pause state
         this.addMessage("Automation stopped! 👋");
-        this.updateControls();
         // Clear messages when automation stops
         const timeoutId = setTimeout(() => {
           if (!this.isDestroyed) {
@@ -532,7 +469,6 @@ class ChatbotStatusOverlay {
             // Reset to ready state after clearing
             this.automationState = "ready";
             this.updateStatus("ready");
-            this.updateControls();
           }
         }, 2000);
         this.pendingTimeouts.push(timeoutId);
@@ -544,7 +480,7 @@ class ChatbotStatusOverlay {
    * Send message to automation system
    */
   sendToAutomation(message) {
-    if (this.isDestroyed) return; // ✅ FIX: Prevent sending messages from destroyed overlay
+    if (this.isDestroyed) return;
 
     if (this.port) {
       try {
@@ -661,96 +597,6 @@ class ChatbotStatusOverlay {
   }
 
   /**
-   * Create automation controls
-   */
-  createControls() {
-    const controls = document.createElement("div");
-    controls.className = "chatbot-controls";
-
-    const actionBtn = document.createElement("button");
-    actionBtn.className = "chatbot-control-btn pause";
-    actionBtn.innerHTML = `<span>⏸️</span> Pause`;
-    actionBtn.onclick = () => this.toggleAutomation();
-
-    const stopBtn = document.createElement("button");
-    stopBtn.className = "chatbot-control-btn stop";
-    stopBtn.innerHTML = `<span>⏹️</span> Stop`;
-    stopBtn.onclick = () => this.stopAutomation();
-
-    controls.appendChild(actionBtn);
-    controls.appendChild(stopBtn);
-
-    return controls;
-  }
-
-  /**
-   * Update control buttons
-   */
-  updateControls() {
-    if (!this.controlsContainer || this.isDestroyed) return;
-
-    const actionBtn = this.controlsContainer.querySelector(".pause, .continue");
-    const stopBtn = this.controlsContainer.querySelector(".stop");
-
-    if (!actionBtn || !stopBtn) return; // ✅ FIX: Add safety check
-
-    // Update action button based on state
-    if (this.isPaused) {
-      actionBtn.className = "chatbot-control-btn continue";
-      actionBtn.innerHTML = `<span>▶️</span> Continue`;
-      actionBtn.disabled = false; // Always allow continue when paused
-    } else {
-      actionBtn.className = "chatbot-control-btn pause";
-      actionBtn.innerHTML = `<span>⏸️</span> Pause`;
-      // Allow pause when automation is active
-      actionBtn.disabled = !["searching", "applying"].includes(
-        this.automationState
-      );
-    }
-
-    // Stop button is enabled when automation is running or paused
-    stopBtn.disabled =
-      this.automationState === "stopped" || this.automationState === "ready";
-  }
-
-  /**
-   * Toggle automation (pause/continue)
-   */
-  toggleAutomation() {
-    if (this.isDestroyed) return;
-
-    if (this.isPaused) {
-      this.addMessage("Resuming automation... 🚀");
-      this.sendToAutomation({ action: "resumeAutomation" });
-      this.isPaused = false;
-      this.automationState = "applying";
-    } else {
-      this.addMessage("Pausing automation... 🤚");
-      this.sendToAutomation({ action: "pauseAutomation" });
-      this.isPaused = true;
-      this.automationState = "paused";
-    }
-    this.updateStatus(this.automationState);
-    this.updateControls();
-  }
-
-  /**
-   * Stop automation
-   */
-  stopAutomation() {
-    if (this.isDestroyed) return;
-
-    if (confirm("Are you sure you want to stop the automation?")) {
-      this.addMessage("Stopping automation... 🛑");
-      this.sendToAutomation({ action: "stopAutomation" });
-      this.automationState = "stopped";
-      this.isPaused = false;
-      this.updateStatus("stopped");
-      this.updateControls();
-    }
-  }
-
-  /**
    * Add formatted message (preserves line breaks)
    */
   addFormattedMessage(message) {
@@ -796,7 +642,7 @@ class ChatbotStatusOverlay {
    * Create formatted message element (preserves line breaks)
    */
   _createFormattedMessage(message, sender, persist = true) {
-    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+    if (this.isDestroyed || !this.chatContainer) return;
 
     const messageElement = document.createElement("div");
     messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
@@ -827,7 +673,6 @@ class ChatbotStatusOverlay {
 
     messageElement.appendChild(messageWrapper);
     
-    // ✅ FIX: Check if chatContainer still exists before appendChild
     if (this.chatContainer && !this.isDestroyed) {
       this.chatContainer.appendChild(messageElement);
     }
@@ -848,7 +693,7 @@ class ChatbotStatusOverlay {
    * Legacy API compatibility methods
    */
   addBotMessage(message, type = "info") {
-    if (this.isDestroyed) return this; // ✅ FIX: Prevent operations on destroyed overlay
+    if (this.isDestroyed) return this;
 
     // Extract emoji based on type for visual consistency
     const emoji = this._getEmojiForType(type);
@@ -905,7 +750,7 @@ class ChatbotStatusOverlay {
    * Create message element
    */
   _createMessage(message, sender, persist = true) {
-    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+    if (this.isDestroyed || !this.chatContainer) return;
 
     const messageElement = document.createElement("div");
     messageElement.className = `chatbot-message-bubble chatbot-message-${sender}`;
@@ -935,7 +780,6 @@ class ChatbotStatusOverlay {
 
     messageElement.appendChild(messageWrapper);
     
-    // ✅ FIX: Check if chatContainer still exists before appendChild
     if (this.chatContainer && !this.isDestroyed) {
       this.chatContainer.appendChild(messageElement);
     }
@@ -970,7 +814,7 @@ class ChatbotStatusOverlay {
     const dot = this.statusBar.querySelector(".chatbot-status-dot");
     const text = this.statusBar.querySelector("span:last-child");
 
-    if (dot && text) { // ✅ FIX: Add safety checks
+    if (dot && text) {
       this.statusBar.className = `chatbot-status-indicator chatbot-status-${status}`;
       text.textContent = statusConfig[status] || status;
     }
@@ -982,7 +826,7 @@ class ChatbotStatusOverlay {
    * Show typing indicator
    */
   showTypingIndicator() {
-    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+    if (this.isDestroyed || !this.chatContainer) return;
 
     this.hideTypingIndicator();
 
@@ -1016,7 +860,7 @@ class ChatbotStatusOverlay {
   }
 
   hideTypingIndicator() {
-    if (this.isDestroyed) return; // ✅ FIX: Add safety check
+    if (this.isDestroyed) return;
 
     const existing = document.getElementById("chatbot-typing");
     if (existing) {
@@ -1028,7 +872,7 @@ class ChatbotStatusOverlay {
    * Initial greeting
    */
   addGreeting() {
-    if (this.isDestroyed) return; // ✅ FIX: Add safety check
+    if (this.isDestroyed) return;
 
     const timeoutId1 = setTimeout(() => {
       if (!this.isDestroyed) {
@@ -1038,7 +882,7 @@ class ChatbotStatusOverlay {
         const timeoutId2 = setTimeout(() => {
           if (!this.isDestroyed) {
             this.addMessage(
-              "I'll help you track the job application process. Use the controls below to manage automation! 🚀"
+              "I'll keep you updated on the job application process! 🚀"
             );
           }
         }, 1200);
@@ -1057,7 +901,6 @@ class ChatbotStatusOverlay {
     this.automationState = "completed";
     this.isPaused = false;
     this.updateStatus("completed", "All done!");
-    this.updateControls();
 
     // Clear messages after a delay
     const timeoutId = setTimeout(() => {
@@ -1077,7 +920,6 @@ class ChatbotStatusOverlay {
 
     this.automationState = "searching";
     this.updateStatus("searching");
-    this.updateControls();
     this.addMessage("Starting job search automation...");
   }
 
@@ -1086,7 +928,6 @@ class ChatbotStatusOverlay {
 
     this.automationState = "applying";
     this.updateStatus("applying");
-    this.updateControls();
     this.addMessage("Now applying to jobs...");
   }
 
@@ -1107,10 +948,6 @@ class ChatbotStatusOverlay {
       this.chatContainer.style.display = this.isMinimized ? "none" : "block";
     }
 
-    if (this.controlsContainer) {
-      this.controlsContainer.style.display = this.isMinimized ? "none" : "flex";
-    }
-
     return this;
   }
 
@@ -1118,10 +955,9 @@ class ChatbotStatusOverlay {
    * Helper methods
    */
   _scrollToBottom() {
-    if (this.isDestroyed || !this.chatContainer) return; // ✅ FIX: Add safety checks
+    if (this.isDestroyed || !this.chatContainer) return;
 
     const timeoutId = setTimeout(() => {
-      // ✅ FIX: Double-check chatContainer still exists before accessing scrollHeight
       if (!this.isDestroyed && this.chatContainer) {
         this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
       }
@@ -1144,7 +980,7 @@ class ChatbotStatusOverlay {
   }
 
   /**
-   * Destroy overlay - ✅ ENHANCED cleanup
+   * Destroy overlay - Enhanced cleanup
    */
   destroy() {
     // Mark as destroyed first to prevent further operations
@@ -1174,7 +1010,6 @@ class ChatbotStatusOverlay {
     this.container = null;
     this.chatContainer = null;
     this.statusBar = null;
-    this.controlsContainer = null;
 
     return this;
   }
@@ -1197,13 +1032,12 @@ if (typeof window !== "undefined") {
       icon: "🤖",
       position: { top: "10px", left: "10px" },
       persistMessages: false,
-      enableControls: true,
     });
 
-    // Make buttons clickable for testing
+    // Simulate automation states for testing
     setTimeout(() => {
       overlay.startAutomation();
-      console.log("Automation started - buttons should be clickable now");
+      console.log("Automation started - status updated");
     }, 3000);
 
     return overlay;

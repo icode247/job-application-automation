@@ -5,7 +5,7 @@ import ApplicationTrackerService from "../../services/application-tracker-servic
 import UserService from "../../services/user-service.js";
 import ChatbotStatusOverlay from "../../services/status-notification-service.js";
 import LinkedInFileHandler from "./linkedin-file-handler.js";
-
+//submit button
 export default class LinkedInPlatform extends BasePlatform {
   constructor(config) {
     super(config);
@@ -18,7 +18,8 @@ export default class LinkedInPlatform extends BasePlatform {
 
     this.userProfile = config.userProfile || null;
 
-    const apiHost = config.apiHost || config.config?.apiHost || "https://api.yourdomain.com";
+    const apiHost =
+      config.apiHost || config.config?.apiHost || "https://api.yourdomain.com";
     this.HOST = apiHost;
 
     this.aiService = new AIService({ apiHost });
@@ -28,26 +29,11 @@ export default class LinkedInPlatform extends BasePlatform {
     });
     this.userService = new UserService({ apiHost, userId: config.userId });
 
-    this.statusOverlay = new ChatbotStatusOverlay({
-      id: `${this.platform}-status-overlay`,
-      platform: `LINKEDIN`,
-      sessionId: config.sessionId,
-      userId: config.userId,
-      icon: "🤖",
-      position: { top: "10px", left: "10px" },
-      persistMessages: false,
-      enableControls: true,
-    });
-
     this.fileHandler = new LinkedInFileHandler({ apiHost });
-    this.fileHandler.setStatusManager(this.statusOverlay);
 
-    console.log(`🔧 LinkedIn platform initialized:`, {
-      userId: config.userId,
-      hasUserProfile: !!this.userProfile,
-      profileName: this.userProfile?.name || this.userProfile?.firstName,
-      apiHost: apiHost,
-    });
+    this.statusOverlay = null;
+
+    console.log("🔧 LinkedIn platform constructor completed");
   }
 
   async setSessionContext(sessionContext) {
@@ -73,25 +59,32 @@ export default class LinkedInPlatform extends BasePlatform {
 
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 No user profile in sessionContext, fetching from API...");
+          console.log(
+            "📡 No user profile in sessionContext, fetching from API..."
+          );
           this.userProfile = await this.userService.getUserDetails();
           console.log("✅ User profile fetched from API as fallback");
         } catch (error) {
           console.error("❌ Failed to fetch user profile from API:", error);
-          this.statusOverlay?.addError("Failed to fetch user profile: " + error.message);
         }
       }
 
-      if (sessionContext.userId && sessionContext.userId !== this.appTracker?.userId) {
+      if (
+        sessionContext.userId &&
+        sessionContext.userId !== this.appTracker?.userId
+      ) {
         this.appTracker = new ApplicationTrackerService({
           apiHost: this.HOST,
           userId: sessionContext.userId,
         });
-        this.userService = new UserService({ 
-          apiHost: this.HOST, 
-          userId: sessionContext.userId 
+        this.userService = new UserService({
+          apiHost: this.HOST,
+          userId: sessionContext.userId,
         });
       }
+
+      // ✅ NOW CREATE OR RECREATE THE OVERLAY with proper sessionId/userId
+      await this.createOrUpdateStatusOverlay();
 
       console.log("✅ LinkedIn session context set successfully", {
         hasUserProfile: !!this.userProfile,
@@ -99,10 +92,67 @@ export default class LinkedInPlatform extends BasePlatform {
         sessionId: this.sessionId,
         profileName: this.userProfile?.name || this.userProfile?.firstName,
         profileEmail: this.userProfile?.email,
+        hasOverlay: !!this.statusOverlay,
       });
     } catch (error) {
       console.error("❌ Error setting LinkedIn session context:", error);
-      this.statusOverlay?.addError("❌ Error setting session context: " + error.message);
+      if (this.statusOverlay) {
+        this.statusOverlay.addError(
+          "❌ Error setting session context: " + error.message
+        );
+      }
+    }
+  }
+
+  async createOrUpdateStatusOverlay() {
+    try {
+      // If overlay already exists, destroy it first
+      if (this.statusOverlay) {
+        console.log(
+          "🔄 Destroying existing overlay to recreate with proper session data"
+        );
+        this.statusOverlay.destroy();
+        this.statusOverlay = null;
+      }
+
+      // Only create overlay if we have sessionId and userId
+      if (!this.sessionId || !this.userId) {
+        console.warn("⚠️ Cannot create overlay without sessionId and userId");
+        return;
+      }
+
+      // Create new overlay with proper session data
+      this.statusOverlay = new ChatbotStatusOverlay({
+        id: `${this.platform}-status-overlay`,
+        platform: `${this.platform.toUpperCase()}`,
+        sessionId: this.sessionId,
+        userId: this.userId,
+        icon: "🤖",
+        position: { top: "10px", left: "10px" },
+        persistMessages: false,
+        enableControls: true,
+        manual: false, // Auto-create the DOM
+      });
+
+      // Set up file handler connection
+      if (this.fileHandler) {
+        this.fileHandler.setStatusManager(this.statusOverlay);
+      }
+
+      // Add initialization message
+      this.statusOverlay.addFormattedMessage(
+        `🔧 LinkedIn platform initialized:`,
+        {
+          userId: this.userId,
+          hasUserProfile: !!this.userProfile,
+          profileName: this.userProfile?.name || this.userProfile?.firstName,
+          apiHost: this.HOST,
+        }
+      );
+
+      console.log("✅ Status overlay created successfully with session data");
+    } catch (error) {
+      console.error("❌ Error creating status overlay:", error);
     }
   }
 
@@ -302,11 +352,15 @@ export default class LinkedInPlatform extends BasePlatform {
       // ✅ FIXED: Use existing userProfile instead of fetching
       if (!this.userProfile) {
         console.warn("⚠️ No user profile available for authorization check");
-        this.statusOverlay.addWarning("No user profile available for authorization check");
-        
+        this.statusOverlay.addWarning(
+          "No user profile available for authorization check"
+        );
+
         // Only fetch as last resort
         try {
-          console.log("📡 Fetching user profile as last resort for authorization...");
+          console.log(
+            "📡 Fetching user profile as last resort for authorization..."
+          );
           this.userProfile = await this.userService.getUserDetails();
         } catch (error) {
           throw new Error("Cannot check authorization without user profile");
@@ -318,19 +372,24 @@ export default class LinkedInPlatform extends BasePlatform {
       if (!canApply) {
         const remaining = await this.userService.getRemainingApplications();
 
-        const message = this.userProfile.userRole === "credit"
-          ? `Looks like you're running low on credits (${this.userProfile.credits} left). Time to top up! 💳`
-          : `You've hit your daily limit! Don't worry, you have ${remaining} applications left overall. 📊`;
+        const message =
+          this.userProfile.userRole === "credit"
+            ? `Looks like you're running low on credits (${this.userProfile.credits} left). Time to top up! 💳`
+            : `You've hit your daily limit! Don't worry, you have ${remaining} applications left overall. 📊`;
 
         this.statusOverlay.addWarning(message);
         throw new Error(`Cannot apply: ${message}`);
       }
 
       console.log("✅ User authorization check passed using existing profile");
-      this.statusOverlay.addSuccess("Perfect! You're all authorized and ready to go!");
+      this.statusOverlay.addSuccess(
+        "Perfect! You're all authorized and ready to go!"
+      );
     } catch (error) {
       console.log("❌ User authorization check failed:", error.message);
-      this.statusOverlay.addError("Hmm, there's an issue with your account permissions. " + error.message);
+      this.statusOverlay.addError(
+        "Hmm, there's an issue with your account permissions. " + error.message
+      );
       throw error;
     }
   }
@@ -339,9 +398,42 @@ export default class LinkedInPlatform extends BasePlatform {
     await super.initialize();
     this.log("🔗 LinkedIn platform initialized");
 
-    // Create status overlay
-    this.statusOverlay.create();
-    // Greeting is automatic in ChatbotStatusOverlay
+    // ✅ Ensure overlay exists - create if needed
+    if (!this.statusOverlay) {
+      console.log(
+        "🔄 No overlay found in initialize, creating fallback overlay"
+      );
+
+      this.statusOverlay = new ChatbotStatusOverlay({
+        id: `${this.platform}-status-overlay-fallback`,
+        platform: `${this.platform.toUpperCase()}`,
+        sessionId: this.sessionId || `fallback-${Date.now()}`,
+        userId: this.userId || "unknown",
+        icon: "🤖",
+        position: { top: "10px", left: "10px" },
+        persistMessages: false,
+        enableControls: true,
+        manual: false, // Auto-create the DOM
+      });
+
+      // Set up file handler connection
+      if (this.fileHandler) {
+        this.fileHandler.setStatusManager(this.statusOverlay);
+      }
+
+      this.statusOverlay.addWarning(
+        "Overlay created with fallback data - some features may be limited"
+      );
+    }
+
+    if (this.statusOverlay && !this.statusOverlay.isDestroyed) {
+      this.statusOverlay.show();
+      console.log("✅ LinkedIn platform initialized with working overlay");
+    } else {
+      console.warn(
+        "⚠️ LinkedIn platform initialized but overlay is not functional"
+      );
+    }
   }
 
   async start(params = {}) {
@@ -357,7 +449,9 @@ export default class LinkedInPlatform extends BasePlatform {
 
     this.hasStarted = true;
     this.isRunning = true;
-    this.log("🚀 Starting LinkedIn automation with user profile from sessionContext");
+    this.log(
+      "🚀 Starting LinkedIn automation with user profile from sessionContext"
+    );
     this.statusOverlay.addInfo(
       "Alright, let's get you some amazing job opportunities! Let me start searching based on your preferences..."
     );
@@ -366,7 +460,9 @@ export default class LinkedInPlatform extends BasePlatform {
       this.config = { ...this.config, ...params };
 
       if (!this.userProfile) {
-        throw new Error("Cannot start LinkedIn automation without user profile");
+        throw new Error(
+          "Cannot start LinkedIn automation without user profile"
+        );
       }
 
       console.log("🚀 Starting LinkedIn automation with profile:", {
@@ -1111,7 +1207,7 @@ export default class LinkedInPlatform extends BasePlatform {
           const jobDescription = this.scrapeJobDescription();
           const success = await this.fileHandler.handleFileUpload(
             container,
-            this.userProfile, 
+            this.userProfile,
             jobDescription
           );
 
@@ -1759,10 +1855,16 @@ export default class LinkedInPlatform extends BasePlatform {
     );
   }
 
-  async findAndClickButton(selector) {
+  async findAndClickButton(selector, options = {}) {
+    const { dryRun = false } = options;
+
     const button = document.querySelector(selector);
     if (button && this.isElementVisible(button)) {
       try {
+        if (dryRun) {
+          this.statusOverlay.addInfo(`DRY RUN: Would have clicked button: ${selector}`);
+          return true;
+        }
         button.click();
         return true;
       } catch (error) {
@@ -1957,15 +2059,21 @@ export default class LinkedInPlatform extends BasePlatform {
   }
 
   cleanup() {
-    super.cleanup();
-    this.processedJobs.clear();
-    this.answerCache.clear();
-
-    // Cleanup status overlay
-    if (this.statusOverlay) {
+    // Clean up status overlay first
+    if (this.statusOverlay && !this.statusOverlay.isDestroyed) {
+      this.statusOverlay.addBotMessage(
+        "Session ended. Your progress has been saved! 💾",
+        "info"
+      );
       this.statusOverlay.destroy();
       this.statusOverlay = null;
     }
+
+    // Continue with parent cleanup
+    super.cleanup();
+
+    this.processedJobs.clear();
+    this.answerCache.clear();
 
     this.log("🧹 LinkedIn platform cleanup completed");
   }
