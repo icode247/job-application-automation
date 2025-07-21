@@ -373,15 +373,15 @@ export default class AutomationOrchestrator {
     }
   }
 
+  getFirstOrString = (value) => {
+    if (Array.isArray(value)) {
+      return value.length > 0 ? value[value.length - 1] : null;
+    }
+    return value || null;
+  };
+
   buildGlassdoorUrl(preferences, country) {
     const params = new URLSearchParams();
-
-    const getFirstOrString = (value) => {
-      if (Array.isArray(value)) {
-        return value.length > 0 ? value[value.length - 1] : null;
-      }
-      return value || null;
-    };
 
     params.set("applicationType", "1");
     if (preferences.remoteOnly === true) {
@@ -450,7 +450,7 @@ export default class AutomationOrchestrator {
       }
     }
 
-    const experience = getFirstOrString(preferences.experience);
+    const experience = this.getFirstOrString(preferences.experience);
     if (experience) {
       const experienceMap = {
         "Entry level": "entrylevel",
@@ -467,8 +467,8 @@ export default class AutomationOrchestrator {
       }
     }
 
-    const firstLocation = getFirstOrString(preferences.location);
-    const firstPosition = getFirstOrString(preferences.positions);
+    const firstLocation = this.getFirstOrString(preferences.location);
+    const firstPosition = this.getFirstOrString(preferences.positions);
 
     let baseUrl = "https://www.glassdoor.com/Job/jobs.htm";
     // let baseUrl =  `${getGlassdoorJobURL(country)}/Job/jobs.htm`;
@@ -487,7 +487,7 @@ export default class AutomationOrchestrator {
       const countryCode = COUNTRY_CODES[firstLocation] || "IN1";
       const locationLength = locationSlug.length;
       const positionStart = locationLength + 1;
-      const positionEnd = positionStart + positionSlug.length - 1;
+      const positionEnd = positionStart + positionSlug.length;
 
       baseUrl = `https://www.glassdoor.com/Job/${locationSlug}-${positionSlug}-jobs-SRCH_IL.0,${locationLength}_${countryCode}_KO${positionStart},${positionEnd}.htm`;
     }
@@ -639,7 +639,6 @@ export default class AutomationOrchestrator {
       params.set("q", preferences.positions.join(" OR "));
     }
 
-    console.log(preferences.positions);
     // Location
     // if an array, show the first
     if (Array.isArray(preferences.location)) {
@@ -796,10 +795,9 @@ export default class AutomationOrchestrator {
   }
 
   buildWorkableUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ")
-      : "software engineer";
-    const location = preferences.location[0];
+    const keywords = this.getFirstOrString(preferences.positions);
+
+    const location = this.getFirstOrString(preferences.location);
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -807,14 +805,12 @@ export default class AutomationOrchestrator {
 
     return `https://www.google.com/search?q=site:workable.com+"${encodeURIComponent(
       keywords
-    )}"${location}${remoteKeyword}`;
+    )} "${location}${remoteKeyword}`;
   }
 
   buildAshbyUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ")
-      : "software engineer";
-    const location = preferences.location[0];
+    const keywords = this.getFirstOrString(preferences.positions)
+    const location = this.getFirstOrString(preferences.location)
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -826,25 +822,20 @@ export default class AutomationOrchestrator {
   }
 
   buildBreezyUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ")
-      : "software engineer";
-    const location = preferences.location[0];
+    const keywords = this.getFirstOrString(preferences.positions)
+    const location = this.getFirstOrString(preferences.location)
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
         : "";
 
-    // ✅ FIX: Properly encode the entire search query
     const fullQuery = `site:breezy.hr "${keywords}"${location}${remoteKeyword}`;
     return `https://www.google.com/search?q=${encodeURIComponent(fullQuery)}`;
   }
 
   buildWorkdayUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ")
-      : "software engineer";
-    const location = preferences.location[0];
+    const keywords = this.getFirstOrString(preferences.positions)
+    const location = this.getFirstOrString(preferences.location)
 
     return `https://www.google.com/search?q=site:myworkdayjobs.com+"${encodeURIComponent(
       keywords
@@ -852,10 +843,8 @@ export default class AutomationOrchestrator {
   }
 
   buildRecruiteeUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ")
-      : "software engineer";
-    const location = preferences.location[0];
+    const keywords = this.getFirstOrString(preferences.positions)
+    const location = this.getFirstOrString(preferences.location)
 
     return `https://www.google.com/search?q=site:recruitee.com+"${encodeURIComponent(
       keywords
@@ -863,10 +852,8 @@ export default class AutomationOrchestrator {
   }
 
   buildLeverUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ")
-      : "software engineer";
-    const location = preferences.location[0];
+    const keywords = this.getFirstOrString(preferences.positions)
+    const location = this.getFirstOrString(preferences.location)
 
     return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(
       keywords
