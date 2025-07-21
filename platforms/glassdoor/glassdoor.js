@@ -6,7 +6,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
+// ℹ️✅ 👤 🔄 Checking: VP of Growth at Heidi Health
 export default class GlassdoorPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -166,7 +166,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       }
 
       this.showUserMessage(
-        "✅ Authentication verified - ready to proceed!",
+        "Authentication verified - ready to proceed!",
         "success"
       );
       return {
@@ -389,8 +389,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
           );
           console.error("❌ Failed to fetch user profile during start:", error);
         }
-      } else if (this.userProfile) {
-        this.showUserMessage("✅ User profile already available", "success");
       }
 
       await this.initializeFormHandler();
@@ -428,6 +426,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       enableDebug: this.config.debug,
       host: this.getApiHost(),
       jobDescription: jobDescription,
+      logger: this.showUserMessage,
     });
   }
 
@@ -442,10 +441,12 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       this.showUserMessage("Found job listings, starting search...", "info");
       await this.startJobListingProcess();
     } else if (this.isSmartApplyPage(url)) {
-      this.showUserMessage("SmartApply form detected, processing...", "info");
       await this.startApplicationProcess();
     } else if (this.isGlassdoorFormPage(url)) {
-      this.showUserMessage("Application form detected, filling...", "info");
+      this.showUserMessage(
+        "I have started the gathering and filling of the form, please wait...",
+        "info"
+      );
       await this.handleGlassdoorFormPage();
     } else {
       this.showUserMessage("Waiting for job page to load...", "info");
@@ -524,15 +525,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
         );
         // Reinitialize FormHandler with profile data
         this.initializeFormHandler();
-      } else if (this.userProfile) {
-        this.showUserMessage("👤 Using existing user profile", "success");
       }
-
-      this.showUserMessage(
-        `Looking for ${this.searchData.limit} jobs...`,
-        "searching"
-      );
-
       // Start the job processing flow
       setTimeout(() => this.startJobProcessing(), 1000);
     } catch (error) {
@@ -628,11 +621,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       const jobDetails = this.extractJobDetailsFromCard(jobCard);
       this.currentJobDetails = jobDetails;
       this.state.currentJobDescription = this.extractJobDescription();
-
-      this.showUserMessage(
-        `Checking: ${jobDetails.title} at ${jobDetails.company}`,
-        "applying"
-      );
 
       jobCard.querySelector("a.JobCard_trackingLink__HMyun")?.click();
       await this.delay(this.glassdoorConfig.timeouts.standard);
@@ -800,6 +788,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
           enableDebug: this.config.debug,
           host: this.getApiHost(),
           jobDescription: latestJobDescription,
+          logger: this.showUserMessage,
         });
       }
 
@@ -1502,8 +1491,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
         if (this.formHandler) {
           this.formHandler.userData = this.userProfile;
         }
-      } else if (this.userProfile) {
-        this.showUserMessage("👤 Using existing user profile", "success");
       }
 
       this.showUserMessage("Application initialization complete", "success");

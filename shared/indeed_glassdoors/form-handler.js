@@ -10,7 +10,7 @@ class FormHandler {
    */
   constructor(config = {}) {
     this.enableDebug = config.enableDebug || false;
-    this.logger = console.log;
+    this.logger = config.logger;
     this.host = config.host;
     this.userData = config.userData || {};
     this.jobDescription = config.jobDescription || "";
@@ -80,8 +80,8 @@ class FormHandler {
    * @param {string} type - Message type (info, success, error, warning)
    */
   showStatus(message, type) {
-    this.logger(`🤖 ${message}`);
-    // Implement your status display logic here
+    console.log(this.logger);
+    this.logger(message, type);
   }
 
   /**
@@ -1213,22 +1213,386 @@ class FormHandler {
   }
 
   /**
-   * Handle checkbox input element
+   * Handle checkbox input element with intelligent value interpretation
    * @param {HTMLElement} element The checkbox input
    * @param {string} value The value to apply
    * @param {string} labelText The label text
    * @returns {Promise<void>}
    */
   async handleCheckboxInput(element, value, labelText) {
-    // Normalize the value - we want to check if it implies "true" or selection
     const normalizedValue = String(value).toLowerCase().trim();
-    const shouldBeChecked =
-      normalizedValue === "true" ||
-      normalizedValue === "1" ||
-      normalizedValue === "yes" ||
-      normalizedValue === "y";
+    const normalizedLabel = labelText.toLowerCase().trim();
 
-    // Check current state and act accordingly
+    // Determine if checkbox should be checked based on multiple factors
+    let shouldBeChecked = false;
+
+    // 1. Direct affirmative responses
+    const affirmativeValues = [
+      "true",
+      "yes",
+      "y",
+      "ok",
+      "okay",
+      "sure",
+      "definitely",
+      "absolutely",
+      "agreed",
+      "agree",
+      "accept",
+      "accepted",
+      "authorize",
+      "authorized",
+      "confirm",
+      "confirmed",
+      "approve",
+      "approved",
+      "allow",
+      "allowed",
+      "grant",
+      "granted",
+      "enable",
+      "enabled",
+      "checked",
+      "selected",
+      "i agree",
+      "i accept",
+      "i authorize",
+      "i confirm",
+      "i have",
+      "1",
+      "on",
+      "active",
+      "valid",
+      "correct",
+      "right",
+      "subscribe",
+      "opt in",
+      "opt-in",
+      "sign up",
+      "enroll",
+      "join",
+      "participate",
+      "consent",
+      "acknowledge",
+      "understand",
+      "read and understood",
+    ];
+
+    // 2. Direct negative responses
+    const negativeValues = [
+      "false",
+      "no",
+      "n",
+      "never",
+      "none",
+      "reject",
+      "rejected",
+      "deny",
+      "denied",
+      "decline",
+      "declined",
+      "refuse",
+      "refused",
+      "disagree",
+      "disapprove",
+      "forbid",
+      "forbidden",
+      "disable",
+      "disabled",
+      "unchecked",
+      "unselected",
+      "i disagree",
+      "i decline",
+      "i refuse",
+      "0",
+      "off",
+      "inactive",
+      "invalid",
+      "incorrect",
+      "wrong",
+      "unsubscribe",
+      "opt out",
+      "opt-out",
+      "do not",
+      "dont",
+      "not interested",
+      "not applicable",
+      "n/a",
+      "na",
+      "skip",
+      "pass",
+      "ignore",
+      "not required",
+      "not needed",
+    ];
+
+    // Check for direct matches first
+    if (affirmativeValues.some((val) => normalizedValue.includes(val))) {
+      shouldBeChecked = true;
+    } else if (negativeValues.some((val) => normalizedValue.includes(val))) {
+      shouldBeChecked = false;
+    } else {
+      // 3. Context-based decision making for ambiguous responses
+
+      // Required/mandatory checkboxes should typically be checked
+      const isRequired =
+        element.hasAttribute("required") ||
+        element.hasAttribute("aria-required") ||
+        element.closest('[aria-required="true"]') ||
+        normalizedLabel.includes("required") ||
+        normalizedLabel.includes("mandatory") ||
+        normalizedLabel.includes("must");
+
+      // Terms, privacy, agreement checkboxes usually need to be checked
+      const isAgreementType =
+        normalizedLabel.includes("terms") ||
+        normalizedLabel.includes("privacy") ||
+        normalizedLabel.includes("policy") ||
+        normalizedLabel.includes("agreement") ||
+        normalizedLabel.includes("consent") ||
+        normalizedLabel.includes("i agree") ||
+        normalizedLabel.includes("i accept") ||
+        normalizedLabel.includes("i authorize") ||
+        normalizedLabel.includes("acknowledge") ||
+        normalizedLabel.includes("understand") ||
+        normalizedLabel.includes("legal") ||
+        normalizedLabel.includes("disclaimer");
+
+      // Experience/skills checkboxes - check if value suggests having the skill
+      const isExperienceType =
+        normalizedLabel.includes("experience") ||
+        normalizedLabel.includes("skill") ||
+        normalizedLabel.includes("familiar") ||
+        normalizedLabel.includes("knowledge") ||
+        normalizedLabel.includes("ability") ||
+        normalizedLabel.includes("do you have") ||
+        normalizedLabel.includes("are you") ||
+        normalizedLabel.includes("can you") ||
+        normalizedLabel.includes("have you") ||
+        normalizedLabel.includes("worked with") ||
+        normalizedLabel.includes("used") ||
+        normalizedLabel.includes("proficient");
+
+      // Availability/willingness questions
+      const isAvailabilityType =
+        normalizedLabel.includes("available") ||
+        normalizedLabel.includes("willing") ||
+        normalizedLabel.includes("able to") ||
+        normalizedLabel.includes("can work") ||
+        normalizedLabel.includes("flexible") ||
+        normalizedLabel.includes("relocate") ||
+        normalizedLabel.includes("travel") ||
+        normalizedLabel.includes("overtime") ||
+        normalizedLabel.includes("weekends") ||
+        normalizedLabel.includes("remote") ||
+        normalizedLabel.includes("hybrid");
+
+      // Eligibility questions
+      const isEligibilityType =
+        normalizedLabel.includes("eligible") ||
+        normalizedLabel.includes("authorized") ||
+        normalizedLabel.includes("legal") ||
+        normalizedLabel.includes("visa") ||
+        normalizedLabel.includes("citizenship") ||
+        normalizedLabel.includes("permit") ||
+        normalizedLabel.includes("clearance") ||
+        normalizedLabel.includes("background check") ||
+        normalizedLabel.includes("drug test");
+
+      // Notification/communication preferences
+      const isNotificationType =
+        normalizedLabel.includes("notify") ||
+        normalizedLabel.includes("email") ||
+        normalizedLabel.includes("contact") ||
+        normalizedLabel.includes("updates") ||
+        normalizedLabel.includes("newsletter") ||
+        normalizedLabel.includes("marketing") ||
+        normalizedLabel.includes("promotional") ||
+        normalizedLabel.includes("communications");
+
+      // Education/certification questions
+      const isEducationType =
+        normalizedLabel.includes("degree") ||
+        normalizedLabel.includes("education") ||
+        normalizedLabel.includes("certified") ||
+        normalizedLabel.includes("license") ||
+        normalizedLabel.includes("qualification") ||
+        normalizedLabel.includes("graduate") ||
+        normalizedLabel.includes("diploma") ||
+        normalizedLabel.includes("course") ||
+        normalizedLabel.includes("training");
+
+      // Disability/accommodation questions
+      const isAccommodationType =
+        normalizedLabel.includes("disability") ||
+        normalizedLabel.includes("accommodation") ||
+        normalizedLabel.includes("assistance") ||
+        normalizedLabel.includes("special needs") ||
+        normalizedLabel.includes("ada");
+
+      // For experience questions, check if the response suggests positive experience
+      if (isExperienceType) {
+        const experienceIndicators = [
+          "experience",
+          "skilled",
+          "familiar",
+          "knowledgeable",
+          "able",
+          "competent",
+          "proficient",
+          "expert",
+          "qualified",
+          "trained",
+          "worked with",
+          "used",
+          "know",
+          "understand",
+          "can do",
+          "years",
+          "months",
+          "level",
+          "intermediate",
+          "advanced",
+          "beginner",
+          "certification",
+          "certified",
+          "project",
+          "developed",
+          "built",
+          "implemented",
+          "managed",
+          "led",
+          "created",
+        ];
+
+        shouldBeChecked =
+          experienceIndicators.some((indicator) =>
+            normalizedValue.includes(indicator)
+          ) || normalizedValue.length > 10; // Longer responses usually indicate experience
+      }
+      // For availability questions, default to yes unless explicitly negative
+      else if (isAvailabilityType) {
+        const availabilityPositive = [
+          "available",
+          "flexible",
+          "willing",
+          "can",
+          "able",
+          "open",
+          "interested",
+          "ready",
+          "happy to",
+          "fine with",
+          "comfortable",
+        ];
+
+        shouldBeChecked =
+          availabilityPositive.some((indicator) =>
+            normalizedValue.includes(indicator)
+          ) || normalizedValue.length < 5; // Short responses often mean "yes"
+      }
+      // For eligibility questions, assume eligible unless stated otherwise
+      else if (isEligibilityType) {
+        const eligibilityPositive = [
+          "eligible",
+          "authorized",
+          "citizen",
+          "permanent",
+          "legal",
+          "valid",
+          "cleared",
+          "approved",
+          "qualified",
+          "permitted",
+        ];
+
+        shouldBeChecked =
+          eligibilityPositive.some((indicator) =>
+            normalizedValue.includes(indicator)
+          ) || !negativeValues.some((val) => normalizedValue.includes(val));
+      }
+      // For education questions, check for educational achievements
+      else if (isEducationType) {
+        const educationIndicators = [
+          "degree",
+          "bachelor",
+          "master",
+          "phd",
+          "doctorate",
+          "diploma",
+          "certified",
+          "licensed",
+          "qualified",
+          "graduate",
+          "university",
+          "college",
+          "course",
+          "training",
+          "program",
+          "certification",
+        ];
+
+        shouldBeChecked = educationIndicators.some((indicator) =>
+          normalizedValue.includes(indicator)
+        );
+      }
+      // For notification preferences, default to opt-in unless explicitly negative
+      else if (isNotificationType) {
+        shouldBeChecked = !negativeValues.some((val) =>
+          normalizedValue.includes(val)
+        );
+      }
+      // For accommodation questions, only check if explicitly needed
+      else if (isAccommodationType) {
+        const accommodationNeeded = [
+          "need",
+          "require",
+          "request",
+          "assistance",
+          "help",
+          "support",
+          "accommodation",
+          "disability",
+          "limitation",
+          "condition",
+        ];
+
+        shouldBeChecked = accommodationNeeded.some((indicator) =>
+          normalizedValue.includes(indicator)
+        );
+      }
+      // For agreement/required checkboxes, default to checked
+      else if (isAgreementType || isRequired) {
+        shouldBeChecked = true;
+      }
+      // For other types, try to parse if the response is generally positive
+      else {
+        const positiveIndicators = [
+          "have",
+          "can",
+          "will",
+          "would",
+          "should",
+          "available",
+          "interested",
+          "willing",
+          "able",
+          "ready",
+          "qualified",
+          "comfortable",
+          "confident",
+          "capable",
+          "suitable",
+          "appropriate",
+        ];
+
+        shouldBeChecked = positiveIndicators.some((indicator) =>
+          normalizedValue.includes(indicator)
+        );
+      }
+    }
+
+    // Apply the decision
     if (shouldBeChecked && !element.checked) {
       element.focus();
       element.click();
@@ -1238,6 +1602,7 @@ class FormHandler {
       element.click();
       this.showStatus(`Unchecked: ${labelText}`, "info");
     }
+    // If already in correct state, do nothing
   }
 
   /**
@@ -1359,7 +1724,9 @@ class FormHandler {
           .filter(Boolean);
 
       case "checkbox":
-        return ["Yes", "No"];
+        return Array.from(document.getElementsByName(element.name))
+          .map((checkbox) => this.getElementLabel(checkbox))
+          .filter(Boolean);
 
       default:
         return [];
@@ -1592,15 +1959,7 @@ class FormHandler {
               break;
 
             case "checkbox":
-              const shouldCheck = ["yes", "true", "1", "y"].includes(
-                strValue.toLowerCase()
-              );
-              if (
-                (shouldCheck && !element.checked) ||
-                (!shouldCheck && element.checked)
-              ) {
-                element.click();
-              }
+              await this.handleCheckboxInput(element, strValue, labelText);
               break;
           }
           break;
