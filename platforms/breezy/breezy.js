@@ -1,4 +1,4 @@
-// platforms/breezy/breezy.js - FIXED VERSION
+// platforms/breezy/breezy.js
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { BreezyFormHandler } from "./breezy-form-handler.js";
 import { BreezyFileHandler } from "./breezy-file-handler.js";
