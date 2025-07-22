@@ -1,5 +1,4 @@
 // platforms/ashby/ashby.js
-//No submit button found
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import { AshbyFormHandler } from "./ashby-form-handler.js";
 import { AshbyFileHandler } from "./ashby-file-handler.js";
@@ -25,7 +24,7 @@ class SkipApplicationError extends ApplicationError {
     this.name = "SkipApplicationError";
   }
 }
-
+//ℹ️ ℹ️ ℹ️ Looking for Application tab...
 export default class AshbyPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -195,8 +194,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
       switch (type) {
         case "CONNECTION_ESTABLISHED":
-          this.log("✅ Port connection established with background script");
-          this.statusOverlay?.addSuccess("Connection established");
           break;
 
         case "SEARCH_TASK_DATA":
@@ -290,8 +287,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       userData: this.userProfile || {},
       jobDescription: "",
     });
-
-    this.statusOverlay.addSuccess("Ashby-specific components initialized");
   }
 
   // ========================================
@@ -502,15 +497,10 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     this.log(`🔍 Detecting page type for: ${url}`);
 
     if (url.includes("google.com/search")) {
-      this.log("📊 Google search page detected");
-      this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
-      this.log("📋 Ashby job page detected");
-      this.statusOverlay.addInfo("Ashby job page detected");
       await this.startApplicationProcess();
     } else {
-      this.log("❓ Unknown page type, waiting for navigation");
       await this.waitForValidPage();
     }
   }
@@ -555,13 +545,11 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting Ashby application process");
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
       // Validate user profile
       if (!this.userProfile) {
-        console.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchApplicationTaskData();
       }
 
@@ -569,10 +557,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         this.statusOverlay.addError(
           "No user profile available - automation may fail"
         );
-        console.error("❌ Failed to obtain user profile");
-      } else {
-        this.statusOverlay.addSuccess("User profile loaded successfully");
-        console.log("✅ User profile available for Ashby");
       }
 
       // Wait for page to fully load
@@ -629,7 +613,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
       // Check if URL changed and contains expected path
       if (currentUrl !== originalUrl && currentUrl.includes(expectedPath)) {
-        console.log(`✅ URL changed to: ${currentUrl}`);
         return true;
       }
     }
@@ -645,8 +628,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
    */
   async navigateToApplicationTab() {
     try {
-      this.statusOverlay.addInfo("Looking for Application tab...");
-
       // Find the Application tab using multiple selectors
       const applicationTab =
         document.querySelector("#job-application-form") ||
@@ -659,11 +640,8 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         );
 
       if (!applicationTab) {
-        this.statusOverlay.addWarning("Application tab not found");
         return false;
       }
-
-      this.statusOverlay.addInfo("Found Application tab, clicking...");
 
       // Get current URL to detect navigation
       const currentUrl = window.location.href;
@@ -679,9 +657,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       );
 
       if (!navigationSuccess) {
-        this.statusOverlay.addWarning(
-          "URL did not change to application page, continuing anyway..."
-        );
         // Give it a bit more time and continue
         await this.wait(2000);
       }
@@ -689,17 +664,13 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       return true;
     } catch (error) {
       console.error("Error navigating to Application tab:", error);
-      this.statusOverlay.addError(
-        "Error navigating to Application tab: " + error.message
-      );
+
       return false;
     }
   }
 
   async apply() {
     try {
-      this.statusOverlay.addInfo("Starting to apply for Ashby job");
-
       // Check if page is valid
       if (this.hasPageErrors()) {
         throw new SkipApplicationError(
@@ -716,7 +687,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
       // Extract job description from Overview tab (current page)
       const jobDescription = this.extractJobDescription();
-      this.statusOverlay.addInfo("Job description extracted from Overview tab");
 
       // Navigate to Application tab
       const applicationTabNavigated = await this.navigateToApplicationTab();

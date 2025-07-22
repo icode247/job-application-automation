@@ -1,7 +1,7 @@
 // platforms/ashby/ashby-form-handler.js
 import { AIService } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
-
+//submitAndVerify
 export class AshbyFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;
@@ -55,12 +55,6 @@ export class AshbyFormHandler {
 
     // Verify the value was set
     if (textarea.value === cleanedValue) {
-      this.logger(
-        `✅ Textarea value set successfully: ${cleanedValue.substring(
-          0,
-          50
-        )}...`
-      );
       return true;
     } else {
       this.logger(
@@ -81,15 +75,13 @@ export class AshbyFormHandler {
    */
   getAllFormFields() {
     try {
-      this.logger("Finding all Ashby form fields");
+      this.logger("Finding all Ashby form fields, and preparing to fill them");
       const fields = [];
 
       // Find all field entries (they're not inside a form element)
       const fieldEntries = document.querySelectorAll(
         "._fieldEntry_hkyf8_29, .ashby-application-form-field-entry"
       );
-
-      this.logger(`Found ${fieldEntries.length} Ashby field entries`);
 
       for (const fieldEntry of fieldEntries) {
         if (!this.isElementVisible(fieldEntry)) continue;
@@ -98,18 +90,15 @@ export class AshbyFormHandler {
         if (fieldInfo) {
           // Skip "If other, please provide context" fields
           if (this.shouldSkipField(fieldInfo.label)) {
-            this.logger(`Skipping field: ${fieldInfo.label}`);
             continue;
           }
 
           fields.push(fieldInfo);
-          this.logger(`Added field: ${fieldInfo.label} (${fieldInfo.type})`);
         }
       }
 
       return fields;
     } catch (error) {
-      this.logger(`Error getting Ashby form fields: ${error.message}`);
       return [];
     }
   }
@@ -156,7 +145,6 @@ export class AshbyFormHandler {
         options: fieldType.options || [],
       };
     } catch (error) {
-      this.logger(`Error analyzing Ashby field: ${error.message}`);
       return null;
     }
   }
@@ -220,12 +208,16 @@ export class AshbyFormHandler {
 
     // 5. Check for regular text inputs (INCLUDING TEL TYPE)
     const textInput = fieldEntry.querySelector(
-      'input[type="text"], input[type="email"], input[type="tel"], textarea'
+      'input[type="text"], input[type="email"], input[type="tel"], input[type="number"], textarea'
     );
     if (textInput) {
       return {
         type:
-          textInput.tagName.toLowerCase() === "textarea" ? "textarea" : "text",
+          textInput.tagName.toLowerCase() === "textarea"
+            ? "textarea"
+            : textInput.type === "number"
+            ? "number"
+            : textInput.type || "text",
         subType: textInput.type || "text",
         element: textInput,
       };
@@ -316,7 +308,15 @@ export class AshbyFormHandler {
       let success = false;
 
       switch (fieldInfo.type) {
+        case "number":
+          success = await this.fillNumberInput(
+            fieldInfo.element.querySelector("input"),
+            answer
+          );
+          break;
         case "text":
+        case "tel":
+        case "email":
           success = await this.fillTextInput(fieldInfo, answer);
           break;
         case "textarea":
@@ -344,20 +344,10 @@ export class AshbyFormHandler {
       }
 
       if (success) {
-        this.logger(
-          `✅ Successfully filled ${fieldInfo.type} field: ${fieldInfo.label}`
-        );
-      } else {
-        this.logger(
-          `❌ Failed to fill ${fieldInfo.type} field: ${fieldInfo.label}`
-        );
+        this.logger(` Answered question ${fieldInfo.label}`);
       }
-
       return success;
     } catch (error) {
-      this.logger(
-        `❌ Error filling field ${fieldInfo.label}: ${error.message}`
-      );
       return false;
     }
   }
@@ -411,7 +401,6 @@ export class AshbyFormHandler {
       fieldInfo.element.querySelector('input[placeholder="Start typing..."]');
 
     if (!input) {
-      this.logger("❌ No autocomplete input found");
       return false;
     }
 
@@ -428,13 +417,6 @@ export class AshbyFormHandler {
 
     if (isHowDidYouHear) {
       searchValue = "LinkedIn";
-      this.logger(
-        "🔧 Special handling: Using LinkedIn for 'How did you hear' field"
-      );
-    } else if (isLocationField) {
-      // For location fields, use the provided location data
-      this.logger(`🔧 Location field detected: "${fieldInfo.label}"`);
-      this.logger(`🔧 Using location data: "${searchValue}"`);
     }
 
     // Clear and start typing
@@ -448,31 +430,67 @@ export class AshbyFormHandler {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await this.wait(150);
 
-    // Type character by character to trigger autocomplete
-    this.logger(`🔤 Typing "${searchValue}" character by character...`);
-    for (let i = 0; i < searchValue.length; i++) {
-      const currentValue = searchValue.substring(0, i + 1);
-      nativeInputValueSetter.call(input, currentValue);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("keyup", { bubbles: true }));
+    let stopAtChar = searchValue.length;
 
-      this.logger(`🔤 Typed: "${currentValue}"`);
-      await this.wait(50);
+    if (isLocationField) {
+      stopAtChar = Math.min(10, searchValue.length);
+    } else if (!isHowDidYouHear) {
+      stopAtChar = Math.min(4, searchValue.length);
     }
 
-    // Wait longer for options to appear (especially for location)
-    this.logger("⏳ Waiting for autocomplete options to appear...");
+    let actualTypedValue = "";
+
+    for (let i = 0; i < stopAtChar; i++) {
+      const currentValue = searchValue.substring(0, i + 1);
+      actualTypedValue = currentValue;
+
+      input.value = currentValue;
+
+      const keydownEvent = new KeyboardEvent("keydown", {
+        key: searchValue[i],
+        code: `Key${searchValue[i].toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+      });
+
+      const keyupEvent = new KeyboardEvent("keyup", {
+        key: searchValue[i],
+        code: `Key${searchValue[i].toUpperCase()}`,
+        bubbles: true,
+        cancelable: true,
+      });
+
+      const inputEvent = new Event("input", { bubbles: true });
+
+      input.dispatchEvent(keydownEvent);
+      input.dispatchEvent(inputEvent);
+      input.dispatchEvent(keyupEvent);
+
+      await this.wait(500);
+
+      if (!isHowDidYouHear && i >= (isLocationField ? 9 : 3)) {
+        const resultsContainer = document.querySelector(
+          "._resultContainer_v5ami_112"
+        );
+        if (
+          resultsContainer &&
+          resultsContainer.querySelectorAll('[role="option"]').length > 0
+        ) {
+          this.logger("Options appeared early, stopping typing");
+          break;
+        }
+      }
+    }
+
     await this.wait(1200);
 
-    // Look for the results container
     const resultsContainer = document.querySelector(
       "._resultContainer_v5ami_112"
     );
 
-    this.logger(`✅ Found results container: ._resultContainer_v5ami_112`);
     return await this.selectFromAutocompleteOptions(
       resultsContainer,
-      searchValue,
+      actualTypedValue,
       isHowDidYouHear,
       isLocationField
     );
@@ -485,24 +503,11 @@ export class AshbyFormHandler {
     isLocationField
   ) {
     const options = resultsContainer.querySelectorAll('[role="option"]');
-    this.logger(`📋 Found ${options.length} autocomplete options`);
 
     if (options.length === 0) {
-      this.logger("❌ No options found in results container");
-
-      // Log the container content for debugging
-      this.logger(
-        `🔍 Container HTML: ${resultsContainer.innerHTML.substring(0, 200)}...`
-      );
       return false;
     }
 
-    // Log all available options for debugging
-    options.forEach((option, index) => {
-      this.logger(`📝 Option ${index}: "${option.textContent.trim()}"`);
-    });
-
-    // Find best matching option
     let bestMatch = null;
     let bestScore = 0;
     const searchValueLower = searchValue.toLowerCase();
@@ -511,19 +516,12 @@ export class AshbyFormHandler {
       const optionText = option.textContent.trim().toLowerCase();
       let score = 0;
 
-      this.logger(
-        `🔍 Checking option: "${optionText}" against "${searchValueLower}"`
-      );
-
-      // Exact match gets highest priority
       if (optionText === searchValueLower) {
         bestMatch = option;
         bestScore = 100;
-        this.logger(`✅ EXACT match found: "${optionText}"`);
         break;
       }
 
-      // For LinkedIn/How did you hear, match if option contains "linkedin"
       if (
         isHowDidYouHear &&
         searchValueLower === "linkedin" &&
@@ -531,13 +529,10 @@ export class AshbyFormHandler {
       ) {
         bestMatch = option;
         bestScore = 95;
-        this.logger(`✅ LinkedIn match found: "${optionText}"`);
         break;
       }
 
-      // For location fields, use more flexible matching
       if (isLocationField) {
-        // Split search value into parts (e.g., "New York, NY" -> ["new", "york", "ny"])
         const searchParts = searchValueLower
           .split(/[,\s]+/)
           .filter((part) => part.length > 0);
@@ -548,24 +543,22 @@ export class AshbyFormHandler {
           if (optionText.includes(part)) {
             matchedParts++;
             if (optionText.startsWith(part)) {
-              locationScore += 20; // Higher score for prefix matches
+              locationScore += 20;
             } else {
-              locationScore += 10; // Lower score for contains matches
+              locationScore += 10;
             }
           }
         }
 
-        // Bonus if all parts match
+        if (matchedParts === searchParts.length) {
+          locationScore += 30;
+        }
         if (matchedParts === searchParts.length) {
           locationScore += 30;
         }
 
         score = locationScore;
-        this.logger(
-          `🌍 Location match score for "${optionText}": ${score} (${matchedParts}/${searchParts.length} parts matched)`
-        );
       } else {
-        // Standard matching for non-location fields
         if (optionText.startsWith(searchValueLower)) {
           score = 80;
         } else if (optionText.includes(searchValueLower)) {
@@ -578,7 +571,6 @@ export class AshbyFormHandler {
       if (score > bestScore) {
         bestMatch = option;
         bestScore = score;
-        this.logger(`🎯 New best match: "${optionText}" (score: ${score})`);
       }
     }
 
@@ -588,62 +580,177 @@ export class AshbyFormHandler {
         `🎯 Selecting best match: "${selectedText}" (score: ${bestScore})`
       );
 
-      // Scroll to the option and click it
       this.scrollToElement(bestMatch);
       await this.wait(200);
 
-      // Try multiple click methods
-      bestMatch.focus();
-      await this.wait(100);
+      try {
+        const expectedText = bestMatch.textContent.trim();
 
-      bestMatch.click();
-      bestMatch.dispatchEvent(
-        new MouseEvent("click", { bubbles: true, cancelable: true })
-      );
+        bestMatch.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        await this.wait(200);
 
-      await this.wait(500);
+        const syntheticMouseDown = new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          detail: 1,
+          screenX: 0,
+          screenY: 0,
+          clientX: 0,
+          clientY: 0,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+          metaKey: false,
+          button: 0,
+          buttons: 1,
+        });
 
-      // Verify selection by checking if the input value changed
-      const input = document.querySelector(
-        'input[role="combobox"], input[placeholder="Start typing..."]'
-      );
-      if (
-        input &&
-        input.value &&
-        input.value.includes(selectedText.split(",")[0])
-      ) {
-        this.logger(`✅ Successfully selected: "${selectedText}"`);
-        return true;
-      } else {
-        this.logger(
-          `⚠️ Selection may not have registered. Input value: "${input?.value}"`
-        );
+        const syntheticMouseUp = new MouseEvent("mouseup", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          detail: 1,
+          screenX: 0,
+          screenY: 0,
+          clientX: 0,
+          clientY: 0,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+          metaKey: false,
+          button: 0,
+          buttons: 0,
+        });
 
-        // Try setting the value directly as fallback
+        const syntheticClick = new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          detail: 1,
+          screenX: 0,
+          screenY: 0,
+          clientX: 0,
+          clientY: 0,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+          metaKey: false,
+          button: 0,
+          buttons: 0,
+        });
+
+        bestMatch.dispatchEvent(syntheticMouseDown);
+        await this.wait(50);
+        bestMatch.dispatchEvent(syntheticMouseUp);
+        await this.wait(50);
+        bestMatch.dispatchEvent(syntheticClick);
+        await this.wait(500);
+
+        if (
+          input &&
+          (input.value.trim() === expectedText ||
+            input.value.includes(selectedText.split(",")[0]))
+        ) {
+          return true;
+        }
+
+        if (bestMatch.tabIndex !== undefined) {
+          bestMatch.tabIndex = 0;
+        }
+        bestMatch.focus();
+        await this.wait(100);
+
+        const enterKeyDown = new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+
+        const enterKeyUp = new KeyboardEvent("keyup", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+
+        bestMatch.dispatchEvent(enterKeyDown);
+        await this.wait(50);
+        bestMatch.dispatchEvent(enterKeyUp);
+        await this.wait(500);
+
+        if (
+          input &&
+          (input.value.trim() === expectedText ||
+            input.value.includes(selectedText.split(",")[0]))
+        ) {
+          return true;
+        }
+
+        const clickHandler = bestMatch.onclick;
+        if (clickHandler) {
+          clickHandler.call(bestMatch, syntheticClick);
+          await this.wait(500);
+
+          if (
+            input &&
+            (input.value.trim() === expectedText ||
+              input.value.includes(selectedText.split(",")[0]))
+          ) {
+            return true;
+          }
+        }
+
+        const pointerDown = new PointerEvent("pointerdown", {
+          pointerId: 1,
+          bubbles: true,
+          cancelable: true,
+          isPrimary: true,
+        });
+
+        const pointerUp = new PointerEvent("pointerup", {
+          pointerId: 1,
+          bubbles: true,
+          cancelable: true,
+          isPrimary: true,
+        });
+
+        bestMatch.dispatchEvent(pointerDown);
+        await this.wait(50);
+        bestMatch.dispatchEvent(pointerUp);
+        await this.wait(50);
+        bestMatch.dispatchEvent(syntheticClick);
+        await this.wait(500);
+
+        // Final check
+        if (
+          input &&
+          (input.value.trim() === expectedText ||
+            input.value.includes(selectedText.split(",")[0]))
+        ) {
+          return true;
+        }
+
         if (input) {
-          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype,
-            "value"
-          ).set;
           nativeInputValueSetter.call(input, selectedText);
           input.dispatchEvent(new Event("input", { bubbles: true }));
           input.dispatchEvent(new Event("change", { bubbles: true }));
-          this.logger(
-            `🔧 Fallback: Set input value directly to "${selectedText}"`
-          );
+          input.dispatchEvent(new Event("blur", { bubbles: true }));
         }
 
-        return true; // Consider it successful since we tried our best
+        await this.wait(300);
+
+        return true;
+      } catch (clickError) {
+        return false;
       }
     } else {
       this.logger(`❌ No suitable match found for "${searchValue}"`);
-
-      // Log all available options one more time for debugging
-      this.logger("📋 Available options were:");
-      options.forEach((option, index) => {
-        this.logger(`   ${index + 1}. "${option.textContent.trim()}"`);
-      });
-
       return false;
     }
   }
@@ -757,27 +864,15 @@ export class AshbyFormHandler {
 
         // Verify selection worked
         if (bestMatch.radio.checked) {
-          this.logger(
-            `✅ Successfully selected radio option: ${bestMatch.label.textContent.trim()}`
-          );
         } else {
-          this.logger(
-            `⚠️ Radio selection may not have registered: ${bestMatch.label.textContent.trim()}`
-          );
-
           // Final attempt: Force the selection
           bestMatch.radio.checked = true;
           bestMatch.radio.setAttribute("checked", "checked");
         }
-      } else {
-        this.logger(
-          `Radio option already selected: ${bestMatch.label.textContent.trim()}`
-        );
       }
       return true;
     }
 
-    this.logger(`❌ No matching radio option found for: ${valueStr}`);
     return false;
   }
 
@@ -860,14 +955,7 @@ export class AshbyFormHandler {
         // Verify selection worked
         if (checkbox.checked) {
           selectedCount++;
-          this.logger(
-            `✅ Successfully checked option: ${label.textContent.trim()}`
-          );
         } else {
-          this.logger(
-            `⚠️ Checkbox selection may not have registered: ${label.textContent.trim()}`
-          );
-
           // Final attempt: Force the selection
           checkbox.checked = true;
           checkbox.setAttribute("checked", "checked");
@@ -881,7 +969,7 @@ export class AshbyFormHandler {
     }
 
     if (selectedCount > 0) {
-      this.logger(`✅ Successfully selected ${selectedCount} checkbox options`);
+      this.logger(` Successfully selected ${selectedCount} checkbox options`);
       return true;
     } else {
       this.logger(`⚠️ No checkbox options were selected`);
@@ -901,7 +989,6 @@ export class AshbyFormHandler {
     // Method 1: Use streetAddress if available
     if (userData.streetAddress) {
       location = userData.streetAddress;
-      this.logger(`📍 Using streetAddress: "${location}"`);
       return location;
     }
 
@@ -915,7 +1002,6 @@ export class AshbyFormHandler {
 
     if (parts.length > 0) {
       location = parts.join(", ");
-      this.logger(`📍 Constructed location from parts: "${location}"`);
       return location;
     }
 
@@ -925,18 +1011,15 @@ export class AshbyFormHandler {
       if (userData.country && userData.country !== "United States") {
         location += ", " + userData.country;
       }
-      this.logger(`📍 Using state: "${location}"`);
       return location;
     }
 
     // Method 4: Country only
     if (userData.country) {
       location = userData.country;
-      this.logger(`📍 Using country only: "${location}"`);
       return location;
     }
 
-    this.logger("⚠️ No location data found in user profile");
     return "";
   }
 
@@ -951,16 +1034,24 @@ export class AshbyFormHandler {
       /where.*located/i,
       /city.*state/i,
       /state.*city/i,
-      /location/i,
-      /address/i,
+      /^location$/i, // ← More specific - exact match only
+      /physical.*address/i, // ← More specific than just "address"
+      /mailing.*address/i, // ← More specific
+      /street.*address/i, // ← More specific
+      /home.*address/i, // ← More specific
       /where.*live/i,
       /residence/i,
+      /geographic/i,
+      /city.*country/i,
     ];
 
+    // Exclude email-related fields explicitly
+    const emailPatterns = [/email/i, /e-mail/i, /@/];
+
+    const isEmail = emailPatterns.some((pattern) => pattern.test(label));
+    if (isEmail) return false;
+
     const isLocation = locationPatterns.some((pattern) => pattern.test(label));
-    if (isLocation) {
-      this.logger(`🌍 Detected location field: "${label}"`);
-    }
     return isLocation;
   }
 
@@ -969,29 +1060,22 @@ export class AshbyFormHandler {
    */
   async fillFormWithProfile(profile) {
     try {
-      // FIXED: Prevent duplicate form filling
       if (this.fillInProgress) {
-        this.logger("⚠️ Form filling already in progress, skipping duplicate");
         return true;
       }
 
-      // FIXED: Prevent rapid re-fills
       const now = Date.now();
       if (now - this.lastFillTime < 5000) {
-        this.logger("⚠️ Form filled too recently, skipping");
         return true;
       }
 
-      // FIXED: Generate unique form identifier
       const formId = this.getFormIdentifier();
       if (this.processedForms.has(formId)) {
-        this.logger("⚠️ Form already processed, skipping");
         return true;
       }
 
       // FIXED: Check if form already has values
       if (this.isFormAlreadyFilled()) {
-        this.logger("⚠️ Form appears to be already filled, skipping");
         this.processedForms.add(formId);
         return true;
       }
@@ -999,10 +1083,9 @@ export class AshbyFormHandler {
       this.fillInProgress = true;
       this.lastFillTime = now;
 
-      this.logger("Filling Ashby form with user profile data");
+      this.logger("Let me help you answer the job questions now...");
       this.userData = profile;
       const formFields = this.getAllFormFields();
-      this.logger(`Found ${formFields.length} form fields to process`);
 
       let filledCount = 0;
 
@@ -1010,27 +1093,18 @@ export class AshbyFormHandler {
         if (!field.label || field.type === "file") continue;
 
         try {
-          this.logger(`Processing field: ${field.label} (${field.type})`);
-
           const fieldContext = this.buildFieldContext(field);
           let answer;
 
           // Special handling for "How did you hear" field
           if (field.label.toLowerCase().includes("how did you hear")) {
             answer = "LinkedIn";
-            this.logger(`Using LinkedIn for "How did you hear" field`);
           }
           // Special handling for Location fields - use user data directly
           else if (this.isLocationField(field.label)) {
             answer = this.getUserLocationData();
-            this.logger(
-              `Using user location data for "${field.label}": ${answer}`
-            );
-          }
-          // Use AI for other fields
-          else {
-            // FIXED: Ensure proper async sequencing
-            this.logger(`Requesting AI answer for "${field.label}"`);
+          } else {
+            this.logger(`Thinking of the answer for "${field.label}"`);
             answer = await this.getAIAnswer(
               field.label,
               field.options,
@@ -1046,51 +1120,108 @@ export class AshbyFormHandler {
                 )}${String(answer).length > 100 ? "..." : ""}`
               );
             } else {
-              this.logger(`No answer received for "${field.label}"`);
+              this.logger(
+                `Sorry, I could not answer the question "${field.label}"`
+              );
             }
           }
 
           if (answer) {
-            // FIXED: Log before filling, not after async completion
-            this.logger(
-              `Filling ${field.type} field: ${field.label} with: ${answer}`
-            );
-
             const success = await this.fillAshbyField(field, answer);
             if (success) {
               filledCount++;
-              this.logger(`✅ Successfully filled field: ${field.label}`);
-            } else {
-              this.logger(`❌ Failed to fill field: ${field.label}`);
             }
-          } else {
-            this.logger(
-              `⚠️ Skipping field "${field.label}" - no answer available`
-            );
           }
 
-          // FIXED: Longer wait between fields to prevent race conditions
           await this.wait(500);
         } catch (fieldError) {
-          this.logger(
+          throw new Error(
             `Error processing field "${field.label}": ${fieldError.message}`
           );
         }
       }
 
-      // FIXED: Mark form as processed after successful completion
       this.processedForms.add(formId);
       this.logger(`Successfully filled ${filledCount} fields`);
 
-      // // FIXED: Debug form state after filling
-      // this.debugFormState();
-
       return true;
     } catch (error) {
-      this.logger(`Error filling form: ${error.message}`);
       return false;
     } finally {
       this.fillInProgress = false;
+    }
+  }
+
+  async fillNumberInput(input, value) {
+    try {
+      // Validate input element
+      if (!input || input.type !== "number") {
+        this.logger("❌ Invalid number input element");
+        return false;
+      }
+
+      // Validate and clean the numeric value
+      if (value === null || value === undefined || value === "") {
+        this.logger("❌ No value provided for number input");
+        return false;
+      }
+
+      // Convert to number
+      const stringValue = String(value).replace(/[$,\s]/g, "");
+      const numericValue = parseFloat(stringValue);
+
+      // Validate the number
+      if (isNaN(numericValue) || !isFinite(numericValue)) {
+        this.logger(
+          `❌ Invalid numeric value: "${value}" -> "${numericValue}"`
+        );
+        return false;
+      }
+
+      // Check if number is reasonable (positive)
+      if (numericValue <= 0) {
+        this.logger(`❌ Invalid number range: ${numericValue}`);
+        return false;
+      }
+
+      // Clear any existing value first
+      input.value = "";
+      input.focus();
+      await this.wait(50);
+
+      // Set the validated numeric value
+      input.value = numericValue.toString();
+
+      this.logger(`✅ Set number input to: ${numericValue}`);
+
+      // Dispatch events for number inputs
+      const inputEvent = new Event("input", {
+        bubbles: true,
+        cancelable: true,
+      });
+      const changeEvent = new Event("change", {
+        bubbles: true,
+        cancelable: true,
+      });
+
+      input.dispatchEvent(inputEvent);
+      await this.wait(50);
+      input.dispatchEvent(changeEvent);
+
+      // Verify the value was set correctly
+      const finalValue = input.value;
+      if (finalValue && !isNaN(parseFloat(finalValue))) {
+        this.logger(`✅ Number input verification passed: ${finalValue}`);
+        return true;
+      } else {
+        this.logger(
+          `❌ Number input verification failed. Current value: ${finalValue}`
+        );
+        return false;
+      }
+    } catch (error) {
+      this.logger(`❌ Error filling number input: ${error.message}`);
+      return false;
     }
   }
 
@@ -1106,12 +1237,10 @@ export class AshbyFormHandler {
         .sort()
         .join("|");
 
-      // Include URL to make identifier more specific
-      const url = window.location.href.split("?")[0]; // Remove query params
+      const url = window.location.href.split("?")[0];
 
-      return btoa(url + "|" + fieldLabels).substring(0, 32); // Base64 encode for unique ID
+      return btoa(url + "|" + fieldLabels).substring(0, 32);
     } catch (error) {
-      // Fallback to URL-based identifier
       return btoa(window.location.href).substring(0, 32);
     }
   }
@@ -1149,7 +1278,6 @@ export class AshbyFormHandler {
         }
       }
 
-      // Consider form filled if more than 50% of text fields have values
       const fillRatio = totalTextFields > 0 ? filledCount / totalTextFields : 0;
       const isAlreadyFilled = fillRatio > 0.5;
 
@@ -1161,8 +1289,7 @@ export class AshbyFormHandler {
 
       return isAlreadyFilled;
     } catch (error) {
-      this.logger(`Error checking form fill status: ${error.message}`);
-      return false; // Default to not filled on error
+      return false;
     }
   }
 
@@ -1188,7 +1315,7 @@ export class AshbyFormHandler {
   }
 
   /**
-   * Get AI answer for a form field - FIXED async handling
+   * Get AI answer for a form field
    */
   async getAIAnswer(
     question,
@@ -1197,74 +1324,96 @@ export class AshbyFormHandler {
     fieldContext = ""
   ) {
     try {
-      const cacheKey = `${question}:${options.join(",")}:${fieldType}`;
+      const cacheKey = JSON.stringify({
+        question: this.cleanLabelText(question),
+        options: options.sort(),
+        fieldType,
+        fieldContext,
+      });
+
       if (this.answerCache.has(cacheKey)) {
         const cachedAnswer = this.answerCache.get(cacheKey);
-        this.logger(`Using cached answer for "${question}": ${cachedAnswer}`);
+        this.logger(`Using cached answer for "${question}"`);
         return cachedAnswer;
       }
 
-      console.log({
-        platform: "ashby",
-        userData: this.utils.getUserDetailsForContext(this.userData),
-        jobDescription: this.jobDescription,
-        fieldType,
-        fieldContext,
-      });
+      // Use userData directly instead of calling getUserDetailsForContext
+      const userDataForContext = this.userData;
 
-      // FIXED: Properly await the AI service call
+      // Special handling for salary fields
+      if (
+        question.toLowerCase().includes("salary") ||
+        question.toLowerCase().includes("compensation") ||
+        question.toLowerCase().includes("expected salary") ||
+        question.toLowerCase().includes("salary expectation") ||
+        fieldContext.includes("salary")
+      ) {
+        this.logger(`Special salary field handling for "${question}"`);
+        const answer = await this.aiService.getAnswer(
+          `${question} (provide only the numeric amount without currency symbols or commas)`,
+          options,
+          {
+            platform: "ashby",
+            userData: userDataForContext,
+            jobDescription: this.jobDescription || "",
+            fieldType,
+            fieldContext: fieldContext + " - numeric only",
+          }
+        );
+
+        const numericAnswer = this.extractNumericSalary(answer);
+        this.answerCache.set(cacheKey, numericAnswer);
+        this.logger(`Extracted numeric salary: ${numericAnswer}`);
+        return numericAnswer;
+      }
+
       const answer = await this.aiService.getAnswer(question, options, {
         platform: "ashby",
-        userData: this.utils.getUserDetailsForContext(this.userData),
-        jobDescription: this.jobDescription,
+        userData: userDataForContext,
+        jobDescription: this.jobDescription || "",
         fieldType,
         fieldContext,
       });
 
-      // FIXED: Only cache and return valid answers
       if (answer !== null && answer !== undefined && answer !== "") {
         this.answerCache.set(cacheKey, answer);
         return answer;
       } else {
-        this.logger(`AI returned empty answer for "${question}"`);
         return null;
       }
     } catch (error) {
-      this.logger(
-        `Error getting AI answer for "${question}": ${error.message}`
-      );
-
-      // FIXED: Return fallback answer instead of undefined
-      const fallback = this.getFallbackAnswer(fieldType, options);
-      this.logger(`Using fallback answer for "${question}": ${fallback}`);
-      return fallback;
+      this.logger(`Error getting AI answer: ${error.message}`);
+      return null;
     }
   }
 
   /**
-   * Get fallback answer based on field type
+   * Extract numeric salary value from AI response
    */
-  getFallbackAnswer(fieldType, options) {
-    switch (fieldType) {
-      case "yesno":
-        return "No";
-      case "radio":
-      case "checkbox":
-        if (options.length > 0) {
-          // Look for "prefer not to answer" type options first
-          const preferNotTo = options.find(
-            (opt) =>
-              opt.toLowerCase().includes("prefer not") ||
-              opt.toLowerCase().includes("not to answer")
-          );
-          return preferNotTo || options[0];
-        }
-        return "I prefer not to answer";
-      case "autocomplete":
-        return options.length > 0 ? options[0] : "";
-      default:
-        return "I prefer not to answer";
+  extractNumericSalary(salaryText) {
+    if (!salaryText || salaryText === null || salaryText === undefined) {
+      this.logger("❌ No salary text provided");
+      return null;
     }
+
+    // Convert to string and clean
+    const cleaned = String(salaryText)
+      .replace(/[$,\s]/g, "") // Remove dollar signs, commas, spaces
+      .replace(/[^\d.]/g, ""); // Keep only digits and decimal points
+
+    // Extract first number found
+    const match = cleaned.match(/\d+\.?\d*/);
+    if (match) {
+      const number = parseFloat(match[0]);
+      if (!isNaN(number) && number > 0) {
+        const result = Math.round(number).toString();
+        this.logger(`✅ Extracted salary: ${salaryText} -> ${result}`);
+        return result;
+      }
+    }
+
+    this.logger(`❌ Could not extract valid salary from: ${salaryText}`);
+    return null;
   }
 
   /**
@@ -1272,15 +1421,14 @@ export class AshbyFormHandler {
    */
   async submitForm() {
     try {
-      this.logger("Looking for submit button");
+      this.logger("I'm about to submit the form now.");
+      this.wait(2000);
 
-      // FIXED: Use the specific class that works
       let submitButton = document.querySelector(
         ".ashby-application-form-submit-button"
       );
 
       if (!submitButton) {
-        // Fallback 1: Look for button with Submit Application text
         const allButtons = document.querySelectorAll("button");
         for (const btn of allButtons) {
           const spanText = btn.querySelector("span")?.textContent?.trim();
@@ -1297,9 +1445,7 @@ export class AshbyFormHandler {
         return false;
       }
 
-      this.logger(
-        `✅ Found submit button with classes: ${submitButton.className}`
-      );
+     
       return this.clickSubmitButton(submitButton);
     } catch (error) {
       this.logger(`❌ Error submitting form: ${error.message}`);
@@ -1338,7 +1484,7 @@ export class AshbyFormHandler {
       if (successContainer) {
         const heading = successContainer.querySelector("h2._heading_101oc_53");
         if (heading && heading.textContent.trim() === "Success") {
-          this.logger("Form submission successful - success container found");
+          this.logger("Great! I think the form was submitted successfully.");
           return true;
         }
       }
@@ -1349,16 +1495,12 @@ export class AshbyFormHandler {
       );
 
       if (successElement) {
-        this.logger(
-          "Form submission successful - alternative success element found"
-        );
+        this.logger("Great! I think the form was submitted successfully.");
         return true;
       }
 
-      this.logger("No success indicator found");
       return false;
     } catch (error) {
-      this.logger(`Error checking submission success: ${error.message}`);
       return false;
     }
   }
@@ -1377,16 +1519,15 @@ export class AshbyFormHandler {
       await this.wait(2000);
 
       // Check for success
-      const isSuccessful = this.checkSubmissionSuccess();
+      // const isSuccessful = this.checkSubmissionSuccess();
 
-      return {
-        success: isSuccessful,
-        message: isSuccessful
-          ? "Form submitted successfully"
-          : "Form submitted but success status unclear",
-      };
+      // return {
+      //   success: isSuccessful,
+      //   message: isSuccessful
+      //     ? "Form submitted successfully"
+      //     : "Form submitted but success status unclear",
+      // };
     } catch (error) {
-      this.logger(`Error in submitAndVerify: ${error.message}`);
       return { success: false, message: `Submission error: ${error.message}` };
     }
   }
@@ -1445,270 +1586,4 @@ export class AshbyFormHandler {
     const formId = this.getFormIdentifier();
     return this.processedForms.has(formId);
   }
-
-  /**
-   * Debug method to check current state of form fields
-   */
-  debugFormState() {
-    try {
-      const formFields = this.getAllFormFields();
-      this.logger("=== FORM STATE DEBUG ===");
-
-      for (const field of formFields) {
-        if (field.type === "radio") {
-          const radios = field.element.querySelectorAll('input[type="radio"]');
-          const checkedRadio = field.element.querySelector(
-            'input[type="radio"]:checked'
-          );
-          this.logger(
-            `Radio field "${field.label}": ${radios.length} options, ${
-              checkedRadio ? "CHECKED: " + checkedRadio.value : "NONE CHECKED"
-            }`
-          );
-        } else if (field.type === "checkbox") {
-          const checkboxes = field.element.querySelectorAll(
-            'input[type="checkbox"]'
-          );
-          const checkedBoxes = field.element.querySelectorAll(
-            'input[type="checkbox"]:checked'
-          );
-          this.logger(
-            `Checkbox field "${field.label}": ${checkboxes.length} options, ${checkedBoxes.length} checked`
-          );
-        } else if (field.type === "yesno") {
-          const buttons = field.element.querySelectorAll(
-            "button, ._option_y2cw4_33"
-          );
-          let selectedButton = null;
-          for (const btn of buttons) {
-            if (
-              btn.getAttribute("aria-pressed") === "true" ||
-              btn.classList.contains("selected") ||
-              btn.classList.contains("active")
-            ) {
-              selectedButton = btn.textContent.trim();
-              break;
-            }
-          }
-          this.logger(
-            `YesNo field "${field.label}": ${buttons.length} buttons, ${
-              selectedButton ? "SELECTED: " + selectedButton : "NONE SELECTED"
-            }`
-          );
-        }
-      }
-      this.logger("=== END FORM STATE DEBUG ===");
-    } catch (error) {
-      this.logger(`Error in debugFormState: ${error.message}`);
-    }
-  }
 }
-
-// async fillCheckboxField(element, value) {
-//   try {
-//     const shouldCheck =
-//       value === true ||
-//       value === "true" ||
-//       value === "yes" ||
-//       value === "on" ||
-//       value === 1;
-
-//     let checkboxInput = element;
-//     if (element.tagName.toLowerCase() !== "input") {
-//       checkboxInput = element.querySelector('input[type="checkbox"]');
-
-//       if (!checkboxInput) {
-//         if (element.getAttribute("role") === "checkbox") {
-//           const isChecked = element.getAttribute("aria-checked") === "true";
-
-//           if ((shouldCheck && !isChecked) || (!shouldCheck && isChecked)) {
-//             this.scrollToElement(element);
-//             element.click();
-//             await this.wait(200);
-//           }
-//           return true;
-//         }
-
-//         const customCheckbox = element.querySelector(".checkbox");
-//         if (customCheckbox) {
-//           this.scrollToElement(customCheckbox);
-//           customCheckbox.click();
-//           await this.wait(200);
-//           return true;
-//         }
-//       }
-
-//       if (!checkboxInput) return false;
-//     }
-
-//     if (
-//       (shouldCheck && !checkboxInput.checked) ||
-//       (!shouldCheck && checkboxInput.checked)
-//     ) {
-//       this.scrollToElement(checkboxInput);
-
-//       const labelEl =
-//         checkboxInput.closest("label") ||
-//         document.querySelector(`label[for="${checkboxInput.id}"]`);
-
-//       if (labelEl) {
-//         labelEl.click();
-//       } else {
-//         checkboxInput.click();
-//       }
-
-//       await this.wait(200);
-
-//       if (checkboxInput.checked !== shouldCheck) {
-//         checkboxInput.checked = shouldCheck;
-//         checkboxInput.dispatchEvent(new Event("change", { bubbles: true }));
-//       }
-//     }
-
-//     return true;
-//   } catch (error) {
-//     this.logger(`Error filling checkbox field: ${error.message}`);
-//     return false;
-//   }
-// }
-
-// /**
-//  * Fill a radio button field
-//  */
-// async fillRadioField(element, value) {
-//   try {
-//     const valueStr = String(value).toLowerCase();
-
-//     // Handle Ashby's radio groups
-//     if (
-//       element.classList.contains("radio-group") ||
-//       element.closest(".radio-group")
-//     ) {
-//       const container = element.classList.contains("radio-group")
-//         ? element
-//         : element.closest(".radio-group");
-
-//       const radioLabels = container.querySelectorAll("label");
-
-//       let matchingLabel = null;
-
-//       for (const label of radioLabels) {
-//         const labelText = label.textContent.trim().toLowerCase();
-
-//         if (
-//           labelText === valueStr ||
-//           labelText.includes(valueStr) ||
-//           valueStr.includes(labelText) ||
-//           (valueStr === "yes" && labelText === "yes") ||
-//           (valueStr === "no" && labelText === "no")
-//         ) {
-//           matchingLabel = label;
-//           break;
-//         }
-//       }
-
-//       if (
-//         !matchingLabel &&
-//         (valueStr === "yes" ||
-//           valueStr === "no" ||
-//           valueStr === "true" ||
-//           valueStr === "false")
-//       ) {
-//         const isYes = valueStr === "yes" || valueStr === "true";
-
-//         if (isYes && radioLabels.length > 0) {
-//           matchingLabel = radioLabels[0];
-//         } else if (!isYes && radioLabels.length > 1) {
-//           matchingLabel = radioLabels[1];
-//         }
-//       }
-
-//       if (!matchingLabel && radioLabels.length > 0) {
-//         matchingLabel = radioLabels[0];
-//       }
-
-//       if (matchingLabel) {
-//         this.scrollToElement(matchingLabel);
-//         matchingLabel.click();
-//         await this.wait(300);
-//         return true;
-//       }
-//     }
-
-//     // Handle standard radio groups
-//     if (
-//       element.getAttribute("role") === "radiogroup" ||
-//       (element.tagName === "FIELDSET" &&
-//         element.getAttribute("role") === "radiogroup")
-//     ) {
-//       const radios = element.querySelectorAll(
-//         '[role="radio"], input[type="radio"]'
-//       );
-//       if (!radios.length) return false;
-
-//       let matchingRadio = null;
-
-//       for (const radio of radios) {
-//         const label =
-//           radio.closest("label") ||
-//           document.querySelector(`label[for="${radio.id}"]`);
-
-//         if (label) {
-//           const labelText = label.textContent.trim().toLowerCase();
-
-//           if (
-//             labelText === valueStr ||
-//             labelText.includes(valueStr) ||
-//             valueStr.includes(labelText) ||
-//             (valueStr === "yes" && labelText === "yes") ||
-//             (valueStr === "no" && labelText === "no")
-//           ) {
-//             matchingRadio = radio;
-//             break;
-//           }
-//         }
-//       }
-
-//       if (
-//         !matchingRadio &&
-//         (valueStr === "yes" ||
-//           valueStr === "no" ||
-//           valueStr === "true" ||
-//           valueStr === "false")
-//       ) {
-//         const isYes = valueStr === "yes" || valueStr === "true";
-
-//         if (isYes && radios.length > 0) {
-//           matchingRadio = radios[0];
-//         } else if (!isYes && radios.length > 1) {
-//           matchingRadio = radios[1];
-//         }
-//       }
-
-//       if (!matchingRadio && radios.length > 0) {
-//         matchingRadio = radios[0];
-//       }
-
-//       if (matchingRadio) {
-//         this.scrollToElement(matchingRadio);
-
-//         const label =
-//           matchingRadio.closest("label") ||
-//           document.querySelector(`label[for="${matchingRadio.id}"]`);
-//         if (label) {
-//           label.click();
-//         } else {
-//           matchingRadio.click();
-//         }
-
-//         await this.wait(300);
-//         return true;
-//       }
-//     }
-
-//     return false;
-//   } catch (error) {
-//     this.logger(`Error filling radio field: ${error.message}`);
-//     return false;
-//   }
-// }
