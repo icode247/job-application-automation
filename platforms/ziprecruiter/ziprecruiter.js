@@ -4,7 +4,7 @@ import AIService from "../../services/ai-service.js";
 import ApplicationTrackerService from "../../services/application-tracker-service.js";
 import UserService from "../../services/user-service.js";
 import { StatusOverlay } from "../../services/index.js";
-import FileHandlerService from "../../services/file-handler-service.js";
+// import FileHandlerService from "../../services/file-handler-service.js";
 import ZipRecruiterFormHandler from "./ziprecruiter-form-handler.js";
 
 export default class ZipRecruiterPlatform extends BasePlatform {
@@ -36,7 +36,7 @@ export default class ZipRecruiterPlatform extends BasePlatform {
       position: { top: "10px", right: "10px" },
     });
 
-    this.fileHandler = new FileHandlerService({ apiHost });
+    // this.fileHandler = new FileHandlerService({ apiHost });
     this.fileHandler.setStatusManager(this.statusOverlay);
 
     // ZipRecruiter specific state

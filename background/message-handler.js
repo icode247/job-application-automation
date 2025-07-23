@@ -24,8 +24,8 @@ export default class MessageHandler {
     this.platformHandlers = new Map();
     this.tabSessions = new Map();
     this.pendingRequests = new Set();
-    
-    this.profileInjectionStatus = new Map(); 
+
+    this.profileInjectionStatus = new Map();
 
     this.setupPortHandlers();
     this.setupTabListeners();
@@ -51,17 +51,25 @@ export default class MessageHandler {
 
   handleTabCreated(tab) {
     const sessionId = this.orchestrator.getSessionForWindow(tab.windowId);
-    
+
     if (sessionId) {
-      console.log(`🆕 New tab ${tab.id} created in automation window ${tab.windowId}`);
+      console.log(
+        `🆕 New tab ${tab.id} created in automation window ${tab.windowId}`
+      );
 
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        if (automation.userProfile && !automation.userProfile.userId && automation.userId) {
+        if (
+          automation.userProfile &&
+          !automation.userProfile.userId &&
+          automation.userId
+        ) {
           automation.userProfile.userId = automation.userId;
-          console.log(`🔧 Added missing userId to automation profile: ${automation.userId}`);
+          console.log(
+            `🔧 Added missing userId to automation profile: ${automation.userId}`
+          );
         }
-        
+
         const sessionContext = {
           sessionId: sessionId,
           platform: automation.platform,
@@ -77,7 +85,7 @@ export default class MessageHandler {
         };
 
         this.tabSessions.set(tab.id, sessionContext);
-        
+
         this.profileInjectionStatus.set(tab.id, {
           injected: false,
           attempts: 0,
@@ -91,7 +99,10 @@ export default class MessageHandler {
           hasSessionConfig: !!sessionContext.sessionConfig,
         });
 
-        if (sessionContext.userProfile && this.isUserProfileComplete(sessionContext.userProfile)) {
+        if (
+          sessionContext.userProfile &&
+          this.isUserProfileComplete(sessionContext.userProfile)
+        ) {
           this.scheduleProfileInjection(tab.id, sessionContext, 500);
         }
 
@@ -102,22 +113,30 @@ export default class MessageHandler {
 
   async handleTabUpdated(tab) {
     const sessionData = this.tabSessions.get(tab.id);
-    const isAutomationWindow = this.orchestrator.isAutomationWindow(tab.windowId);
-    
+    const isAutomationWindow = this.orchestrator.isAutomationWindow(
+      tab.windowId
+    );
+
     if ((sessionData || isAutomationWindow) && tab.url) {
       try {
         let contextToInject = sessionData;
-        
+
         if (!contextToInject && isAutomationWindow) {
           const sessionId = this.orchestrator.getSessionForWindow(tab.windowId);
           const automation = this.activeAutomations.get(sessionId);
-          
+
           if (automation) {
-            if (automation.userProfile && !automation.userProfile.userId && automation.userId) {
+            if (
+              automation.userProfile &&
+              !automation.userProfile.userId &&
+              automation.userId
+            ) {
               automation.userProfile.userId = automation.userId;
-              console.log(`🔧 Added missing userId to automation profile: ${automation.userId}`);
+              console.log(
+                `🔧 Added missing userId to automation profile: ${automation.userId}`
+              );
             }
-            
+
             contextToInject = {
               sessionId: sessionId,
               platform: automation.platform,
@@ -129,9 +148,9 @@ export default class MessageHandler {
               apiHost: automation.sessionConfig?.apiHost,
               preferences: automation.sessionConfig?.preferences || {},
             };
-            
+
             this.tabSessions.set(tab.id, contextToInject);
-            
+
             if (!this.profileInjectionStatus.has(tab.id)) {
               this.profileInjectionStatus.set(tab.id, {
                 injected: false,
@@ -142,17 +161,25 @@ export default class MessageHandler {
           }
         }
 
-        if (contextToInject && this.isUserProfileComplete(contextToInject.userProfile)) {
+        if (
+          contextToInject &&
+          this.isUserProfileComplete(contextToInject.userProfile)
+        ) {
           const injectionStatus = this.profileInjectionStatus.get(tab.id);
-          const shouldInject = !injectionStatus?.injected || 
-                              injectionStatus.attempts < 3 ||
-                              (Date.now() - injectionStatus.lastAttempt) > 10000;
+          const shouldInject =
+            !injectionStatus?.injected ||
+            injectionStatus.attempts < 3 ||
+            Date.now() - injectionStatus.lastAttempt > 10000;
 
           if (shouldInject) {
-            console.log(`🔄 Tab ${tab.id} updated, scheduling profile injection`);
+            console.log(
+              `🔄 Tab ${tab.id} updated, scheduling profile injection`
+            );
             this.scheduleProfileInjection(tab.id, contextToInject, 1000);
           } else {
-            console.log(`⏭️ Skipping profile injection for tab ${tab.id} - already injected`);
+            console.log(
+              `⏭️ Skipping profile injection for tab ${tab.id} - already injected`
+            );
           }
         }
       } catch (error) {
@@ -170,20 +197,34 @@ export default class MessageHandler {
           lastAttempt: 0,
         };
 
-        if (injectionStatus.injected && (Date.now() - injectionStatus.lastAttempt) < 5000) {
-          console.log(`⏭️ Skipping profile injection for tab ${tabId} - recently injected`);
+        if (
+          injectionStatus.injected &&
+          Date.now() - injectionStatus.lastAttempt < 5000
+        ) {
+          console.log(
+            `⏭️ Skipping profile injection for tab ${tabId} - recently injected`
+          );
           return;
         }
 
         if (injectionStatus.attempts >= 5) {
-          console.log(`⏭️ Skipping profile injection for tab ${tabId} - max attempts reached`);
+          console.log(
+            `⏭️ Skipping profile injection for tab ${tabId} - max attempts reached`
+          );
           return;
         }
 
-        console.log(`💉 Attempting profile injection for tab ${tabId} (attempt ${injectionStatus.attempts + 1})`);
-        
-        const success = await this.injectEnhancedSessionContext(tabId, sessionContext);
-        
+        console.log(
+          `💉 Attempting profile injection for tab ${tabId} (attempt ${
+            injectionStatus.attempts + 1
+          })`
+        );
+
+        const success = await this.injectEnhancedSessionContext(
+          tabId,
+          sessionContext
+        );
+
         // Update injection status
         this.profileInjectionStatus.set(tabId, {
           injected: success,
@@ -195,16 +236,24 @@ export default class MessageHandler {
           console.log(`✅ Profile injection successful for tab ${tabId}`);
         } else {
           console.warn(`⚠️ Profile injection failed for tab ${tabId}`);
-          
+
           // Retry with exponential backoff
           if (injectionStatus.attempts < 3) {
-            const retryDelay = Math.min(2000 * Math.pow(2, injectionStatus.attempts), 10000);
-            console.log(`🔄 Retrying profile injection for tab ${tabId} in ${retryDelay}ms`);
+            const retryDelay = Math.min(
+              2000 * Math.pow(2, injectionStatus.attempts),
+              10000
+            );
+            console.log(
+              `🔄 Retrying profile injection for tab ${tabId} in ${retryDelay}ms`
+            );
             this.scheduleProfileInjection(tabId, sessionContext, retryDelay);
           }
         }
       } catch (error) {
-        console.error(`❌ Error in scheduled profile injection for tab ${tabId}:`, error);
+        console.error(
+          `❌ Error in scheduled profile injection for tab ${tabId}:`,
+          error
+        );
       }
     }, delay);
   }
@@ -212,7 +261,9 @@ export default class MessageHandler {
   async injectEnhancedSessionContext(tabId, sessionData) {
     try {
       if (!sessionData || !sessionData.sessionId || !sessionData.platform) {
-        console.warn(`⚠️ Invalid session data for tab ${tabId}, skipping injection`);
+        console.warn(
+          `⚠️ Invalid session data for tab ${tabId}, skipping injection`
+        );
         return false;
       }
 
@@ -221,7 +272,9 @@ export default class MessageHandler {
           hasProfile: !!sessionData.userProfile,
           hasUserId: !!sessionData.userProfile?.userId,
           hasEmail: !!sessionData.userProfile?.email,
-          hasName: !!(sessionData.userProfile?.name || sessionData.userProfile?.firstName),
+          hasName: !!(
+            sessionData.userProfile?.name || sessionData.userProfile?.firstName
+          ),
         });
         return false;
       }
@@ -235,7 +288,9 @@ export default class MessageHandler {
               sessionId: sessionData.sessionId,
               platform: sessionData.platform,
               hasUserProfile: !!sessionData.userProfile,
-              userProfileKeys: sessionData.userProfile ? Object.keys(sessionData.userProfile) : [],
+              userProfileKeys: sessionData.userProfile
+                ? Object.keys(sessionData.userProfile)
+                : [],
             });
 
             // Store session data in window (highest priority)
@@ -246,19 +301,25 @@ export default class MessageHandler {
             window.isAutomationTab = true;
             window.parentSessionId = sessionData.parentSessionId;
 
-            if (sessionData.userProfile && 
-                sessionData.userProfile.userId && 
-                sessionData.userProfile.email &&
-                (sessionData.userProfile.name || sessionData.userProfile.firstName)) {
-              
+            if (
+              sessionData.userProfile &&
+              sessionData.userProfile.userId &&
+              sessionData.userProfile.email &&
+              (sessionData.userProfile.name ||
+                sessionData.userProfile.firstName)
+            ) {
               window.automationUserProfile = sessionData.userProfile;
               console.log("✅ User profile injected into window:", {
                 userId: sessionData.userProfile.userId,
                 email: sessionData.userProfile.email,
-                name: sessionData.userProfile.name || sessionData.userProfile.firstName,
+                name:
+                  sessionData.userProfile.name ||
+                  sessionData.userProfile.firstName,
               });
             } else {
-              console.warn("⚠️ User profile validation failed during injection");
+              console.warn(
+                "⚠️ User profile validation failed during injection"
+              );
             }
 
             // Store session config and API host
@@ -270,28 +331,51 @@ export default class MessageHandler {
             }
 
             try {
-              sessionStorage.setItem("automationSessionId", sessionData.sessionId);
-              sessionStorage.setItem("automationPlatform", sessionData.platform);
+              sessionStorage.setItem(
+                "automationSessionId",
+                sessionData.sessionId
+              );
+              sessionStorage.setItem(
+                "automationPlatform",
+                sessionData.platform
+              );
               sessionStorage.setItem("automationUserId", sessionData.userId);
               sessionStorage.setItem("isAutomationWindow", "true");
               sessionStorage.setItem("isAutomationTab", "true");
-              sessionStorage.setItem("parentSessionId", sessionData.parentSessionId);
+              sessionStorage.setItem(
+                "parentSessionId",
+                sessionData.parentSessionId
+              );
 
-              if (sessionData.userProfile && 
-                  sessionData.userProfile.userId && 
-                  sessionData.userProfile.email) {
-                sessionStorage.setItem("automationUserProfile", JSON.stringify(sessionData.userProfile));
+              if (
+                sessionData.userProfile &&
+                sessionData.userProfile.userId &&
+                sessionData.userProfile.email
+              ) {
+                sessionStorage.setItem(
+                  "automationUserProfile",
+                  JSON.stringify(sessionData.userProfile)
+                );
                 console.log("✅ User profile stored in sessionStorage");
               }
 
               if (sessionData.sessionConfig) {
-                sessionStorage.setItem("automationSessionConfig", JSON.stringify(sessionData.sessionConfig));
+                sessionStorage.setItem(
+                  "automationSessionConfig",
+                  JSON.stringify(sessionData.sessionConfig)
+                );
               }
               if (sessionData.apiHost) {
-                sessionStorage.setItem("automationApiHost", sessionData.apiHost);
+                sessionStorage.setItem(
+                  "automationApiHost",
+                  sessionData.apiHost
+                );
               }
             } catch (storageError) {
-              console.warn("⚠️ Failed to store in sessionStorage:", storageError);
+              console.warn(
+                "⚠️ Failed to store in sessionStorage:",
+                storageError
+              );
             }
 
             // Set injection markers
@@ -311,37 +395,43 @@ export default class MessageHandler {
 
       return true;
     } catch (error) {
-      console.error(`❌ Failed to inject session context into tab ${tabId}:`, error);
+      console.error(
+        `❌ Failed to inject session context into tab ${tabId}:`,
+        error
+      );
       return false;
     }
   }
 
   isUserProfileComplete(profile) {
-    if (!profile || typeof profile !== 'object') {
+    if (!profile || typeof profile !== "object") {
       console.warn("⚠️ Profile validation failed: No profile object provided");
       return false;
     }
-    
-    const requiredFields = ['userId', 'email'];
+
+    const requiredFields = ["userId", "email"];
     const missingFields = [];
-    
+
     for (const field of requiredFields) {
-      if (!profile[field] || profile[field].toString().trim() === '') {
+      if (!profile[field] || profile[field].toString().trim() === "") {
         missingFields.push(field);
       }
     }
-    
+
     const hasName = profile.name || profile.firstName || profile.fullName;
     if (!hasName) {
-      missingFields.push('name/firstName/fullName');
+      missingFields.push("name/firstName/fullName");
     }
-    
+
     if (missingFields.length > 0) {
-      console.warn("⚠️ Profile validation failed - missing fields:", missingFields);
+      console.warn(
+        "⚠️ Profile validation failed - missing fields:",
+        missingFields
+      );
       console.warn("⚠️ Available profile fields:", Object.keys(profile));
       return false;
     }
-    
+
     return true;
   }
 
@@ -373,31 +463,29 @@ export default class MessageHandler {
         const response = await fetch(`${apiHost}/api/user/${userId}`);
         if (response.ok) {
           userProfile = await response.json();
-          
+
           if (userProfile && !userProfile.userId) {
             userProfile.userId = userId;
             console.log(`🔧 Added missing userId to user profile: ${userId}`);
           }
-          
+
           if (this.isUserProfileComplete(userProfile)) {
-            console.log(`✅ Complete user profile fetched:`, {
-              userId: userProfile.userId,
-              email: userProfile.email,
-              name: userProfile.name || userProfile.firstName,
-              hasResumeUrl: !!userProfile.resumeUrl,
-            });
           } else {
             console.warn(`⚠️ Incomplete user profile fetched:`, {
               hasUserId: !!userProfile?.userId,
               hasEmail: !!userProfile?.email,
               hasName: !!(userProfile?.name || userProfile?.firstName),
-              profileKeys: userProfile ? Object.keys(userProfile).slice(0, 10) : [], // Show first 10 keys
-              profileSample: userProfile ? {
-                userId: userProfile.userId,
-                email: userProfile.email,
-                name: userProfile.name,
-                firstName: userProfile.firstName,
-              } : null,
+              profileKeys: userProfile
+                ? Object.keys(userProfile).slice(0, 10)
+                : [], // Show first 10 keys
+              profileSample: userProfile
+                ? {
+                    userId: userProfile.userId,
+                    email: userProfile.email,
+                    name: userProfile.name,
+                    firstName: userProfile.firstName,
+                  }
+                : null,
             });
           }
         } else {
@@ -409,13 +497,21 @@ export default class MessageHandler {
 
       if (!this.isUserProfileComplete(userProfile)) {
         const missingFields = [];
-        if (!userProfile?.userId) missingFields.push('userId');
-        if (!userProfile?.email) missingFields.push('email');
-        if (!userProfile?.name && !userProfile?.firstName && !userProfile?.fullName) missingFields.push('name');
-        
+        if (!userProfile?.userId) missingFields.push("userId");
+        if (!userProfile?.email) missingFields.push("email");
+        if (
+          !userProfile?.name &&
+          !userProfile?.firstName &&
+          !userProfile?.fullName
+        )
+          missingFields.push("name");
+
         const errorMessage = `Network Error, Please check your internet and try again....`;
         console.error("❌ " + errorMessage);
-        console.error("❌ Available profile fields:", userProfile ? Object.keys(userProfile) : 'No profile');
+        console.error(
+          "❌ Available profile fields:",
+          userProfile ? Object.keys(userProfile) : "No profile"
+        );
         sendResponse({ status: "error", message: errorMessage });
         return;
       }
@@ -450,12 +546,14 @@ export default class MessageHandler {
 
         automationInstance.platform = platform;
         automationInstance.userId = userId;
-        
+
         if (userProfile && !userProfile.userId) {
           userProfile.userId = userId;
-          console.log(`🔧 Added missing userId to user profile before storing: ${userId}`);
+          console.log(
+            `🔧 Added missing userId to user profile before storing: ${userId}`
+          );
         }
-        
+
         automationInstance.userProfile = userProfile;
         automationInstance.sessionConfig = {
           sessionId,
@@ -483,12 +581,16 @@ export default class MessageHandler {
 
         this.activeAutomations.set(sessionId, automationInstance);
 
-        console.log(`🪟 Window ${result.windowId} mapped to session ${sessionId}`);
+        console.log(
+          `🪟 Window ${result.windowId} mapped to session ${sessionId}`
+        );
         console.log(`👤 Complete user profile stored in automation:`, {
           hasProfile: !!automationInstance.userProfile,
           userId: automationInstance.userProfile?.userId,
           email: automationInstance.userProfile?.email,
-          name: automationInstance.userProfile?.name || automationInstance.userProfile?.firstName,
+          name:
+            automationInstance.userProfile?.name ||
+            automationInstance.userProfile?.firstName,
         });
 
         await this.injectProfileIntoWindowTabs(result.windowId, {
@@ -538,11 +640,11 @@ export default class MessageHandler {
   async injectProfileIntoWindowTabs(windowId, sessionContext) {
     try {
       const tabs = await chrome.tabs.query({ windowId: windowId });
-      
+
       for (const tab of tabs) {
-        if (tab.url && !tab.url.startsWith('chrome://')) {
+        if (tab.url && !tab.url.startsWith("chrome://")) {
           console.log(`💉 Injecting profile into existing tab ${tab.id}`);
-          
+
           // Store tab session
           this.tabSessions.set(tab.id, {
             ...sessionContext,
@@ -604,29 +706,44 @@ export default class MessageHandler {
       let sessionContext = null;
 
       if (sender.tab) {
-        const windowManagerCheck = this.windowManager.isAutomationWindow(sender.tab.windowId);
-        const orchestratorCheck = this.orchestrator.isAutomationWindow(sender.tab.windowId);
+        const windowManagerCheck = this.windowManager.isAutomationWindow(
+          sender.tab.windowId
+        );
+        const orchestratorCheck = this.orchestrator.isAutomationWindow(
+          sender.tab.windowId
+        );
         const hasTabSession = this.tabSessions.has(sender.tab.id);
 
-        isAutomationWindow = windowManagerCheck || orchestratorCheck || hasTabSession;
+        isAutomationWindow =
+          windowManagerCheck || orchestratorCheck || hasTabSession;
 
-        console.log(`🔍 Automation window check for window ${sender.tab.windowId}, tab ${sender.tab.id}:`, {
-          windowManagerCheck,
-          orchestratorCheck,
-          hasTabSession,
-          isAutomationWindow,
-        });
+        console.log(
+          `🔍 Automation window check for window ${sender.tab.windowId}, tab ${sender.tab.id}:`,
+          {
+            windowManagerCheck,
+            orchestratorCheck,
+            hasTabSession,
+            isAutomationWindow,
+          }
+        );
 
         if (isAutomationWindow && !hasTabSession) {
-          const sessionId = this.orchestrator.getSessionForWindow(sender.tab.windowId);
+          const sessionId = this.orchestrator.getSessionForWindow(
+            sender.tab.windowId
+          );
           if (sessionId) {
             const automation = this.activeAutomations.get(sessionId);
-            if (automation && this.isUserProfileComplete(automation.userProfile)) {
+            if (
+              automation &&
+              this.isUserProfileComplete(automation.userProfile)
+            ) {
               if (!automation.userProfile.userId && automation.userId) {
                 automation.userProfile.userId = automation.userId;
-                console.log(`🔧 Added missing userId to automation profile: ${automation.userId}`);
+                console.log(
+                  `🔧 Added missing userId to automation profile: ${automation.userId}`
+                );
               }
-              
+
               sessionContext = {
                 sessionId,
                 platform: automation.platform,
@@ -638,10 +755,12 @@ export default class MessageHandler {
                 apiHost: automation.sessionConfig?.apiHost,
                 preferences: automation.sessionConfig?.preferences || {},
               };
-              
+
               this.tabSessions.set(sender.tab.id, sessionContext);
-              console.log(`✅ Created missing tab session for tab ${sender.tab.id}`);
-              
+              console.log(
+                `✅ Created missing tab session for tab ${sender.tab.id}`
+              );
+
               // Schedule profile injection
               this.scheduleProfileInjection(sender.tab.id, sessionContext, 500);
             }
@@ -649,9 +768,9 @@ export default class MessageHandler {
         }
       }
 
-      sendResponse({ 
+      sendResponse({
         isAutomationWindow,
-        sessionContext: sessionContext || this.tabSessions.get(sender.tab?.id)
+        sessionContext: sessionContext || this.tabSessions.get(sender.tab?.id),
       });
       return true;
     } catch (error) {
@@ -677,7 +796,10 @@ export default class MessageHandler {
         const sessionId = this.orchestrator.getSessionForWindow(windowId);
         if (sessionId) {
           const automation = this.activeAutomations.get(sessionId);
-          if (automation && this.isUserProfileComplete(automation.userProfile)) {
+          if (
+            automation &&
+            this.isUserProfileComplete(automation.userProfile)
+          ) {
             sessionContext = {
               sessionId,
               platform: automation.platform,
@@ -689,16 +811,16 @@ export default class MessageHandler {
               apiHost: automation.sessionConfig?.apiHost,
               preferences: automation.sessionConfig?.preferences || {},
             };
-            
+
             this.tabSessions.set(tabId, sessionContext);
             console.log(`✅ Created session context for tab ${tabId}`);
           }
         }
       }
 
-      sendResponse({ 
+      sendResponse({
         sessionContext: sessionContext || null,
-        success: !!sessionContext
+        success: !!sessionContext,
       });
       return true;
     } catch (error) {
@@ -710,17 +832,23 @@ export default class MessageHandler {
 
   handleContentScriptReady(request, sender, sendResponse) {
     const { sessionId, platform, url, userId, profileComplete } = request;
-    console.log(`📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`);
+    console.log(
+      `📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`
+    );
 
     if (sender.tab && !this.tabSessions.has(sender.tab.id)) {
-      const automation = this.activeAutomations.get(sessionId) || this.findAutomationByWindow(sender.tab.windowId);
-      
+      const automation =
+        this.activeAutomations.get(sessionId) ||
+        this.findAutomationByWindow(sender.tab.windowId);
+
       if (automation && this.isUserProfileComplete(automation.userProfile)) {
         if (!automation.userProfile.userId && automation.userId) {
           automation.userProfile.userId = automation.userId;
-          console.log(`🔧 Added missing userId to automation profile: ${automation.userId}`);
+          console.log(
+            `🔧 Added missing userId to automation profile: ${automation.userId}`
+          );
         }
-        
+
         const sessionContext = {
           sessionId: sessionId || automation.sessionId,
           platform: platform || automation.platform,
@@ -739,9 +867,15 @@ export default class MessageHandler {
       }
     }
 
-    const automation = this.activeAutomations.get(sessionId) || this.findAutomationByWindow(sender.tab?.windowId);
-    
-    if (automation && sender.tab && this.isUserProfileComplete(automation.userProfile)) {
+    const automation =
+      this.activeAutomations.get(sessionId) ||
+      this.findAutomationByWindow(sender.tab?.windowId);
+
+    if (
+      automation &&
+      sender.tab &&
+      this.isUserProfileComplete(automation.userProfile)
+    ) {
       setTimeout(async () => {
         try {
           const sessionContext = {
@@ -761,9 +895,14 @@ export default class MessageHandler {
             sessionContext: sessionContext,
           });
 
-          console.log(`📤 Sent start message with full context to content script for session ${sessionContext.sessionId}`);
+          console.log(
+            `📤 Sent start message with full context to content script for session ${sessionContext.sessionId}`
+          );
         } catch (error) {
-          console.error(`❌ Failed to send start message to content script:`, error);
+          console.error(
+            `❌ Failed to send start message to content script:`,
+            error
+          );
         }
       }, 1000);
     }
@@ -773,12 +912,12 @@ export default class MessageHandler {
 
   findAutomationByWindow(windowId) {
     if (!windowId) return null;
-    
+
     const sessionId = this.orchestrator.getSessionForWindow(windowId);
     if (sessionId) {
       return this.activeAutomations.get(sessionId);
     }
-    
+
     return null;
   }
 
@@ -804,11 +943,13 @@ export default class MessageHandler {
     console.log(`🪟 Window ${windowId} closed, cleaning up...`);
 
     const sessionId = this.orchestrator.getSessionForWindow(windowId);
-    
+
     if (sessionId) {
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        console.log(`🛑 Stopping automation ${sessionId} for closed window ${windowId}`);
+        console.log(
+          `🛑 Stopping automation ${sessionId} for closed window ${windowId}`
+        );
 
         const platform = automation.platform;
         const userId = automation.userId;
@@ -926,15 +1067,20 @@ export default class MessageHandler {
 
   getPlatformLinkPattern(platform) {
     const patternMap = {
-      ziprecruiter: /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|jz|apply).*$/,
+      ziprecruiter:
+        /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|jz|apply).*$/,
       lever: /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/,
       workable: /^https:\/\/apply\.workable\.com\/[^\/]+\/[^\/]+\/?.*$/,
       recruitee: /^https:\/\/.*\.recruitee\.com\/o\/[^\/]+\/?.*$/,
-      greenhouse: /^https:\/\/boards\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+\/?.*$/,
-      breezy: /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/,
-      ashby: /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)\/?.*$/,
+      greenhouse:
+        /^https:\/\/boards\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+\/?.*$/,
+      breezy:
+        /^https:\/\/([\w-]+\.breezy\.hr\/p\/|app\.breezy\.hr\/jobs\/)([^\/]+)\/?.*$/,
+      ashby:
+        /^https:\/\/(jobs\.ashbyhq\.com\/[^\/]+\/[^\/]+|[^\/]+\.ashbyhq\.com\/[^\/]+)\/?.*$/,
       indeed: /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply).*$/,
-      glassdoor: /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply).*$/,
+      glassdoor:
+        /^https:\/\/(www\.)?glassdoor\.com\/(job|Job|partner|apply).*$/,
       wellfound: /^https:\/\/wellfound\.com\/jobs\/\d+/,
     };
 
@@ -942,7 +1088,10 @@ export default class MessageHandler {
   }
 
   getPlatformHandler(platform) {
-    return this.platformHandlers.get(platform) || this.initializePlatformHandler(platform);
+    return (
+      this.platformHandlers.get(platform) ||
+      this.initializePlatformHandler(platform)
+    );
   }
 
   setupPortHandlers() {
@@ -1225,7 +1374,9 @@ export default class MessageHandler {
     if (!supportedPlatforms.includes(request.platform)) {
       return {
         valid: false,
-        error: `Unsupported platform: ${request.platform}. Supported platforms: ${supportedPlatforms.join(", ")}`,
+        error: `Unsupported platform: ${
+          request.platform
+        }. Supported platforms: ${supportedPlatforms.join(", ")}`,
       };
     }
 

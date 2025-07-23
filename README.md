@@ -380,7 +380,22 @@ chrome.runtime.sendMessage(
   }
 );
 ```
+### Bundling
+Development (readable code, fast rebuilds)
 
+```
+npm run dev          # Build once (no obfuscation)
+npm run watch:dev    # Watch mode (no obfuscation) 
+npm start           # Same as watch:dev
+
+```
+
+Production (obfuscated code)
+```
+npm run build       # Build once (obfuscated)
+npm run watch       # Watch mode (obfuscated)
+npm run package     # Build + create ZIP
+````
 ### Application Tracking
 
 All applications are automatically tracked:

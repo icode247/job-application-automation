@@ -12,6 +12,33 @@ export default class LeverFormHandler {
   }
 
   /**
+   * Check if field should be skipped
+   */
+  shouldSkipField(field) {
+    if (!field.label) return true;
+
+    const labelLower = field.label.toLowerCase();
+
+    // Skip "Other URL" fields silently
+    if (
+      labelLower.includes("other url") ||
+      labelLower.includes("other website") ||
+      labelLower.includes("additional url") ||
+      (labelLower === "other" && field.type === "url")
+    ) {
+      return true;
+    }
+
+    // Skip file fields
+    if (field.type === "file") {
+      this.logger(`Skipping file field: ${field.label}`);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Get label for individual radio/checkbox options
    */
   getFieldLabelForOption(element) {
@@ -303,14 +330,9 @@ export default class LeverFormHandler {
       let skippedCount = 0;
 
       for (const field of formFields) {
-        if (!field.label) {
-          this.logger(`Skipping field without label: ${field.name}`);
-          continue;
-        }
-
-        if (field.type === "file") {
-          this.logger(`Skipping file field: ${field.label}`);
-          continue;
+        // Check if field should be skipped (including "Other URL" fields)
+        if (this.shouldSkipField(field)) {
+          continue; // Skip silently without logging for "Other URL" fields
         }
 
         try {

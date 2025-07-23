@@ -5,7 +5,7 @@ import ApplicationTrackerService from "../../services/application-tracker-servic
 import UserService from "../../services/user-service.js";
 import ChatbotStatusOverlay from "../../services/status-notification-service.js";
 import LinkedInFileHandler from "./linkedin-file-handler.js";
-//submit button
+
 export default class LinkedInPlatform extends BasePlatform {
   constructor(config) {
     super(config);
@@ -156,195 +156,8 @@ export default class LinkedInPlatform extends BasePlatform {
     }
   }
 
-  validateLinkedInPreferences(preferences) {
-    const errors = [];
-    const warnings = [];
 
-    if (
-      !preferences.positions ||
-      !Array.isArray(preferences.positions) ||
-      preferences.positions.length === 0
-    ) {
-      errors.push("At least one job position is required");
-    } else if (
-      preferences.positions.some((pos) => !pos || typeof pos !== "string")
-    ) {
-      errors.push("All positions must be non-empty strings");
-    }
 
-    if (preferences.location && Array.isArray(preferences.location)) {
-      const supportedCountries = [
-        "Nigeria",
-        "Netherlands",
-        "United States",
-        "United Kingdom",
-        "Canada",
-        "Australia",
-        "Germany",
-        "France",
-        "India",
-        "Singapore",
-        "South Africa",
-        "Ireland",
-        "New Zealand",
-      ];
-
-      const unsupportedLocations = preferences.location.filter(
-        (loc) => loc !== "Remote" && !supportedCountries.includes(loc)
-      );
-
-      if (unsupportedLocations.length > 0) {
-        warnings.push(
-          `Some locations may not have optimal filtering: ${unsupportedLocations.join(
-            ", "
-          )}`
-        );
-      }
-    }
-
-    if (preferences.jobType && Array.isArray(preferences.jobType)) {
-      const validJobTypes = [
-        "Full-time",
-        "Part-time",
-        "Contract",
-        "Temporary",
-        "Internship",
-        "Volunteer",
-      ];
-      const invalidJobTypes = preferences.jobType.filter(
-        (type) => !validJobTypes.includes(type)
-      );
-
-      if (invalidJobTypes.length > 0) {
-        errors.push(
-          `Invalid job types: ${invalidJobTypes.join(
-            ", "
-          )}. Valid types: ${validJobTypes.join(", ")}`
-        );
-      }
-    }
-
-    if (preferences.experience && Array.isArray(preferences.experience)) {
-      const validExperience = [
-        "Internship",
-        "Entry level",
-        "Associate",
-        "Mid-Senior level",
-        "Director",
-        "Executive",
-      ];
-      const invalidExperience = preferences.experience.filter(
-        (exp) => !validExperience.includes(exp)
-      );
-
-      if (invalidExperience.length > 0) {
-        errors.push(
-          `Invalid experience levels: ${invalidExperience.join(
-            ", "
-          )}. Valid levels: ${validExperience.join(", ")}`
-        );
-      }
-    }
-
-    // Validate work modes
-    if (preferences.workMode && Array.isArray(preferences.workMode)) {
-      const validWorkModes = ["Remote", "Hybrid", "On-site"];
-      const invalidWorkModes = preferences.workMode.filter(
-        (mode) => !validWorkModes.includes(mode)
-      );
-
-      if (invalidWorkModes.length > 0) {
-        errors.push(
-          `Invalid work modes: ${invalidWorkModes.join(
-            ", "
-          )}. Valid modes: ${validWorkModes.join(", ")}`
-        );
-      }
-    }
-
-    // Validate date posted
-    if (preferences.datePosted) {
-      const validDateOptions = [
-        "Any time",
-        "Past month",
-        "Past week",
-        "Past 24 hours",
-        "Few Minutes Ago",
-      ];
-      if (!validDateOptions.includes(preferences.datePosted)) {
-        errors.push(
-          `Invalid date posted option: ${
-            preferences.datePosted
-          }. Valid options: ${validDateOptions.join(", ")}`
-        );
-      }
-    }
-
-    // Validate salary range
-    if (preferences.salary) {
-      if (
-        !Array.isArray(preferences.salary) ||
-        preferences.salary.length !== 2
-      ) {
-        errors.push("Salary must be an array with exactly 2 values [min, max]");
-      } else {
-        const [min, max] = preferences.salary;
-        if (typeof min !== "number" || typeof max !== "number") {
-          errors.push("Salary values must be numbers");
-        } else if (min < 0 || max < 0) {
-          errors.push("Salary values must be positive");
-        } else if (min >= max) {
-          errors.push("Minimum salary must be less than maximum salary");
-        } else if (min > 500000 || max > 500000) {
-          warnings.push("Very high salary ranges may not return many results");
-        }
-      }
-    }
-
-    // Validate company rating
-    if (preferences.companyRating && preferences.companyRating !== "") {
-      const validRatings = ["3.0", "3.5", "4.0", "4.5"];
-      if (!validRatings.includes(preferences.companyRating)) {
-        warnings.push(
-          `Company rating ${
-            preferences.companyRating
-          } may not be supported. Supported ratings: ${validRatings.join(", ")}`
-        );
-      }
-    }
-
-    // Validate boolean fields
-    if (
-      preferences.remoteOnly !== undefined &&
-      typeof preferences.remoteOnly !== "boolean"
-    ) {
-      errors.push("remoteOnly must be a boolean value");
-    }
-
-    if (
-      preferences.useCustomResume !== undefined &&
-      typeof preferences.useCustomResume !== "boolean"
-    ) {
-      errors.push("useCustomResume must be a boolean value");
-    }
-
-    // Check for conflicting preferences
-    if (
-      preferences.remoteOnly &&
-      preferences.workMode &&
-      !preferences.workMode.includes("Remote")
-    ) {
-      warnings.push("remoteOnly is true but Remote is not in workMode array");
-    }
-
-    return {
-      isValid: errors.length === 0,
-      errors,
-      warnings,
-    };
-  }
-
-  // ✅ FIXED: Use existing user profile instead of fetching
   async checkUserAuthorization() {
     try {
       this.statusOverlay.addInfo("Let me check if you're all set to apply...");
@@ -898,7 +711,6 @@ export default class LinkedInPlatform extends BasePlatform {
             continue;
           }
 
-          console.log("No new jobs after scrolling, checking pagination");
           const hasNextPage = await this.goToNextPage(currentPage);
           if (hasNextPage) {
             currentPage++;
@@ -960,17 +772,17 @@ export default class LinkedInPlatform extends BasePlatform {
             // Get job details for preference matching
             const jobDetails = this.getJobProperties();
 
-            // Check if job matches user preferences
-            if (!this.doesJobMatchPreferences(jobDetails)) {
-              this.log(
-                `Skipping job "${jobDetails.title}" - doesn't match preferences`
-              );
-              this.statusOverlay.addInfo(
-                `"${jobDetails.title}" at ${jobDetails.company} doesn't quite match your preferences, so I'll skip this one.`
-              );
-              skippedCount++;
-              continue;
-            }
+            // // Check if job matches user preferences
+            // if (!this.doesJobMatchPreferences(jobDetails)) {
+            //   this.log(
+            //     `Skipping job "${jobDetails.title}" - doesn't match preferences`
+            //   );
+            //   this.statusOverlay.addInfo(
+            //     `"${jobDetails.title}" at ${jobDetails.company} doesn't quite match your preferences, so I'll skip this one.`
+            //   );
+            //   skippedCount++;
+            //   continue;
+            // }
 
             const applyButton = await this.findEasyApplyButton();
             if (!applyButton) {
@@ -1944,10 +1756,8 @@ export default class LinkedInPlatform extends BasePlatform {
     }
   }
 
-  // ✅ FIXED: Enhanced job saving using existing user profile
   async saveAppliedJob(jobDetails) {
     try {
-      // ✅ FIXED: Use existing user profile
       const success = await this.appTracker.saveAppliedJob({
         jobId: jobDetails.jobId,
         title: jobDetails.title,
