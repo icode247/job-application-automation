@@ -1,5 +1,5 @@
 // platforms/breezy/breezy-form-handler.js
-//Missing required field
+
 import Utils from "../../utils/utils.js";
 
 export class BreezyFormHandler {
@@ -144,107 +144,614 @@ export class BreezyFormHandler {
       this.log("Filling Breezy form with user profile data");
       this.userData = profile;
 
-      const formFields = this.getAllFormFields(form);
+      // Use enhanced field discovery
+      const formFields = await this.grabFields(form);
       this.log(`Found ${formFields.length} form fields to process`);
 
-      let filledCount = 0;
-      const processedFields = new Set();
-      const failedFields = new Map();
-
-      for (const field of formFields) {
-        if (!field.label) continue;
-        if (field.type === "file") continue;
-
-        // Skip education and work history fields - handled separately
-        if (
-          this.isEducationField(field.element) ||
-          this.isWorkHistoryField(field.element)
-        ) {
-          continue;
-        }
-
-        const fieldIdentifier = `${field.type}:${this.cleanLabelText(
-          field.label
-        )}`;
-
-        if (processedFields.has(fieldIdentifier)) {
-          this.log(`Skipping already processed field: ${field.label}`);
-          continue;
-        }
-
-        const failureCount = failedFields.get(fieldIdentifier) || 0;
-        if (failureCount >= 3) {
-          this.log(
-            `Skipping field after ${failureCount} failures: ${field.label}`
-          );
-          continue;
-        }
-
-        try {
-          this.log(`Processing ${field.type} field: ${field.label}`);
-
-          const options = this.getFieldOptions(field.element);
-          const fieldContext = `This is a ${field.type} field${
-            field.required ? " (required)" : ""
-          }`;
-
-          const answer = await this.getAIAnswer(
-            field.label,
-            options,
-            field.type,
-            fieldContext
-          );
-
-          if (answer) {
-            this.log(
-              `Got AI answer for "${field.label}": ${answer.substring(0, 50)}${
-                answer.length > 50 ? "..." : ""
-              }`
-            );
-
-            const success = await this.fillField(field.element, answer);
-            if (success) {
-              filledCount++;
-              processedFields.add(fieldIdentifier);
-              this.log(`✅ Successfully filled field: ${field.label}`);
-            } else {
-              throw new Error("Failed to fill field with answer");
-            }
-          } else {
-            throw new Error("No answer received from AI");
-          }
-
-          await this.wait(300);
-        } catch (fieldError) {
-          failedFields.set(fieldIdentifier, failureCount + 1);
-          this.log(
-            `❌ Error processing field "${field.label}" (attempt ${
-              failureCount + 1
-            }): ${fieldError.message}`
-          );
-          continue;
-        }
+      if (formFields.length === 0) {
+        this.log("No form fields found");
+        return false;
       }
+
+      // Process fields sequentially with enhanced error handling
+      const processingResult = await this.processFieldsSequentially(formFields);
 
       // Handle required checkboxes
       await this.handleRequiredCheckboxes(form);
 
-      this.log(`Successfully filled ${filledCount} fields`);
-      this.log(
-        `Processed fields: ${Array.from(processedFields).join(", ")}`
-      );
+      this.log(`Processing summary: ${processingResult.processed} successful, ${processingResult.failed} failed`);
 
-      if (failedFields.size > 0) {
-        this.log(
-          `Failed fields: ${Array.from(failedFields.keys()).join(", ")}`
-        );
+      if (processingResult.failedFields.length > 0) {
+        this.log(`Failed fields: ${processingResult.failedFields.join(", ")}`);
       }
 
-      return true;
+      return processingResult.processed > 0;
     } catch (error) {
       this.log(`Error filling form: ${error.message}`);
       return false;
     }
+  }
+
+  /**
+   * Enhanced grabFields method - adapted from Wellfound approach
+   */
+  async grabFields(form) {
+    const results = [];
+    this.log("🔍 Starting systematic field discovery for Breezy form");
+
+    try {
+      // Debug: Log form structure first
+      this.debugFormStructure(form);
+      
+      // 1. Handle Personal Details Section (standard form fields)
+      await this.grabPersonalDetailsFields(form, results);
+      
+      // 2. Handle Salary Fields (special handling)
+      await this.grabSalaryFields(form, results);
+      
+      // 3. Handle Textarea Fields (cover letter, experience summary)
+      await this.grabTextareaFields(form, results);
+      
+      // 4. Handle Questionnaire Fields (dynamic questions)
+      await this.grabQuestionnaireFields(form, results);
+      
+      // 5. Handle Checkbox/Consent Fields
+      await this.grabCheckboxFields(form, results);
+      
+      // 6. Handle File Upload Fields
+      await this.grabFileFields(form, results);
+
+      this.log(`📝 Total fields discovered: ${results.length}`);
+      
+      // Log summary of field types found
+      const fieldTypeSummary = results.reduce((acc, field) => {
+        acc[field.type] = (acc[field.type] || 0) + 1;
+        return acc;
+      }, {});
+      
+      this.log(`📊 Field types found:`, fieldTypeSummary);
+      
+      // Debug: Log all discovered fields
+      this.debugDiscoveredFields(results);
+      
+      return results;
+      
+    } catch (error) {
+      this.log(`❌ Error in grabFields: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Debug method to log form structure
+   */
+  debugFormStructure(form) {
+    try {
+      this.log("🔍 DEBUGGING: Form structure analysis");
+      
+      // Log all h3 elements and their positions
+      const h3Elements = form.querySelectorAll('h3');
+      this.log(`Found ${h3Elements.length} h3 elements:`);
+      h3Elements.forEach((h3, index) => {
+        const span = h3.querySelector('span.polygot');
+        const text = span ? span.textContent.trim() : h3.textContent.trim();
+        this.log(`  H3 ${index}: "${text}"`);
+      });
+      
+      // Log all input elements and their names
+      const inputElements = form.querySelectorAll('input, textarea, select');
+      this.log(`Found ${inputElements.length} form elements:`);
+      inputElements.forEach((input, index) => {
+        if (input.type !== 'hidden') {
+          this.log(`  Element ${index}: ${input.tagName.toLowerCase()}[name="${input.name}"][type="${input.type || 'N/A'}"]`);
+        }
+      });
+      
+      // Log questionnaire containers
+      const questionnaireContainers = form.querySelectorAll('.dropdown, .multiplechoice');
+      this.log(`Found ${questionnaireContainers.length} questionnaire containers:`);
+      questionnaireContainers.forEach((container, index) => {
+        const h3 = container.querySelector('h3');
+        const h3Text = h3 ? h3.textContent.trim() : 'No h3 found';
+        this.log(`  Container ${index}: .${container.className} - "${h3Text.substring(0, 50)}..."`);
+        
+        // Log the select element if it exists
+        const select = container.querySelector('select');
+        if (select) {
+          this.log(`    └─ Select: name="${select.name}" with ${select.options.length} options`);
+        }
+      });
+      
+    } catch (error) {
+      this.log(`❌ Error in debugFormStructure: ${error.message}`);
+    }
+  }
+
+  /**
+   * Debug method to log discovered fields
+   */
+  debugDiscoveredFields(fields) {
+    try {
+      this.log("🔍 DEBUGGING: Discovered fields summary");
+      fields.forEach((field, index) => {
+        this.log(`  Field ${index}: "${field.label}" (${field.type}) - Element: ${field.element.tagName.toLowerCase()}[name="${field.element.name}"]`);
+      });
+    } catch (error) {
+      this.log(`❌ Error in debugDiscoveredFields: ${error.message}`);
+    }
+  }
+
+  /**
+   * Grab personal details fields (name, email, phone, etc.)
+   */
+  async grabPersonalDetailsFields(form, results) {
+    this.log("🔍 Looking for personal details fields...");
+    
+    // Define specific field mappings to avoid label confusion
+    const personalFieldMappings = [
+      {
+        selector: 'input[name="cName"]',
+        expectedLabel: 'Full Name',
+        fieldType: 'text'
+      },
+      {
+        selector: 'input[name="cEmail"]',
+        expectedLabel: 'Email Address', 
+        fieldType: 'email'
+      },
+      {
+        selector: 'input[name="cPhoneNumber"]',
+        expectedLabel: 'Phone Number',
+        fieldType: 'tel'
+      }
+    ];
+    
+    for (const mapping of personalFieldMappings) {
+      const element = form.querySelector(mapping.selector);
+      if (element && this.isElementVisible(element)) {
+        
+        // Try to get the actual label, but fall back to expected label
+        let label = this.getFieldLabelFromH3(element);
+        
+        // If label detection fails or gives wrong result, use expected label
+        if (!label || label.toLowerCase().includes('full name') && mapping.expectedLabel !== 'Full Name') {
+          label = mapping.expectedLabel;
+          this.log(`🔄 Using fallback label "${mapping.expectedLabel}" for ${mapping.selector}`);
+        }
+        
+        const field = {
+          element: element,
+          type: mapping.fieldType,
+          label: this.cleanLabelText(label),
+          required: this.isFieldRequired(element),
+          options: []
+        };
+        
+        results.push(field);
+        this.log(`✅ Personal field: ${field.label} (${field.type}) - ${mapping.selector}`);
+      } else {
+        this.log(`⚠️ Field not found or not visible: ${mapping.selector}`);
+      }
+    }
+  }
+
+  /**
+   * Grab salary-related fields (currency, amount, period)
+   */
+  async grabSalaryFields(form, results) {
+    this.log("🔍 Looking for salary fields...");
+    
+    const salaryContainer = form.querySelector('.desired-salary');
+    if (!salaryContainer) return;
+    
+    // Currency selector
+    const currencySelect = salaryContainer.querySelector('select[name="salaryCurrency"]');
+    if (currencySelect && this.isElementVisible(currencySelect)) {
+      const options = Array.from(currencySelect.options)
+        .map(option => option.textContent.trim())
+        .filter(text => text.length > 0);
+      
+      results.push({
+        element: currencySelect,
+        type: 'select',
+        label: 'Salary Currency',
+        required: this.isFieldRequired(currencySelect),
+        options: options
+      });
+      this.log(`✅ Salary field: Currency (${options.length} options)`);
+    }
+    
+    // Salary amount
+    const salaryInput = salaryContainer.querySelector('input[name="cSalary"]');
+    if (salaryInput && this.isElementVisible(salaryInput)) {
+      results.push({
+        element: salaryInput,
+        type: 'salary',
+        label: 'Desired Salary Amount',
+        required: this.isFieldRequired(salaryInput),
+        options: []
+      });
+      this.log(`✅ Salary field: Amount (salary)`);
+    }
+    
+    // Salary period
+    const periodSelect = salaryContainer.querySelector('select[ng-model="candidate.salary.period"]');
+    if (periodSelect && this.isElementVisible(periodSelect)) {
+      const options = Array.from(periodSelect.options)
+        .map(option => option.textContent.trim())
+        .filter(text => text.length > 0);
+      
+      results.push({
+        element: periodSelect,
+        type: 'select',
+        label: 'Salary Period',
+        required: this.isFieldRequired(periodSelect),
+        options: options
+      });
+      this.log(`✅ Salary field: Period (${options.length} options)`);
+    }
+  }
+
+  /**
+   * Grab textarea fields (cover letter, experience summary)
+   */
+  async grabTextareaFields(form, results) {
+    this.log("🔍 Looking for textarea fields...");
+    
+    const textareaSelectors = [
+      'textarea[name="cCoverLetter"]',
+      'textarea[name="cSummary"]'
+    ];
+    
+    for (const selector of textareaSelectors) {
+      const element = form.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        const label = this.getFieldLabelFromH3(element);
+        if (label) {
+          const field = {
+            element: element,
+            type: 'textarea',
+            label: this.cleanLabelText(label),
+            required: this.isFieldRequired(element),
+            options: []
+          };
+          
+          results.push(field);
+          this.log(`✅ Textarea field: ${field.label}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Grab questionnaire fields (dynamic questions from JSON)
+   */
+  async grabQuestionnaireFields(form, results) {
+    this.log("🔍 Looking for questionnaire fields...");
+    
+    try {
+      // Get questionnaire data from hidden input
+      const questionsInput = form.querySelector('#questions');
+      if (!questionsInput) {
+        this.log("No questionnaire data found");
+        return;
+      }
+      
+      const questionsData = JSON.parse(questionsInput.value);
+      this.log(`Found ${questionsData.length} questionnaire sections`);
+      
+      // Process each section
+      for (const section of questionsData) {
+        if (!section.questions) continue;
+        
+        for (let i = 0; i < section.questions.length; i++) {
+          const question = section.questions[i];
+          
+          // Look for different types of question elements
+          const questionSelectors = [
+            `input[name="section_${section._id}_question_${i}"]`,
+            `textarea[name="section_${section._id}_question_${i}"]`,
+            `select[name="section_${section._id}_question_${i}"]` // Added select support
+          ];
+          
+          let questionElement = null;
+          for (const selector of questionSelectors) {
+            questionElement = form.querySelector(selector);
+            if (questionElement) {
+              this.log(`✅ Found questionnaire element: ${selector}`);
+              break;
+            }
+          }
+          
+          if (questionElement && this.isElementVisible(questionElement)) {
+            const field = {
+              element: questionElement,
+              type: this.mapQuestionTypeToFieldType(question.type),
+              label: this.cleanLabelText(question.text),
+              required: question.required || false,
+              options: []
+            };
+            
+            // Handle different question types
+            if (question.type.id === 'dropdown') {
+              field.type = 'select';
+              
+              // Get options from the select element
+              if (questionElement.tagName.toLowerCase() === 'select') {
+                field.options = Array.from(questionElement.options)
+                  .map(option => option.textContent.trim())
+                  .filter(text => text.length > 0);
+              }
+              
+              this.log(`✅ Dropdown field: "${field.label.substring(0, 50)}..." with options: [${field.options.join(', ')}]`);
+            } else if (question.type.id === 'checkboxes') {
+              const container = questionElement.closest('.multiplechoice');
+              if (container) {
+                field.element = container;
+                field.type = 'checkbox';
+                
+                // Get options from the UI
+                const optionElements = container.querySelectorAll('li.option span.ng-binding');
+                field.options = Array.from(optionElements).map(span => span.textContent.trim());
+              }
+            } else if (question.type.id === 'multiplechoice') {
+              field.type = 'radio';
+              
+              // Get options from question data
+              if (question.options) {
+                field.options = question.options.map(opt => opt.text);
+              }
+            } else {
+              // For text/textarea fields, get options from question data if available
+              if (question.options) {
+                field.options = question.options.map(opt => opt.text);
+              }
+            }
+            
+            results.push(field);
+            this.log(`✅ Questionnaire field: ${field.label.substring(0, 50)}... (${field.type})`);
+          } else {
+            this.log(`⚠️ Questionnaire element not found for section_${section._id}_question_${i}`);
+          }
+        }
+      }
+    } catch (error) {
+      this.log(`❌ Error processing questionnaire: ${error.message}`);
+    }
+  }
+
+  /**
+   * Grab checkbox/consent fields
+   */
+  async grabCheckboxFields(form, results) {
+    this.log("🔍 Looking for checkbox fields...");
+    
+    // SMS consent checkbox
+    const smsConsent = form.querySelector('input[ng-model="$storage[positionId].sms_consent"]');
+    if (smsConsent && this.isElementVisible(smsConsent)) {
+      results.push({
+        element: smsConsent,
+        type: 'checkbox',
+        label: 'SMS Consent',
+        required: false,
+        options: ['Yes', 'No']
+      });
+      this.log(`✅ Checkbox field: SMS Consent`);
+    }
+    
+    // GDPR consent (if present)
+    const gdprContainers = form.querySelectorAll('.gdpr-accept');
+    for (const container of gdprContainers) {
+      const checkbox = container.querySelector('input[type="checkbox"]');
+      if (checkbox && this.isElementVisible(checkbox)) {
+        results.push({
+          element: checkbox,
+          type: 'checkbox',
+          label: 'Privacy Notice Consent',
+          required: true,
+          options: ['Yes', 'No']
+        });
+        this.log(`✅ Checkbox field: Privacy Notice Consent`);
+      }
+    }
+  }
+
+  /**
+   * Grab file upload fields
+   */
+  async grabFileFields(form, results) {
+    this.log("🔍 Looking for file upload fields...");
+    
+    const fileInput = form.querySelector('input[name="cResume"]');
+    if (fileInput) {
+      const required = form.querySelector('#resume_required')?.value === 'required';
+      
+      results.push({
+        element: fileInput,
+        type: 'file',
+        label: 'Resume Upload',
+        required: required,
+        options: []
+      });
+      this.log(`✅ File field: Resume Upload (${required ? 'required' : 'optional'})`);
+    }
+  }
+
+  /**
+   * Get field label from preceding h3 element
+   */
+  getFieldLabelFromH3(element) {
+    try {
+      this.log(`🔍 Getting label for element: ${element.name || element.id || element.tagName}`);
+      
+      // Look for the closest preceding h3 element
+      let currentElement = element.previousElementSibling;
+      let attempts = 0;
+      const maxAttempts = 10; // Prevent infinite loops
+      
+      // Walk backwards through siblings to find the closest h3
+      while (currentElement && attempts < maxAttempts) {
+        attempts++;
+        
+        if (currentElement.tagName && currentElement.tagName.toLowerCase() === 'h3') {
+          const span = currentElement.querySelector('span.polygot');
+          const labelText = span ? span.textContent.trim() : currentElement.textContent.trim();
+          this.log(`✅ Found h3 label: "${labelText}" for ${element.name || 'unnamed field'}`);
+          return labelText;
+        }
+        
+        currentElement = currentElement.previousElementSibling;
+      }
+      
+      // If no h3 found in siblings, look in parent section
+      const section = element.closest('.section');
+      if (section) {
+        const h3Elements = Array.from(section.querySelectorAll('h3'));
+        
+        // Find the h3 that comes immediately before this element in document order
+        let closestH3 = null;
+        let closestDistance = Number.MAX_SAFE_INTEGER;
+        
+        for (const h3 of h3Elements) {
+          const h3Position = h3.compareDocumentPosition(element);
+          
+          // Check if h3 comes before the element (DOCUMENT_POSITION_FOLLOWING means element comes after h3)
+          if (h3Position & Node.DOCUMENT_POSITION_FOLLOWING) {
+            // Calculate rough distance by comparing positions in DOM
+            const h3Rect = h3.getBoundingClientRect();
+            const elementRect = element.getBoundingClientRect();
+            const distance = Math.abs(elementRect.top - h3Rect.top);
+            
+            if (distance < closestDistance) {
+              closestDistance = distance;
+              closestH3 = h3;
+            }
+          }
+        }
+        
+        if (closestH3) {
+          const span = closestH3.querySelector('span.polygot');
+          const labelText = span ? span.textContent.trim() : closestH3.textContent.trim();
+          this.log(`✅ Found section h3 label: "${labelText}" for ${element.name || 'unnamed field'}`);
+          return labelText;
+        }
+      }
+      
+      this.log(`⚠️ No h3 label found, falling back to getFieldLabel for ${element.name || 'unnamed field'}`);
+      // Fallback to original method
+      return this.getFieldLabel(element);
+    } catch (error) {
+      this.log(`❌ Error in getFieldLabelFromH3: ${error.message}`);
+      return this.getFieldLabel(element);
+    }
+  }
+
+  /**
+   * Map questionnaire question types to field types
+   */
+  mapQuestionTypeToFieldType(questionType) {
+    const typeMap = {
+      'text': 'text',
+      'paragraph': 'textarea', 
+      'dropdown': 'select',  // Ensure dropdown maps to select
+      'multiplechoice': 'radio',
+      'checkboxes': 'checkbox',
+      'file': 'file',
+      'date': 'date'
+    };
+    
+    const mappedType = typeMap[questionType.id] || 'text';
+    this.log(`🔄 Mapping question type "${questionType.id}" to field type "${mappedType}"`);
+    return mappedType;
+  }
+
+  /**
+   * Enhanced field processing with better error handling
+   */
+  async processFieldsSequentially(fields) {
+    this.log(`🔄 Processing ${fields.length} fields sequentially`);
+    
+    let processedCount = 0;
+    const failedFields = [];
+    
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      
+      try {
+        this.log(`🔧 Processing field ${i + 1}/${fields.length}: ${field.label} (${field.type})`);
+        
+        // Skip file uploads for now
+        if (field.type === 'file') {
+          this.log(`⏭️ Skipping file upload: ${field.label}`);
+          continue;
+        }
+        
+        const success = await this.handleFieldWithRetry(field);
+        if (success) {
+          processedCount++;
+          this.log(`✅ Successfully processed: ${field.label}`);
+        } else {
+          failedFields.push(field.label);
+          this.log(`❌ Failed to process: ${field.label}`);
+        }
+        
+        // Wait between fields
+        await this.wait(300);
+        
+      } catch (error) {
+        failedFields.push(field.label);
+        this.log(`❌ Error processing field "${field.label}": ${error.message}`);
+      }
+    }
+    
+    this.log(`📊 Processing complete: ${processedCount}/${fields.length} successful`);
+    if (failedFields.length > 0) {
+      this.log(`❌ Failed fields: ${failedFields.join(', ')}`);
+    }
+    
+    return {
+      processed: processedCount,
+      failed: failedFields.length,
+      failedFields: failedFields
+    };
+  }
+
+  /**
+   * Handle individual field with retry logic
+   */
+  async handleFieldWithRetry(field, maxRetries = 2) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        this.log(`🔄 Attempt ${attempt}/${maxRetries} for: ${field.label}`);
+        
+        const answer = await this.getAIAnswer(
+          field.label,
+          field.options,
+          field.type,
+          `This is a ${field.type} field${field.required ? ' (required)' : ''}`
+        );
+        
+        if (answer) {
+          const success = await this.fillField(field.element, answer);
+          if (success) {
+            return true;
+          }
+        }
+        
+        if (attempt < maxRetries) {
+          this.log(`⏳ Retrying in 500ms...`);
+          await this.wait(500);
+        }
+        
+      } catch (error) {
+        this.log(`❌ Attempt ${attempt} failed: ${error.message}`);
+        if (attempt < maxRetries) {
+          await this.wait(500);
+        }
+      }
+    }
+    
+    return false;
   }
 
   /**
@@ -277,7 +784,8 @@ export class BreezyFormHandler {
       // Special handling for salary fields
       if (
         question.toLowerCase().includes("salary") ||
-        fieldContext.includes("salary")
+        fieldContext.includes("salary") ||
+        fieldType === "salary"
       ) {
         const answer = await this.aiService.getAnswer(
           `${question} (provide only the numeric amount without currency symbols or commas)`,
@@ -333,6 +841,7 @@ export class BreezyFormHandler {
         case "url":
         case "number":
         case "password":
+        case "salary":
           return await this.fillInputField(element, value);
 
         case "textarea":
@@ -797,112 +1306,6 @@ export class BreezyFormHandler {
     }
 
     return null;
-  }
-
-  /**
-   * Enhanced getAllFormFields to better detect Breezy field structures
-   */
-  getAllFormFields(form) {
-    try {
-      this.log(
-        "Finding all form fields in this Breezy application form"
-      );
-
-      const fields = [];
-      const processedFields = new Set();
-
-      const formElements = form.querySelectorAll(
-        'input:not([type="hidden"]), select, textarea, ' +
-          '[role="radio"], [role="checkbox"], ' +
-          'fieldset[role="radiogroup"], ' +
-          'div.form-group, div[role="group"], div.custom-checkbox, ' +
-          "div.multiplechoice, div.dropdown, div.gdpr-accept, " +
-          "ul.options"
-      );
-
-      for (const element of formElements) {
-        if (!this.isElementVisible(element)) continue;
-
-        const fieldId = this.createFieldIdentifier(element);
-        if (processedFields.has(fieldId)) {
-          this.log(`Skipping duplicate field: ${fieldId}`);
-          continue;
-        }
-
-        const fieldInfo = this.processFormElement(element);
-
-        if (fieldInfo && fieldInfo.label) {
-          const labelKey = `${fieldInfo.type}:${this.cleanLabelText(
-            fieldInfo.label
-          )}`;
-          if (!processedFields.has(labelKey)) {
-            fields.push(fieldInfo);
-            processedFields.add(fieldId);
-            processedFields.add(labelKey);
-          }
-        }
-      }
-
-      return this.deduplicateRadioGroups(fields);
-    } catch (error) {
-      this.log(`Error getting form fields: ${error.message}`);
-      return [];
-    }
-  }
-
-  processFormElement(element) {
-    try {
-      const label = this.getFieldLabel(element);
-      if (!label) return null;
-
-      return {
-        element: element,
-        type: this.getFieldType(element),
-        label: label,
-        required: this.isFieldRequired(element),
-        options: this.getFieldOptions(element),
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  createFieldIdentifier(element) {
-    const id = element.id || "";
-    const name = element.name || "";
-    const className = element.className || "";
-    const tagName = element.tagName.toLowerCase();
-
-    if (
-      element.classList.contains("multiplechoice") ||
-      element.classList.contains("dropdown") ||
-      element.classList.contains("gdpr-accept")
-    ) {
-      const siblings = Array.from(element.parentNode.children);
-      const index = siblings.indexOf(element);
-      return `container:${tagName}:${className}:${index}`;
-    }
-
-    return `${tagName}:${id}:${name}:${className}`;
-  }
-
-  deduplicateRadioGroups(fields) {
-    const uniqueFields = [];
-    const radioGroupsSeen = new Map();
-
-    for (const field of fields) {
-      if (field.type === "radio") {
-        const groupKey = this.cleanLabelText(field.label);
-        if (!radioGroupsSeen.has(groupKey)) {
-          radioGroupsSeen.set(groupKey, true);
-          uniqueFields.push(field);
-        }
-      } else {
-        uniqueFields.push(field);
-      }
-    }
-
-    return uniqueFields;
   }
 
   /**

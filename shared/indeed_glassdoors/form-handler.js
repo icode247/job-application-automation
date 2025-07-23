@@ -1606,48 +1606,637 @@ class FormHandler {
   }
 
   /**
-   * Handle phone input element with country code
+   * Handle phone input element with country code - Enhanced for Glassdoor
    * @param {HTMLElement} element The phone input
    * @param {string} value The phone number
    * @returns {Promise<void>}
    */
   async handlePhoneInput(element, value) {
     try {
-      // Find the country select element
-      const countrySelect = element
-        .closest(".PhoneInput")
-        ?.querySelector("select");
-      if (!countrySelect) {
-        // No country selector, just set phone directly
-        await this.simulateHumanInput(element, value);
-        return;
-      }
-
-      // Parse phone number to extract country code and number
-      const normalizedValue = value.replace(/[^\d+]/g, "");
-      let countryCode = normalizedValue.match(/^\+?(\d{1,3})/)?.[1];
-      let phoneNumber = normalizedValue.replace(/^\+?\d{1,3}/, "").trim();
-
-      // Find matching country option
-      const options = Array.from(countrySelect.options);
-      const countryOption = options.find((opt) =>
-        opt.text.includes(`(+${countryCode})`)
+      // First check if this is a Glassdoor phone input
+      const glassdoorPhoneContainer = element.closest(
+        ".mosaic-provider-module-apply-contact-info-1afmp4o"
       );
 
-      if (countryOption) {
-        // Select country
-        countrySelect.focus();
-        countrySelect.value = countryOption.value;
-        countrySelect.dispatchEvent(new Event("change", { bubbles: true }));
+      if (glassdoorPhoneContainer) {
+        this.showStatus(
+          "Detected Glassdoor phone input, using specialized handler",
+          "info"
+        );
+        return await this.handleGlassdoorPhoneInput(element, value);
       }
 
-      // Input phone number
-      await this.simulateHumanInput(element, phoneNumber);
+      // Check for International Telephone Input (iTi) library
+      const itiContainer =
+        element.closest(".PhoneInput") || element.closest(".iti");
+      if (itiContainer) {
+        this.showStatus("Detected iTi phone input", "info");
+        return await this.handleItiPhoneInput(element, value);
+      }
+
+      // Fallback to direct phone input
+      this.showStatus("Using direct phone input", "info");
+      await this.simulateHumanInput(element, value);
     } catch (error) {
       this.logger(`Error handling phone input: ${error.message}`);
       // Fallback to direct input
       await this.simulateHumanInput(element, value);
     }
+  }
+
+  /**
+   * Handle Glassdoor-specific phone input with country code - FIXED
+   * @param {HTMLElement} element The phone input element
+   * @param {string} value The phone number
+   * @returns {Promise<void>}
+   */
+  async handleGlassdoorPhoneInput(element, value) {
+    try {
+      this.showStatus(
+        "Processing Glassdoor phone input with country code",
+        "info"
+      );
+
+      // Get phone data from userData if not provided directly
+      const phoneNumber =
+        value || this.userData.phone || this.userData.phoneNumber;
+      const phoneCountryCode = this.userData.phoneCountryCode;
+
+      if (!phoneNumber) {
+        this.showStatus("No phone number available", "warning");
+        return;
+      }
+
+      this.showStatus(
+        `Setting phone: ${phoneNumber} with country code: ${
+          phoneCountryCode || "default"
+        }`,
+        "info"
+      );
+
+      // Find the Glassdoor phone input container
+      const phoneContainer =
+        element.closest(".mosaic-provider-module-apply-contact-info-1afmp4o") ||
+        document.querySelector(
+          ".mosaic-provider-module-apply-contact-info-1afmp4o"
+        );
+
+      if (!phoneContainer) {
+        this.showStatus(
+          "Glassdoor phone container not found, using direct input",
+          "warning"
+        );
+        await this.simulateHumanInput(element, phoneNumber);
+        return;
+      }
+
+      // Find the actual phone input field
+      const phoneInput =
+        phoneContainer.querySelector(
+          'input[name="phone"], input[type="tel"], input[aria-label*="phone" i]'
+        ) || element;
+
+      // Find the country selector button - Updated selector
+      const countrySelector =
+        phoneContainer.querySelector('button[role="combobox"]') ||
+        phoneContainer.querySelector(
+          ".mosaic-provider-module-apply-contact-info-hohfca"
+        );
+
+      if (!countrySelector) {
+        this.showStatus(
+          "No country selector found, setting direct phone number",
+          "info"
+        );
+        await this.setGlassdoorPhoneValue(phoneInput, phoneNumber);
+        return;
+      }
+
+      // Handle country selection if we have a country code
+      let phoneNumberWithoutCode = phoneNumber;
+      if (phoneCountryCode) {
+        this.showStatus(
+          `Attempting to select country code: ${phoneCountryCode}`,
+          "info"
+        );
+        const success = await this.selectGlassdoorCountry(
+          countrySelector,
+          phoneCountryCode
+        );
+        if (success) {
+          // Process phone number to remove country code
+          phoneNumberWithoutCode = this.processPhoneNumber(
+            phoneNumber,
+            phoneCountryCode
+          );
+          this.showStatus(
+            `Country selected successfully, using phone: ${phoneNumberWithoutCode}`,
+            "info"
+          );
+        } else {
+          this.showStatus(
+            "Failed to select country, proceeding with full phone number",
+            "warning"
+          );
+        }
+      }
+
+      this.showStatus(
+        `Setting phone number: ${phoneNumberWithoutCode}`,
+        "info"
+      );
+      await this.setGlassdoorPhoneValue(phoneInput, phoneNumberWithoutCode);
+    } catch (error) {
+      this.logger(`Error handling Glassdoor phone field: ${error.message}`);
+      // Fallback to direct input
+      await this.simulateHumanInput(element, value);
+    }
+  }
+
+  /**
+   * Select country in Glassdoor country dropdown - IMPROVED
+   * @param {HTMLElement} countrySelector The country selector button
+   * @param {string} phoneCountryCode The country code to select
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async selectGlassdoorCountry(countrySelector, phoneCountryCode) {
+    try {
+      // Format country code
+      const formattedCode = phoneCountryCode.startsWith("+")
+        ? phoneCountryCode
+        : `+${phoneCountryCode}`;
+
+      this.showStatus(
+        `Opening country dropdown for code: ${formattedCode}`,
+        "info"
+      );
+
+      // Click the country selector to open dropdown
+      countrySelector.focus();
+      await this.sleep(100);
+      countrySelector.click();
+      await this.sleep(800); // Increased wait time
+
+      // Wait for dropdown to appear with multiple possible selectors
+      const dropdown = await this.waitForGlassdoorDropdown();
+
+      if (!dropdown) {
+        this.showStatus("Country dropdown did not appear", "warning");
+        return false;
+      }
+
+      this.showStatus("Dropdown opened successfully", "info");
+
+      // Find all country options with multiple selectors
+      const countryOptions = dropdown.querySelectorAll(
+        'li[role="option"], .mosaic-provider-module-apply-contact-info-hllz4e, li'
+      );
+
+      this.showStatus(`Found ${countryOptions.length} country options`, "info");
+
+      if (countryOptions.length === 0) {
+        this.showStatus("No country options found in dropdown", "warning");
+        return false;
+      }
+
+      // Look for matching country code - try multiple approaches
+      let selectedOption = null;
+
+      // Approach 1: Look for exact country code match
+      for (const option of countryOptions) {
+        const optionText = option.textContent || "";
+
+        // Check if this option contains our target country code
+        if (optionText.includes(formattedCode)) {
+          this.showStatus(`Found exact match: ${optionText.trim()}`, "info");
+          selectedOption = option;
+          break;
+        }
+      }
+
+      // Approach 2: Look for country code in spans within options
+      if (!selectedOption) {
+        for (const option of countryOptions) {
+          const codeSpans = option.querySelectorAll("span");
+          for (const span of codeSpans) {
+            if (span.textContent && span.textContent.includes(formattedCode)) {
+              this.showStatus(
+                `Found code in span: ${option.textContent.trim()}`,
+                "info"
+              );
+              selectedOption = option;
+              break;
+            }
+          }
+          if (selectedOption) break;
+        }
+      }
+
+      // Approach 3: Look for country name if we have common mappings
+      if (!selectedOption) {
+        const commonMappings = {
+          "+1": ["United States", "US", "USA", "America"],
+          "+44": ["United Kingdom", "UK", "Britain", "England"],
+          "+91": ["India", "IND"],
+          "+86": ["China", "CHN"],
+          "+81": ["Japan", "JPN"],
+          "+49": ["Germany", "DEU", "Deutschland"],
+          "+33": ["France", "FRA"],
+          "+39": ["Italy", "ITA"],
+          "+34": ["Spain", "ESP"],
+          "+7": ["Russia", "RUS"],
+          "+55": ["Brazil", "BRA"],
+          "+52": ["Mexico", "MEX"],
+          "+61": ["Australia", "AUS"],
+          "+82": ["South Korea", "KOR"],
+          "+234": ["Nigeria", "NGA"],
+          "+27": ["South Africa", "ZAF"],
+          "+31": ["Netherlands", "NLD"],
+          "+46": ["Sweden", "SWE"],
+          "+47": ["Norway", "NOR"],
+          "+45": ["Denmark", "DNK"],
+          "+41": ["Switzerland", "CHE"],
+          "+43": ["Austria", "AUT"],
+          "+32": ["Belgium", "BEL"],
+          "+351": ["Portugal", "PRT"],
+        };
+
+        const countryNames = commonMappings[formattedCode] || [];
+
+        for (const option of countryOptions) {
+          const optionText = option.textContent.toLowerCase();
+
+          for (const countryName of countryNames) {
+            if (optionText.includes(countryName.toLowerCase())) {
+              this.showStatus(
+                `Found country by name: ${option.textContent.trim()}`,
+                "info"
+              );
+              selectedOption = option;
+              break;
+            }
+          }
+          if (selectedOption) break;
+        }
+      }
+
+      if (selectedOption) {
+        // Click the selected option
+        this.showStatus(
+          `Clicking country option: ${selectedOption.textContent.trim()}`,
+          "info"
+        );
+
+        // Try multiple click methods
+        selectedOption.focus();
+        await this.sleep(100);
+        selectedOption.click();
+        await this.sleep(200);
+
+        // Verify the dropdown closed
+        await this.sleep(300);
+        const dropdownStillOpen = document.querySelector(
+          '#Popup-\\:rp\\:, .mosaic-provider-module-apply-contact-info-1x9agnk[style*="visible"]'
+        );
+
+        if (dropdownStillOpen) {
+          this.showStatus(
+            "Dropdown still open, trying alternative click",
+            "info"
+          );
+          // Try mouse event
+          const clickEvent = new MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+          });
+          selectedOption.dispatchEvent(clickEvent);
+          await this.sleep(300);
+        }
+
+        this.showStatus(`Country selection completed`, "success");
+        return true;
+      }
+
+      this.showStatus(
+        `No matching country found for code: ${formattedCode}`,
+        "warning"
+      );
+
+      // Close dropdown by clicking outside or pressing escape
+      document.body.click();
+      await this.sleep(200);
+
+      return false;
+    } catch (error) {
+      this.logger(`Error selecting country: ${error.message}`);
+
+      // Try to close dropdown
+      try {
+        document.body.click();
+        await this.sleep(200);
+      } catch (e) {
+        // Ignore
+      }
+
+      return false;
+    }
+  }
+
+  /**
+   * Wait for Glassdoor dropdown to appear - IMPROVED
+   * @param {number} timeout Maximum wait time in milliseconds
+   * @returns {Promise<HTMLElement|null>} The dropdown element or null
+   */
+  async waitForGlassdoorDropdown(timeout = 5000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      // Try multiple selectors for the dropdown
+      const selectors = [
+        "#Popup-\\:rp\\:",
+        ".mosaic-provider-module-apply-contact-info-1x9agnk",
+        '[role="listbox"]',
+        '[id*="Popup"]',
+        '[class*="dropdown"]',
+        '[class*="menu"]',
+      ];
+
+      for (const selector of selectors) {
+        try {
+          const dropdown = document.querySelector(selector);
+          if (dropdown && this.isElementVisible(dropdown)) {
+            this.showStatus(
+              `Found dropdown with selector: ${selector}`,
+              "info"
+            );
+            return dropdown;
+          }
+        } catch (e) {
+          // Some selectors might be invalid, skip them
+          continue;
+        }
+      }
+
+      await this.sleep(100);
+    }
+
+    this.showStatus("Dropdown wait timeout reached", "warning");
+    return null;
+  }
+
+  /**
+   * Process phone number to remove country code
+   * @param {string} phoneNumber The full phone number
+   * @param {string} phoneCountryCode The country code
+   * @returns {string} The processed phone number
+   */
+  processPhoneNumber(phoneNumber, phoneCountryCode) {
+    if (!phoneCountryCode) {
+      return phoneNumber;
+    }
+
+    const formattedCode = phoneCountryCode.startsWith("+")
+      ? phoneCountryCode
+      : `+${phoneCountryCode}`;
+
+    let processedNumber = phoneNumber;
+
+    // Remove country code if phone number starts with it
+    if (phoneNumber.startsWith(formattedCode)) {
+      processedNumber = phoneNumber
+        .substring(formattedCode.length)
+        .trim()
+        .replace(/^[\s\-\(\)]+/, "");
+    } else if (phoneNumber.startsWith("+")) {
+      // Remove any country code
+      const genericCodeMatch = phoneNumber.match(/^\+\d{1,4}/);
+      if (genericCodeMatch) {
+        processedNumber = phoneNumber
+          .substring(genericCodeMatch[0].length)
+          .trim()
+          .replace(/^[\s\-\(\)]+/, "");
+      }
+    }
+
+    return processedNumber;
+  }
+
+  /**
+   * Set phone value in Glassdoor phone input
+   * @param {HTMLElement} input The phone input element
+   * @param {string} value The phone number value
+   * @returns {Promise<boolean>} Success or failure
+   */
+  async setGlassdoorPhoneValue(input, value) {
+    if (!input || value === undefined) return false;
+
+    try {
+      this.showStatus(`Setting phone value: ${value}`, "info");
+
+      // Wait briefly
+      await this.sleep(200);
+
+      // Focus the input
+      input.focus();
+      await this.sleep(100);
+
+      // Clear existing value
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await this.sleep(100);
+
+      // Set new value character by character for better compatibility
+      for (let i = 0; i < value.length; i++) {
+        input.value += value[i];
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await this.sleep(50);
+      }
+
+      // Final events
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      // Verify the value was set
+      await this.sleep(200);
+
+      if (input.value !== value) {
+        this.showStatus(
+          "Value didn't set correctly, trying direct assignment",
+          "warning"
+        );
+
+        // Use direct property assignment as fallback
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value"
+        ).set;
+
+        nativeInputValueSetter.call(input, value);
+
+        // Trigger events
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await this.sleep(100);
+      }
+
+      this.showStatus(`Phone value set successfully: ${input.value}`, "info");
+      return true;
+    } catch (error) {
+      this.logger(`Error setting phone value: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Handle International Telephone Input (iTi) phone fields
+   * @param {HTMLElement} element The phone input element
+   * @param {string} value The phone number
+   * @returns {Promise<void>}
+   */
+  async handleItiPhoneInput(element, value) {
+    try {
+      // Get phone data
+      const phoneNumber =
+        value || this.userData.phone || this.userData.phoneNumber;
+      const phoneCountryCode = this.userData.phoneCountryCode;
+
+      if (!phoneNumber) {
+        this.showStatus("No phone number available for iTi input", "warning");
+        return;
+      }
+
+      // Find the country select element
+      const countrySelect =
+        element.closest(".PhoneInput")?.querySelector("select") ||
+        element.parentElement.querySelector(".iti__selected-flag");
+
+      if (!countrySelect) {
+        // No country selector, just set phone directly
+        await this.simulateHumanInput(element, phoneNumber);
+        return;
+      }
+
+      // Parse phone number to extract country code and number
+      const normalizedValue = phoneNumber.replace(/[^\d+]/g, "");
+      let countryCode =
+        phoneCountryCode || normalizedValue.match(/^\+?(\d{1,3})/)?.[1];
+      let phoneNumberPart = normalizedValue.replace(/^\+?\d{1,3}/, "").trim();
+
+      if (countryCode && countrySelect.tagName === "SELECT") {
+        // Handle dropdown select
+        const options = Array.from(countrySelect.options);
+        const countryOption = options.find((opt) =>
+          opt.text.includes(`(+${countryCode})`)
+        );
+
+        if (countryOption) {
+          // Select country
+          countrySelect.focus();
+          countrySelect.value = countryOption.value;
+          countrySelect.dispatchEvent(new Event("change", { bubbles: true }));
+          await this.sleep(300);
+        }
+      } else if (
+        countryCode &&
+        countrySelect.classList.contains("iti__selected-flag")
+      ) {
+        // Handle iTi flag selector
+        countrySelect.click();
+        await this.sleep(500);
+
+        // Get dropdown list
+        const countryList = document.querySelector(".iti__country-list");
+        if (countryList) {
+          const countryItems = countryList.querySelectorAll("li.iti__country");
+
+          for (const item of countryItems) {
+            const codeSpan = item.querySelector(".iti__dial-code");
+            if (codeSpan && codeSpan.textContent.trim() === `+${countryCode}`) {
+              item.click();
+              await this.sleep(300);
+              break;
+            }
+          }
+        }
+      }
+
+      // Input phone number
+      await this.simulateHumanInput(element, phoneNumberPart || phoneNumber);
+    } catch (error) {
+      this.logger(`Error handling iTi phone input: ${error.message}`);
+      // Fallback to direct input
+      await this.simulateHumanInput(element, value);
+    }
+  }
+
+  /**
+   * Enhanced phone field detection with more comprehensive checks
+   * @param {HTMLElement} element The input element
+   * @param {string} labelText The label text (can be empty)
+   * @returns {boolean} True if this is a phone field
+   */
+  isPhoneField(element, labelText = "") {
+    // Check input type first
+    if (element.type === "tel") {
+      return true;
+    }
+
+    // Check for Glassdoor phone container (most reliable)
+    if (element.closest(".mosaic-provider-module-apply-contact-info-1afmp4o")) {
+      return true;
+    }
+
+    // Check for iTi phone input
+    if (element.closest(".PhoneInput") || element.closest(".iti")) {
+      return true;
+    }
+
+    // Check input attributes
+    const phoneAttributes = ["phone", "tel", "mobile", "cell", "cellular"];
+
+    for (const attr of phoneAttributes) {
+      if (
+        element.name?.toLowerCase().includes(attr) ||
+        element.id?.toLowerCase().includes(attr) ||
+        element.placeholder?.toLowerCase().includes(attr) ||
+        element.getAttribute("aria-label")?.toLowerCase().includes(attr)
+      ) {
+        return true;
+      }
+    }
+
+    // Check label text if provided
+    if (labelText) {
+      const normalizedLabel = labelText.toLowerCase();
+      const phoneKeywords = [
+        "phone",
+        "telephone",
+        "mobile",
+        "cell",
+        "contact number",
+        "phone number",
+        "tel",
+        "cellular",
+      ];
+
+      if (phoneKeywords.some((keyword) => normalizedLabel.includes(keyword))) {
+        return true;
+      }
+    }
+
+    // Check nearby text content for phone indicators
+    const container = element.closest("div, span, label");
+    if (container) {
+      const containerText = container.textContent.toLowerCase();
+      if (containerText.includes("phone") || containerText.includes("tel")) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -2303,7 +2892,7 @@ class FormHandler {
   }
 
   /**
-   * Fill all form elements in the current step
+   * Fill all form elements in the current step - FIXED for duplicates
    * @param {HTMLElement} container The form container
    * @returns {Promise<boolean>} Success or failure
    */
@@ -2311,6 +2900,9 @@ class FormHandler {
     try {
       this.showStatus(`Filling form fields...`, "info");
       let hasVisibleFields = false;
+
+      // Track processed elements to avoid duplicates
+      const processedElements = new Set();
 
       // FIRST PASS: Process all fieldsets (radio groups) as a single unit
       const fieldsets = Array.from(
@@ -2509,6 +3101,9 @@ class FormHandler {
         fieldset.dataset.processed = "true";
       }
 
+      // SECOND PASS: Process individual form elements - collect all elements first to avoid duplicates
+      const allElementsToProcess = new Map(); // Use Map to avoid duplicates by element reference
+
       const elementTypes = [
         { selector: "textarea", type: "textarea" },
         { selector: "select", type: "select" },
@@ -2517,58 +3112,83 @@ class FormHandler {
         { selector: 'input[type="tel"]', type: "tel" },
         { selector: 'input[type="number"]', type: "number" },
         { selector: 'input[type="checkbox"]', type: "checkbox" },
-        // Added date field selectors
         { selector: 'input[type="date"]', type: "date" },
         { selector: 'input[placeholder*="MM/DD/YYYY"]', type: "date" },
         { selector: 'input[placeholder*="mm/dd/yyyy"]', type: "date" },
+        {
+          selector: 'input[name="phone"], input[name*="phone" i]',
+          type: "phone",
+        },
+        { selector: 'input[placeholder*="phone" i]', type: "phone" },
+        { selector: 'input[aria-label*="phone" i]', type: "phone" },
       ];
 
+      // Collect all elements, prioritizing phone type for phone inputs
       for (const { selector, type } of elementTypes) {
         const elements = container.querySelectorAll(selector);
 
         for (const element of elements) {
-          // Skip if element is not visible or is in a processed fieldset
-          if (
-            !this.isElementVisible(element) ||
-            element.closest('fieldset[data-processed="true"]')
-          ) {
-            continue;
+          if (!allElementsToProcess.has(element)) {
+            // Determine if this is a phone field
+            const isPhoneField = this.isPhoneField(element, "");
+            const actualType = isPhoneField ? "phone" : type;
+
+            allElementsToProcess.set(element, actualType);
+          } else if (type === "phone" || this.isPhoneField(element, "")) {
+            // If we already have this element but now we know it's a phone field, update the type
+            allElementsToProcess.set(element, "phone");
           }
+        }
+      }
 
-          hasVisibleFields = true;
+      // Process each unique element only once
+      for (const [element, type] of allElementsToProcess) {
+        // Skip if element is not visible or is in a processed fieldset
+        if (
+          !this.isElementVisible(element) ||
+          element.closest('fieldset[data-processed="true"]')
+        ) {
+          continue;
+        }
 
-          // Get proper label text
-          const label = this.findLabelForElement(element);
-          if (!label) continue;
+        hasVisibleFields = true;
 
-          const labelText = this.extractLabelText(label);
-          if (!labelText) continue;
+        // Get proper label text
+        const label = this.findLabelForElement(element);
+        let labelText = "";
 
-          this.showStatus(
-            `Processing ${
-              type === "date" ? "date" : type
-            } field: "${labelText}"`,
-            "info"
-          );
+        if (label) {
+          labelText = this.extractLabelText(label);
+        }
 
-          // Get options for selects
-          let options = [];
-          if (type === "select") {
-            options = Array.from(element.options)
-              .filter((opt) => opt.value)
-              .map((opt) => opt.text.trim());
-          }
+        // For phone inputs, provide default label if none found
+        if (type === "phone" && !labelText) {
+          labelText = "Phone Number";
+        }
 
-          // Get value from API
-          const value = await this.getValueForField(labelText, options);
-          if (!value) continue;
+        if (!labelText) continue;
 
-          // Apply value - handle date fields specially
-          if (type === "date" || this.isDateField(element)) {
-            await this.handleDateInput(element, value);
-          } else {
-            await this.applyValueToElement(element, value, labelText);
-          }
+        this.showStatus(`Processing ${type} field: "${labelText}"`, "info");
+
+        // Get options for selects
+        let options = [];
+        if (type === "select") {
+          options = Array.from(element.options)
+            .filter((opt) => opt.value)
+            .map((opt) => opt.text.trim());
+        }
+
+        // Get value from API
+        const value = await this.getValueForField(labelText, options);
+        if (!value) continue;
+
+        // Apply value based on detected type
+        if (type === "phone") {
+          await this.handlePhoneInput(element, value);
+        } else if (type === "date" || this.isDateField(element)) {
+          await this.handleDateInput(element, value);
+        } else {
+          await this.applyValueToElement(element, value, labelText);
         }
       }
 
@@ -2580,11 +3200,82 @@ class FormHandler {
   }
 
   /**
-   * Extract label text from label element, handling the Indeed structure
+   * Enhanced findLabelForElement with Glassdoor-specific handling
+   * @param {HTMLElement} element Form element
+   * @returns {HTMLElement|null} Label element
+   */
+  findLabelForElement(element) {
+    // If element has id, try to find label with for attribute
+    if (element.id) {
+      const label = document.querySelector(`label[for="${element.id}"]`);
+      if (label) return label;
+    }
+
+    // If element is inside a label, return the label
+    const parentLabel = element.closest("label");
+    if (parentLabel) return parentLabel;
+
+    // For Glassdoor phone inputs, try to find the container with text
+    if (element.closest(".mosaic-provider-module-apply-contact-info-1afmp4o")) {
+      const phoneContainer = element.closest(
+        ".mosaic-provider-module-apply-contact-info-1afmp4o"
+      );
+
+      // Look for any text elements that might serve as labels
+      const labelElements = phoneContainer.querySelectorAll("span, div, label");
+      for (const labelEl of labelElements) {
+        const text = labelEl.textContent.trim();
+        if (
+          text &&
+          (text.toLowerCase().includes("phone") ||
+            text.toLowerCase().includes("number"))
+        ) {
+          return labelEl;
+        }
+      }
+
+      // If no specific label found, create a virtual one
+      const virtualLabel = document.createElement("span");
+      virtualLabel.textContent = "Phone Number";
+      return virtualLabel;
+    }
+
+    // For textareas and selects, try to find label based on common patterns
+    const previousSibling = element.previousElementSibling;
+    if (
+      previousSibling &&
+      (previousSibling.tagName === "LABEL" ||
+        previousSibling.classList.contains("css-ae8cki") ||
+        previousSibling.querySelector('[class*="label"], [class*="Label"]'))
+    ) {
+      return previousSibling;
+    }
+
+    // Try to find nearby label using various selectors
+    let currentEl = element;
+    for (let i = 0; i < 3; i++) {
+      const parent = currentEl.parentElement;
+      if (!parent) break;
+
+      const nearbyLabel = parent.querySelector(
+        'label, [class*="label"], [class*="Label"]'
+      );
+      if (nearbyLabel) return nearbyLabel;
+
+      currentEl = parent;
+    }
+
+    return null;
+  }
+
+  /**
+   * Enhanced extractLabelText with fallbacks
    * @param {HTMLElement} label The label element
    * @returns {string} The extracted label text
    */
   extractLabelText(label) {
+    if (!label) return "";
+
     // First try platform-specific selectors
     if (this.platform === "glassdoor") {
       // Glassdoor label structure
@@ -2606,53 +3297,18 @@ class FormHandler {
       return textSpan.textContent.trim();
     }
 
-    // Fallback to full label text
-    return label.textContent.trim();
-  }
-
-  /**
-   * Find label element for a form element
-   * @param {HTMLElement} element Form element
-   * @returns {HTMLElement|null} Label element
-   */
-  findLabelForElement(element) {
-    // If element has id, try to find label with for attribute
-    if (element.id) {
-      const label = document.querySelector(`label[for="${element.id}"]`);
-      if (label) return label;
+    // Direct text content
+    const directText = label.textContent.trim();
+    if (directText) {
+      return directText;
     }
 
-    // If element is inside a label, return the label
-    const parentLabel = element.closest("label");
-    if (parentLabel) return parentLabel;
-
-    // For textareas and selects, try to find label based on common patterns
-    const previousSibling = element.previousElementSibling;
-    if (
-      previousSibling &&
-      (previousSibling.tagName === "LABEL" ||
-        previousSibling.classList.contains("css-ae8cki") ||
-        previousSibling.querySelector('[class*="label"], [class*="Label"]'))
-    ) {
-      return previousSibling;
+    // For phone inputs, provide a default label
+    if (label.textContent === "Phone Number") {
+      return "Phone Number";
     }
 
-    // Try to find nearby label using various selectors
-    let currentEl = element;
-    for (let i = 0; i < 3; i++) {
-      // Check up to 3 levels up
-      const parent = currentEl.parentElement;
-      if (!parent) break;
-
-      const nearbyLabel = parent.querySelector(
-        'label, [class*="label"], [class*="Label"]'
-      );
-      if (nearbyLabel) return nearbyLabel;
-
-      currentEl = parent;
-    }
-
-    return null;
+    return "";
   }
 
   /**

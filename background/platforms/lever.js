@@ -1,6 +1,6 @@
 // background/platforms/lever.js - REFACTORED VERSION
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
-//sendErrorToContent
+
 export default class LeverAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     super(messageHandler, "lever"); // Pass platform name to base class
@@ -428,101 +428,5 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
             : undefined,
       });
     }, delay);
-  }
-
-  async sendErrorToContent(windowId, error, context = {}) {
-    try {
-      const message = {
-        type: "ERROR",
-        message: {
-          message: typeof error === "string" ? error : error.message,
-          context: context,
-          timestamp: Date.now(),
-        },
-      };
-
-      // Try to send via active tabs in the window
-      const tabs = await chrome.tabs.query({ windowId: windowId });
-
-      for (const tab of tabs) {
-        if (
-          tab.url.includes("google.com/search") ||
-          tab.url.includes("lever.co")
-        ) {
-          try {
-            await chrome.tabs.sendMessage(tab.id, message);
-            console.log(`📤 Error message sent to tab ${tab.id}`);
-          } catch (tabError) {
-            console.warn(`⚠️ Failed to send error to tab ${tab.id}:`, tabError);
-          }
-        }
-      }
-
-      // Also try via ports if available
-      await this.sendToContentViaPort(windowId, message);
-    } catch (error) {
-      console.error("❌ Failed to send error to content:", error);
-    }
-  }
-
-  async broadcastApplicationStatus(windowId, status) {
-    const message = {
-      type: "APPLICATION_STATUS",
-      data: {
-        inProgress: status.isProcessingJob || false,
-        url: status.currentJobUrl || null,
-        tabId: status.currentJobTabId || null,
-        timestamp: Date.now(),
-      },
-    };
-
-    await this.sendToContentViaPort(windowId, message);
-  }
-  async handleTaskCompletion(port, data, status) {
-    try {
-      const windowId = port.sender?.tab?.windowId;
-      let automation = this.findAutomationByWindow(windowId);
-
-      if (automation) {
-        // Update submission status
-        const oldUrl = automation.platformState.currentJobUrl;
-        this.updateSubmissionStatus(automation, oldUrl, status, data);
-
-        // Reset job processing state
-        automation.platformState.isProcessingJob = false;
-        automation.platformState.currentJobUrl = null;
-        automation.platformState.currentJobTabId = null;
-        automation.platformState.applicationStartTime = null;
-
-        // Close job tab if it exists
-        await this.closeJobTab(automation.platformState.currentJobTabId);
-
-        // Broadcast status change
-        await this.broadcastApplicationStatus(
-          windowId,
-          automation.platformState
-        );
-
-        // Handle completion or error-specific logic
-        if (status === "ERROR") {
-          await this.sendErrorToContent(windowId, data, {
-            phase: "application",
-          });
-        }
-
-        // Continue or complete automation
-        await this.continueOrComplete(automation, windowId, status, data);
-      }
-
-      this.safePortSend(port, {
-        type: "SUCCESS",
-        message: `${status} acknowledged`,
-      });
-    } catch (error) {
-      console.error(`❌ Error in handleTaskCompletion:`, error);
-      await this.sendErrorToContent(windowId, error, {
-        phase: "task_completion",
-      });
-    }
   }
 }

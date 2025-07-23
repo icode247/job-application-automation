@@ -6,7 +6,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-// ℹ️✅ 👤 🔄 Checking: VP of Growth at Heidi Health
+
 export default class GlassdoorPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);

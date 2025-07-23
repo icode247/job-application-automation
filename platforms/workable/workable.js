@@ -10,7 +10,7 @@ import {
   StateManagerService,
 } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
-//submit
+
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);

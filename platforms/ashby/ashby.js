@@ -24,7 +24,7 @@ class SkipApplicationError extends ApplicationError {
     this.name = "SkipApplicationError";
   }
 }
-//ℹ️ ℹ️ ℹ️ Looking for Application tab...
+
 export default class AshbyPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -501,7 +501,9 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     } else if (this.isValidJobPage(url)) {
       await this.startApplicationProcess();
     } else {
-      await this.waitForValidPage();
+      // Skip to next job instead of waiting for valid page
+      this.log("⚠️ Not a valid job page, skipping to next job");
+      this.skipToNextJob("Not a valid job page");
     }
   }
 
@@ -573,10 +575,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
   handleApplicationError(error) {
     if (error.name === "SkipApplicationError") {
       this.statusOverlay.addWarning("Application skipped: " + error.message);
-      this.safeSendPortMessage({
-        type: "SEND_CV_TASK_SKIP",
-        data: error.message,
-      });
+      this.skipToNextJob(error.message);
     } else {
       this.statusOverlay.addError("Application error: " + error.message);
       this.safeSendPortMessage({
@@ -664,7 +663,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       return true;
     } catch (error) {
       console.error("Error navigating to Application tab:", error);
-
       return false;
     }
   }
@@ -747,20 +745,33 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         "[data-testid='location']",
       ]) || "Not specified";
 
+    const jobData = {
+      jobId,
+      title: jobTitle,
+      company: companyName,
+      location,
+      jobUrl: window.location.href,
+      salary: "Not specified",
+      workplace: "Not specified",
+      postedDate: "Not specified",
+      applicants: "Not specified",
+      platform: this.platform,
+      appliedAt: new Date().toISOString(),
+      status: "applied",
+    };
+
+    // Save job using ApplicationTrackerService
+    try {
+      await this.applicationTracker.saveJob(jobData);
+      this.log("✅ Job saved to application tracker");
+    } catch (error) {
+      this.log("❌ Failed to save job to tracker:", error);
+    }
+
     // Send completion message using Ashby-specific message type
     this.safeSendPortMessage({
       type: "SEND_CV_TASK_DONE",
-      data: {
-        jobId,
-        title: jobTitle,
-        company: companyName,
-        location,
-        jobUrl: window.location.href,
-        salary: "Not specified",
-        workplace: "Not specified",
-        postedDate: "Not specified",
-        applicants: "Not specified",
-      },
+      data: jobData,
     });
 
     // Reset application state
@@ -798,7 +809,34 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       await this.formHandler.fillFormWithProfile(profile);
 
       // Submit the form
-      return await this.formHandler.submitAndVerify();
+      const submitResult = await this.formHandler.submitAndVerify();
+
+      // Check for success/error messages after submission
+      await this.wait(2000); // Wait for any messages to appear
+
+      const submissionStatus = this.checkSubmissionStatus();
+
+      if (submissionStatus.isSuccess) {
+        this.statusOverlay.addSuccess("Application submitted successfully!");
+        return true;
+      } else if (submissionStatus.hasErrors) {
+        this.statusOverlay.addWarning(
+          `Application submitted with errors: ${submissionStatus.errors.join(
+            ", "
+          )}`
+        );
+        // Still consider it a successful submission, just with warnings
+        return true;
+      } else if (submissionStatus.hasFailure) {
+        this.statusOverlay.addError(
+          `Application submission failed: ${submissionStatus.failureMessage}`
+        );
+        throw new SkipApplicationError(
+          `Submission failed: ${submissionStatus.failureMessage}`
+        );
+      }
+
+      return submitResult;
     } catch (error) {
       console.error("Error processing Ashby application form:", error);
       this.statusOverlay.addError(
@@ -806,6 +844,79 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       );
       return false;
     }
+  }
+
+  /**
+   * Check for success/error messages after form submission
+   */
+  checkSubmissionStatus() {
+    const status = {
+      isSuccess: false,
+      hasErrors: false,
+      hasFailure: false,
+      errors: [],
+      failureMessage: "",
+    };
+
+    // Check for success message
+    const successContainer = document.querySelector(
+      ".ashby-application-form-success-container"
+    );
+    if (successContainer && this.isElementVisible(successContainer)) {
+      status.isSuccess = true;
+      this.log("✅ Found success message after form submission");
+    }
+
+    // Check for error list
+    const errorsList = document.querySelector("ul._errors_oj0x8_78");
+    if (errorsList && this.isElementVisible(errorsList)) {
+      status.hasErrors = true;
+      const errorItems = errorsList.querySelectorAll("li._error_oj0x8_78 p");
+      status.errors = Array.from(errorItems).map((item) =>
+        item.textContent.trim()
+      );
+      this.log("⚠️ Found error messages after form submission:", status.errors);
+    }
+
+    // Check for other failure indicators
+    const failureSelectors = [
+      ".error-message",
+      ".submission-failed",
+      ".form-error",
+      '[data-testid="error"]',
+    ];
+
+    for (const selector of failureSelectors) {
+      const failureElement = document.querySelector(selector);
+      if (failureElement && this.isElementVisible(failureElement)) {
+        status.hasFailure = true;
+        status.failureMessage = failureElement.textContent.trim();
+        this.log(
+          "❌ Found failure message after form submission:",
+          status.failureMessage
+        );
+        break;
+      }
+    }
+
+    return status;
+  }
+
+  /**
+   * Skip to next job with reason
+   */
+  skipToNextJob(reason) {
+    this.log(`⏭️ Skipping to next job: ${reason}`);
+    this.statusOverlay.addWarning(`Skipping job: ${reason}`);
+
+    this.safeSendPortMessage({
+      type: "SEND_CV_TASK_SKIP",
+      data: reason,
+    });
+
+    // Reset application state
+    this.applicationState.isApplicationInProgress = false;
+    this.applicationState.applicationStartTime = null;
   }
 
   // ========================================
@@ -926,23 +1037,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       document.body.innerText.includes("Position Closed") ||
       document.body.innerText.includes("This job posting has expired")
     );
-  }
-
-  async waitForValidPage(timeout = 30000) {
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < timeout) {
-      const url = window.location.href;
-
-      if (url.includes("google.com/search") || this.isValidJobPage(url)) {
-        await this.detectPageTypeAndStart();
-        return;
-      }
-
-      await this.delay(1000);
-    }
-
-    throw new Error("Timeout waiting for valid Ashby page");
   }
 
   errorToString(e) {

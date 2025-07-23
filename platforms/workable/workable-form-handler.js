@@ -1,6 +1,6 @@
 // platforms/workable/workable-form-handler.js - FIXED VERSION
 import { AIService } from "../../services/index.js";
-//submitForm
+//handlePhoneInputWithCountryCode
 export default class WorkableFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;

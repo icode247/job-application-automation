@@ -94,14 +94,14 @@ export class RecruiteeFileHandler {
   async handleSingleFileUpload(fileInput, userDetails, jobDescription) {
     try {
       const fileType = this.determineFileType(fileInput);
-      const fileUrls = this.getFileUrls(userDetails, fileType);
-      console.log("File URLS", fileUrls);
-      if (!fileUrls || fileUrls.length === 0) {
-        console.log(`No ${fileType} files available`, "warning");
-        return false;
-      }
-
       if (fileType === "resume" && jobDescription) {
+        const fileUrls = this.getFileUrls(userDetails, fileType);
+
+        if (!fileUrls || fileUrls.length === 0) {
+          console.log(`No ${fileType} files available`, "warning");
+          return false;
+        }
+
         return await this.handleResumeUpload(
           fileInput,
           userDetails,
@@ -118,10 +118,8 @@ export class RecruiteeFileHandler {
           tone: "Professional",
         });
       } else {
-        return await this.uploadFileFromUrl(
-          fileInput,
-          fileUrls[fileUrls.length - 1]
-        );
+        // for all other types or fallback
+        return await this.uploadFileFromUrl(fileInput);
       }
     } catch (error) {
       console.error("Single file upload failed: " + error.message);
@@ -391,26 +389,6 @@ export class RecruiteeFileHandler {
         "warning"
       );
       return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
-    }
-  }
-
-  /**
-   * Handle cover letter upload
-   */
-  async handleCoverLetterUpload(
-    fileInput,
-    userDetails,
-    jobDescription,
-    fileUrls
-  ) {
-    try {
-      if (fileUrls.length > 0) {
-        return await this.uploadFileFromUrl(fileInput, fileUrls[0]);
-      }
-      return false;
-    } catch (error) {
-      console.error("Error handling cover letter upload:", error);
-      return false;
     }
   }
 

@@ -44,12 +44,11 @@ export class RecruiteeFormHandler {
       const submitButton = this.findSubmitButton(applicationForm);
       if (submitButton && !submitButton.disabled) {
         await this.clickElementReliably(submitButton);
-        await this.delay(3000);
 
-        return {
-          success: true,
-          message: "Form processed successfully",
-        };
+        // Wait for submission to complete and check result
+        const submissionResult = await this.waitForSubmissionResult();
+
+        return submissionResult;
       } else {
         return {
           success: false,
@@ -62,6 +61,213 @@ export class RecruiteeFormHandler {
         reason: "error",
         error: error.message,
       };
+    }
+  }
+
+  async waitForSubmissionResult() {
+    const maxWaitTime = 30000; // 30 seconds
+    const checkInterval = 1000; // Check every second
+    let elapsedTime = 0;
+
+    this.log("🕐 Waiting for form submission to complete...");
+
+    while (elapsedTime < maxWaitTime) {
+      await this.delay(checkInterval);
+      elapsedTime += checkInterval;
+
+      // Check if submit button is still loading
+      const isLoading = this.isSubmitButtonLoading();
+      if (isLoading) {
+        this.log("⏳ Submit button still loading...");
+        continue;
+      }
+
+      // Check for success message
+      const successResult = this.checkForSuccessMessage();
+      if (successResult.found) {
+        this.log("✅ Application submitted successfully!");
+        return {
+          success: true,
+          message: "Form submitted successfully",
+          successMessage: successResult.message,
+        };
+      }
+
+      // Check for error message
+      const errorResult = this.checkForErrorMessage();
+      if (errorResult.found) {
+        this.log("❌ Application submission failed!");
+        return {
+          success: false,
+          reason: "submission_error",
+          error: errorResult.message,
+        };
+      }
+
+      // If neither loading nor success/error found, continue checking
+      this.log(`⏳ Still waiting... (${elapsedTime / 1000}s elapsed)`);
+    }
+
+    // Timeout reached
+    this.log("⏰ Timeout waiting for submission result");
+    return {
+      success: false,
+      reason: "submission_timeout",
+      error: "Timeout waiting for submission to complete",
+    };
+  }
+
+  isSubmitButtonLoading() {
+    try {
+      // Check for the loading submit button with aria-busy="true"
+      const loadingButton = document.querySelector(
+        'button[type="submit"][aria-busy="true"], button[data-testid="submit-application-form-button"][aria-busy="true"]'
+      );
+
+      if (loadingButton) {
+        // Also check for the loading spinner inside the button
+        const spinner = loadingButton.querySelector(
+          '.sc-164q74r-0, .sc-s03za1-1, [class*="spinner"], [class*="loading"]'
+        );
+        return spinner !== null;
+      }
+
+      return false;
+    } catch (error) {
+      this.log("Error checking submit button loading state:", error.message);
+      return false;
+    }
+  }
+
+  checkForSuccessMessage() {
+    try {
+      // Look for the success message container
+      const successSelectors = [
+        'div[aria-live="assertive"] h3:contains("All done!")',
+        'div[aria-live="assertive"]:has(h3.sc-1f8x0pm-1)',
+        '.sc-1f8x0pm-1:contains("All done!")',
+        'h3:contains("All done!")',
+        'p:contains("Your application has been successfully submitted")',
+        '.iPueVD:contains("successfully submitted")',
+      ];
+
+      for (const selector of successSelectors) {
+        if (selector.includes(":contains")) {
+          // Handle pseudo-selector manually
+          const baseSelector = selector.split(":contains")[0];
+          const containsText = selector.match(/:contains\("([^"]+)"\)/)?.[1];
+
+          const elements = document.querySelectorAll(baseSelector);
+          for (const element of elements) {
+            if (element.textContent.includes(containsText)) {
+              const container =
+                element.closest('div[aria-live="assertive"]') ||
+                element.parentElement;
+              const fullMessage = container
+                ? container.textContent.trim()
+                : element.textContent.trim();
+
+              return {
+                found: true,
+                message: fullMessage,
+              };
+            }
+          }
+        } else {
+          const element = document.querySelector(selector);
+          if (element) {
+            const container =
+              element.closest('div[aria-live="assertive"]') ||
+              element.parentElement;
+            const fullMessage = container
+              ? container.textContent.trim()
+              : element.textContent.trim();
+
+            return {
+              found: true,
+              message: fullMessage,
+            };
+          }
+        }
+      }
+
+      // Fallback: check for any success-related text
+      const allElements = document.querySelectorAll(
+        "div, p, h1, h2, h3, h4, span"
+      );
+      for (const element of allElements) {
+        const text = element.textContent.toLowerCase();
+        if (
+          (text.includes("all done") ||
+            text.includes("successfully submitted") ||
+            text.includes("application submitted") ||
+            (text.includes("thank you") && text.includes("application"))) &&
+          this.isElementVisible(element)
+        ) {
+          return {
+            found: true,
+            message: element.textContent.trim(),
+          };
+        }
+      }
+
+      return { found: false };
+    } catch (error) {
+      this.log("Error checking for success message:", error.message);
+      return { found: false };
+    }
+  }
+
+  checkForErrorMessage() {
+    try {
+      // Look for common error message patterns
+      const errorSelectors = [
+        ".error",
+        ".alert-danger",
+        ".form-error",
+        '[role="alert"]',
+        ".sc-error",
+        ".validation-error",
+        'div[aria-live="assertive"]:has(.error)',
+        ".field-error",
+      ];
+
+      for (const selector of errorSelectors) {
+        const element = document.querySelector(selector);
+        if (element && this.isElementVisible(element)) {
+          return {
+            found: true,
+            message: element.textContent.trim(),
+          };
+        }
+      }
+
+      // Check for validation errors on form fields
+      const validationErrors = document.querySelectorAll(
+        'input:invalid, select:invalid, textarea:invalid, .is-invalid, [aria-invalid="true"]'
+      );
+
+      if (validationErrors.length > 0) {
+        const errorMessages = [];
+        for (const field of validationErrors) {
+          if (this.isElementVisible(field)) {
+            const label = this.getInputLabel(field);
+            errorMessages.push(`${label}: validation error`);
+          }
+        }
+
+        if (errorMessages.length > 0) {
+          return {
+            found: true,
+            message: `Validation errors: ${errorMessages.join(", ")}`,
+          };
+        }
+      }
+
+      return { found: false };
+    } catch (error) {
+      this.log("Error checking for error message:", error.message);
+      return { found: false };
     }
   }
 
@@ -383,8 +589,10 @@ export class RecruiteeFormHandler {
     const phoneInput = field.element;
 
     // Use user data directly instead of fetching
-    const phoneCode = this.userData.phoneCode || this.userData.phoneCountryCode || "+1";
-    const phoneNumber = this.userData.phoneNumber || this.userData.phone || answer;
+    const phoneCode =
+      this.userData.phoneCode || this.userData.phoneCountryCode || "+1";
+    const phoneNumber =
+      this.userData.phoneNumber || this.userData.phone || answer;
 
     if (!phoneNumber) {
       return;
