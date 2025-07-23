@@ -1,4 +1,4 @@
-// platforms/workable/workable.js - FIXED VERSION
+// platforms/workable/workable.js
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import WorkableFormHandler from "./workable-form-handler.js";
 import WorkableFileHandler from "./workable-file-handler.js";
@@ -7,24 +7,33 @@ import {
   AIService,
   ApplicationTrackerService,
   UserService,
+  StateManagerService,
 } from "../../services/index.js";
-
+import Utils from "../../utils/utils.js";
+//submit
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
     this.platform = "workable";
     this.baseUrl = "https://apply.workable.com";
 
-    // Initialize Workable-specific services
+    // Initialize services using existing service classes
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
       userId: this.userId,
     });
     this.userService = new UserService({ userId: this.userId });
+    this.stateManager = new StateManagerService({
+      sessionId: this.sessionId,
+      storageKey: `workable_automation_${this.sessionId || "default"}`,
+    });
 
     this.fileHandler = null;
     this.formHandler = null;
     this.cachedJobDescription = null;
+
+    // Debounce timers for preventing rapid-fire calls
+    this.debounceTimers = {};
   }
 
   // ========================================
@@ -39,14 +48,12 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     return /^https:\/\/([\w-]+)\.workable\.com\/(j|jobs)\/([^\/]+)\/?.*$/;
   }
 
-  // ✅ FIXED: Updated to handle both job overview pages and application pages
   isValidJobPage(url) {
     return /^https:\/\/apply\.workable\.com\/[^\/]+\/(j|jobs)\/([^\/]+)/.test(
       url
     );
   }
 
-  // ✅ ADDED: Method to detect application pages specifically
   isApplicationPage(url) {
     return url.includes("/apply/") || url.includes("/application");
   }
@@ -65,11 +72,12 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Platform-specific URL normalization
+   * Platform-specific URL normalization using Utils
    */
   platformSpecificUrlNormalization(url) {
-    // Remove /apply suffix and normalize Workable URLs
-    return url.replace(/\/apply\/?$/, "");
+    // Use Utils.normalizeUrl and then remove /apply suffix
+    const normalized = Utils.normalizeUrl(url);
+    return normalized.replace(/\/apply\/?$/, "");
   }
 
   // ========================================
@@ -92,6 +100,14 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       jobDescription: "",
     });
 
+    // Initialize state
+    await this.stateManager.initializeState({
+      userId: this.userId,
+      sessionId: this.sessionId,
+      platform: "workable",
+      isProcessing: false,
+    });
+
     this.statusOverlay.addSuccess("Workable-specific components initialized");
   }
 
@@ -102,9 +118,8 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     try {
       this.log("Duplicate job detected:", data);
 
-      // Reset application state
-      this.applicationState.isApplicationInProgress = false;
-      this.applicationState.applicationStartTime = null;
+      // Reset application state using StateManager
+      this.resetApplicationState();
 
       this.statusOverlay.addInfo(
         "Job already processed: " + (data?.url || "Unknown URL")
@@ -125,31 +140,14 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       this.log("🚀 Starting Workable automation");
       this.statusOverlay.addInfo("Starting Workable automation");
 
-      // Ensure user profile is available before starting
-      if (!this.userProfile && this.userId) {
-        try {
-          console.log("🔄 Attempting to fetch user profile during start...");
-          this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched during start");
-          this.statusOverlay.addSuccess("User profile loaded");
-
-          // Update form handler with profile
-          if (this.formHandler && this.userProfile) {
-            this.formHandler.userData = this.userProfile;
-          }
-        } catch (error) {
-          console.error("❌ Failed to fetch user profile during start:", error);
-          this.statusOverlay.addWarning(
-            "Failed to load user profile - automation may have limited functionality"
-          );
-        }
-      }
+      // Ensure user profile using UserService
+      await this.ensureUserProfile();
 
       // Update config with parameters
       this.config = { ...this.config, ...params };
 
       // Wait for page to be ready
-      await this.waitForPageLoad();
+      await Utils.waitForElement("body", 5000);
 
       // Detect page type and start appropriate automation
       await this.detectPageTypeAndStart();
@@ -158,7 +156,33 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
-  // ✅ FIXED: Updated page detection logic
+  /**
+   * Ensure user profile is available using UserService
+   */
+  async ensureUserProfile() {
+    if (!this.userProfile && this.userId && this.userService) {
+      try {
+        console.log("🔄 Fetching user profile using UserService...");
+        this.userProfile = await this.userService.getUserDetails();
+        console.log("✅ User profile fetched via UserService");
+        this.statusOverlay.addSuccess("User profile loaded");
+
+        // Update form handler with profile
+        if (this.formHandler && this.userProfile) {
+          this.formHandler.userData = this.userProfile;
+        }
+      } catch (error) {
+        console.error(
+          "❌ Failed to fetch user profile via UserService:",
+          error
+        );
+        this.statusOverlay.addWarning(
+          "Failed to load user profile - automation may have limited functionality"
+        );
+      }
+    }
+  }
+
   async detectPageTypeAndStart() {
     const url = window.location.href;
     this.log(`🔍 Detecting page type for: ${url}`);
@@ -184,18 +208,20 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Handle search next event with state management
+   * Handle search next event with state management using StateManager
    */
   handleSearchNext(data) {
     try {
       this.log("Handling search next:", data);
 
-      // Reset application state
-      this.applicationState.isApplicationInProgress = false;
-      this.applicationState.applicationStartTime = null;
+      // Reset application state using StateManager
+      this.resetApplicationState();
 
-      // Increment processed count if we have search data
-      if (this.searchData) {
+      // Increment processed count using StateManager
+      if (this.searchData && this.stateManager) {
+        this.stateManager.updateState({
+          processedJobs: (this.searchData.current || 0) + 1,
+        });
         this.searchData.current++;
       }
 
@@ -233,10 +259,26 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       );
 
       // Reset application state and continue
+      this.resetApplicationState();
+      this.debounce("searchNext", () => this.searchNext(), 5000);
+    }
+  }
+
+  /**
+   * Reset application state using StateManager
+   */
+  async resetApplicationState() {
+    try {
+      // Update StateManager
+      if (this.stateManager) {
+        await this.stateManager.setProcessingStatus(false);
+      }
+
+      // Reset local state
       this.applicationState.isApplicationInProgress = false;
       this.applicationState.applicationStartTime = null;
-
-      this.debounce("searchNext", () => this.searchNext(), 5000);
+    } catch (error) {
+      console.error("Error resetting application state:", error);
     }
   }
 
@@ -254,8 +296,8 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
       this.statusOverlay.addInfo("Successfully navigated to Application tab");
 
-      // Wait for application page to load
-      await this.wait(2000);
+      // Wait for application page to load using Utils
+      await Utils.delay(2000);
 
       // Start application process
       await this.startApplicationProcess();
@@ -265,31 +307,39 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
-  // ✅ ADDED: Method to navigate to application tab (similar to Ashby)
+  /**
+   * Navigate to application tab using Utils for element waiting
+   */
   async navigateToApplicationTab() {
     try {
       this.statusOverlay.addInfo("Looking for Application tab...");
 
-      // Find the Application tab using Workable-specific selectors
-      const applicationTab =
-        document.querySelector('a[data-ui="application-form-tab"]') ||
-        document.querySelector('a[href*="/apply/"]') ||
-        Array.from(document.querySelectorAll("a")).find((tab) =>
-          tab.textContent.toLowerCase().includes("application")
-        );
+      // Use Utils.waitForElement to find the Application tab
+      const applicationTab = await Utils.waitForElement(
+        'a[data-ui="application-form-tab"], a[href*="/apply/"]',
+        5000
+      );
 
       if (!applicationTab) {
-        this.statusOverlay.addWarning("Application tab not found");
-        return false;
+        // Try alternative selectors
+        const alternativeTab = Array.from(document.querySelectorAll("a")).find(
+          (tab) => tab.textContent.toLowerCase().includes("application")
+        );
+
+        if (!alternativeTab) {
+          this.statusOverlay.addWarning("Application tab not found");
+          return false;
+        }
       }
 
+      const tabToClick = applicationTab || alternativeTab;
       this.statusOverlay.addInfo("Found Application tab, clicking...");
 
       // Get current URL to detect navigation
       const currentUrl = window.location.href;
 
       // Click the Application tab
-      applicationTab.click();
+      tabToClick.click();
 
       // Wait for navigation to complete
       const navigationSuccess = await this.waitForUrlChange(
@@ -303,7 +353,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
           "URL did not change to application page, continuing anyway..."
         );
         // Give it a bit more time and continue
-        await this.wait(2000);
+        await Utils.delay(2000);
       }
 
       return true;
@@ -316,12 +366,14 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
-  // ✅ ADDED: Method to wait for URL change (from Ashby)
+  /**
+   * Wait for URL change using Utils.delay
+   */
   async waitForUrlChange(originalUrl, expectedPath, timeout = 10000) {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
-      await this.wait(500);
+      await Utils.delay(500);
 
       const currentUrl = window.location.href;
 
@@ -400,7 +452,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Handle error messages with automatic recovery (FROM ORIGINAL CODE)
+   * Handle error messages with automatic recovery
    */
   handleError(message) {
     const errorMessage =
@@ -423,11 +475,16 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   }
 
   /**
-   * Handle application status synchronization (FROM ORIGINAL CODE)
+   * Handle application status synchronization using StateManager
    */
-  handleApplicationStatus(data) {
+  async handleApplicationStatus(data) {
     try {
       this.log("Application status received:", data);
+
+      // Sync with StateManager
+      if (this.stateManager && data.inProgress !== undefined) {
+        await this.stateManager.setProcessingStatus(data.inProgress);
+      }
 
       // Update local state based on background state
       if (data.inProgress !== this.applicationState.isApplicationInProgress) {
@@ -466,6 +523,12 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       this.log("Application starting confirmation received:", data);
       this.applicationState.isApplicationInProgress = true;
       this.applicationState.applicationStartTime = Date.now();
+
+      // Update StateManager
+      if (this.stateManager) {
+        this.stateManager.setProcessingStatus(true);
+      }
+
       this.statusOverlay.addInfo(
         "Application starting for: " + (data?.url || "unknown URL")
       );
@@ -556,18 +619,13 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       console.log("📝 Starting application process");
       this.statusOverlay.addInfo("Starting application process");
 
-      // Validate user profile
-      if (!this.userProfile) {
-        console.log("⚠️ No user profile available, attempting to fetch...");
-        await this.fetchApplicationTaskData();
-      }
+      // Ensure user profile is available
+      await this.ensureUserProfile();
 
-      // Check for success page first
-      // const applied = this.checkSubmissionSuccess();
-      // if (applied) {
-      //   await this.handleAlreadyApplied();
-      //   return;
-      // }
+      // Set processing state using StateManager
+      if (this.stateManager) {
+        await this.stateManager.setProcessingStatus(true);
+      }
 
       // Proceed with application process
       await this.apply();
@@ -618,26 +676,40 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
+  /**
+   * Handle already applied using ApplicationTrackerService
+   */
   async handleAlreadyApplied() {
-    const jobId = UrlUtils.extractJobId(window.location.href, "workable");
-    const company = UrlUtils.extractCompanyFromUrl(
-      window.location.href,
-      "workable"
-    );
+    try {
+      const jobData = await this.extractJobDataForSubmission();
 
-    this.safeSendPortMessage({
-      type: "APPLICATION_COMPLETED",
-      data: {
-        jobId: jobId,
-        title: document.title || "Job on Workable",
-        company: company || "Company on Workable",
-        location: "Not specified",
-        jobUrl: window.location.href,
-      },
-    });
+      // Track using ApplicationTrackerService
+      if (this.applicationTracker) {
+        await this.applicationTracker.saveAppliedJob(jobData);
+        await this.applicationTracker.updateApplicationCount();
+      }
 
-    this.applicationState.isApplicationInProgress = false;
-    this.statusOverlay.addSuccess("Application completed successfully");
+      // Update StateManager
+      if (this.stateManager) {
+        await this.stateManager.incrementApplicationsUsed();
+      }
+
+      // Notify background script
+      this.safeSendPortMessage({
+        type: "APPLICATION_COMPLETED",
+        data: jobData,
+      });
+
+      await this.resetApplicationState();
+      this.statusOverlay.addSuccess(
+        "Application already completed successfully"
+      );
+    } catch (error) {
+      console.error("Error handling already applied:", error);
+      this.statusOverlay.addError(
+        "Error processing completed application: " + error.message
+      );
+    }
   }
 
   handleApplicationError(error) {
@@ -654,7 +726,8 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         data: this.errorToString(error),
       });
     }
-    this.applicationState.isApplicationInProgress = false;
+
+    this.resetApplicationState();
   }
 
   // ========================================
@@ -666,6 +739,13 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
+      // First check if we're already on a success/completion page
+      const successCheck = this.checkSubmissionSuccess();
+      if (successCheck) {
+        await this.handleAlreadyApplied();
+        return true;
+      }
+
       // Validate handlers
       if (!this.validateHandlers()) {
         throw new Error("Required handlers are not properly initialized");
@@ -676,11 +756,11 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         throw new Error("Cannot start application: Page error");
       }
 
-      // Find application form
-      const form = this.findApplicationForm();
+      // Find application form using Utils
+      const form = await this.findApplicationForm();
       if (!form) {
-        await this.wait(2000);
-        const formAfterWait = this.findApplicationForm();
+        await Utils.delay(2000);
+        const formAfterWait = await this.findApplicationForm();
         if (!formAfterWait) {
           throw new Error("Cannot find application form");
         }
@@ -689,18 +769,30 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
       return await this.processApplicationForm(form);
     } catch (e) {
-      if (e.name === "ApplicationSkipError") {
-        throw e;
+      // Better error handling for DOMExceptions and other errors
+      let errorMessage = "Unknown error during application process";
+
+      if (e instanceof DOMException) {
+        errorMessage = `DOM Error: ${e.name} - ${e.message}`;
+        console.error("DOMException in apply:", e.name, e.message, e.code);
+      } else if (e.name === "ApplicationSkipError") {
+        throw e; // Re-throw application skip errors
+      } else if (e instanceof Error) {
+        errorMessage = e.message;
+        console.error("Error in apply:", e.message, e.stack);
       } else {
-        console.error("Error in apply:", e);
-        throw new Error(
-          "Error during application process: " + this.errorToString(e)
-        );
+        errorMessage = String(e);
+        console.error("Unknown error in apply:", e);
       }
+
+      throw new Error(errorMessage);
     }
   }
 
-  findApplicationForm() {
+  /**
+   * Find application form using Utils
+   */
+  async findApplicationForm() {
     // Workable-specific form selectors
     const workableSelectors = [
       'form[action*="workable"]',
@@ -710,75 +802,271 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       "form.whr-form",
     ];
 
-    return DomUtils.findForm(workableSelectors);
+    // Try each selector with Utils.waitForElement
+    for (const selector of workableSelectors) {
+      const form = await Utils.waitForElement(selector, 2000);
+      if (form) {
+        return form;
+      }
+    }
+
+    // Fallback to DomUtils if available
+    return DomUtils.findForm ? DomUtils.findForm(workableSelectors) : null;
   }
 
   async processApplicationForm(form) {
     this.statusOverlay.addInfo("Found application form, beginning to fill out");
 
-    // Extract job description for AI context (use cached if available)
+    try {
+      // Extract job description for AI context (use cached if available)
+      const jobDescription =
+        this.cachedJobDescription || (await this.extractJobDescription());
+
+      // Update form handler with job description
+      if (this.formHandler) {
+        this.formHandler.jobDescription = jobDescription;
+        this.formHandler.userData = this.userProfile;
+      }
+
+      // Handle file uploads
+      try {
+        if (this.fileHandler && this.userProfile) {
+          await this.fileHandler.handleFileUploads(
+            form,
+            this.userProfile,
+            jobDescription
+          );
+        }
+      } catch (error) {
+        console.warn("File upload failed:", error);
+        this.statusOverlay.addWarning("File upload failed: " + error.message);
+      }
+
+      // Fill form fields
+      try {
+        if (this.formHandler) {
+          await this.formHandler.handlePhoneInputWithCountryCode(
+            form,
+            this.userProfile
+          );
+          await this.formHandler.handleCustomSelectWithModal(
+            form,
+            this.userProfile
+          );
+          await this.formHandler.fillFormWithProfile(
+            form,
+            this.userProfile,
+            jobDescription
+          );
+
+          this.statusOverlay.addSuccess("Form fields filled");
+        }
+      } catch (error) {
+        console.warn("Form filling failed:", error);
+        this.statusOverlay.addWarning("Form filling failed: " + error.message);
+      }
+
+      // Find submit button
+      const submitButton = this.formHandler?.findSubmitButton(form);
+      if (!submitButton) {
+        throw Utils.createError(
+          "Cannot find submit button",
+          "SUBMIT_BUTTON_NOT_FOUND"
+        );
+      }
+
+      // Submit the form with better error handling
+      let submitted = false;
+      try {
+        submitted = await this.formHandler.submitForm(form, { dryRun: false });
+      } catch (submitError) {
+        console.error("Form submission error:", submitError);
+
+        if (submitError instanceof DOMException) {
+          this.statusOverlay.addError(
+            `Form submission DOM error: ${submitError.name}`
+          );
+          throw new Error(
+            `Form submission failed: ${submitError.name} - ${submitError.message}`
+          );
+        } else {
+          this.statusOverlay.addError(
+            "Form submission failed: " + submitError.message
+          );
+          throw submitError;
+        }
+      }
+
+      if (submitted) {
+        // Wait for page to process submission and check for success/error
+        await this.waitForSubmissionResult();
+      } else {
+        throw new Error("Form submission returned false");
+      }
+
+      return submitted;
+    } catch (error) {
+      console.error("Error in processApplicationForm:", error);
+
+      // Better error handling for different error types
+      if (error instanceof DOMException) {
+        throw new Error(
+          `DOM Error in form processing: ${error.name} - ${error.message}`
+        );
+      } else if (error.name === "SUBMIT_BUTTON_NOT_FOUND") {
+        throw error; // Re-throw specific errors
+      } else {
+        throw new Error(
+          `Form processing failed: ${error.message || String(error)}`
+        );
+      }
+    }
+  }
+
+  /**
+   * Wait for the submit button to stop showing "Submitting..."
+   */
+  async waitForButtonToFinishSubmitting(timeout = 10000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      const submitButton = document.querySelector('button[type="submit"]'); // or whatever your exact button selector is
+
+      if (submitButton && !submitButton.textContent.includes("Submitting")) {
+        this.statusOverlay.addInfo("Button finished submitting");
+        return;
+      }
+
+      await Utils.delay(500);
+    }
+
+    this.statusOverlay.addWarning("Button state check timeout");
+  }
+
+  /**
+   * Wait for submission result and handle accordingly
+   */
+  async waitForSubmissionResult(timeout = 15000) {
+    const startTime = Date.now();
+    this.statusOverlay.addInfo("Waiting for submission result...");
+
+    await this.waitForButtonToFinishSubmitting(timeout);
+
+    while (Date.now() - startTime < timeout) {
+      await Utils.delay(1000);
+
+      // Check for success
+      const success = this.checkSubmissionSuccess();
+      if (success) {
+        this.statusOverlay.addSuccess("Application submitted successfully!");
+        await this.handleSuccessfulSubmission();
+        return;
+      }
+
+      // Check for errors
+      const error = this.checkSubmissionErrors();
+      if (error) {
+        this.statusOverlay.addError("Application submission failed: " + error);
+        await this.handleFailedSubmission(error);
+        return;
+      }
+
+      // Check if URL changed (might indicate navigation to success page)
+      if (
+        window.location.href.includes("success") ||
+        window.location.href.includes("confirmation") ||
+        window.location.href.includes("thank")
+      ) {
+        this.statusOverlay.addSuccess("Redirected to success page!");
+        await this.handleSuccessfulSubmission();
+        return;
+      }
+    }
+
+    // Timeout - treat as error
+    this.statusOverlay.addWarning("Submission timeout - treating as error");
+    await this.handleFailedSubmission("Submission timeout");
+  }
+
+  /**
+   * Handle successful submission
+   */
+  async handleSuccessfulSubmission() {
+    try {
+      const jobData = await this.extractJobDataForSubmission();
+
+      // Track using ApplicationTrackerService
+      if (this.applicationTracker) {
+        await this.applicationTracker.saveAppliedJob(jobData);
+        await this.applicationTracker.updateApplicationCount();
+      }
+
+      // Update StateManager
+      if (this.stateManager) {
+        await this.stateManager.incrementApplicationsUsed();
+      }
+
+      // Notify background script
+      this.safeSendPortMessage({
+        type: "APPLICATION_COMPLETED",
+        data: jobData,
+      });
+
+      await this.resetApplicationState();
+      this.statusOverlay.addSuccess("Application completed and saved!");
+    } catch (error) {
+      console.error("Error handling successful submission:", error);
+      this.statusOverlay.addError("Error saving application: " + error.message);
+    }
+  }
+
+  /**
+   * Handle failed submission
+   */
+  async handleFailedSubmission(errorMessage) {
+    try {
+      // Notify background script
+      this.safeSendPortMessage({
+        type: "APPLICATION_ERROR",
+        data: errorMessage,
+      });
+
+      await this.resetApplicationState();
+      this.statusOverlay.addError("Application failed: " + errorMessage);
+    } catch (error) {
+      console.error("Error handling failed submission:", error);
+    }
+  }
+
+  /**
+   * Extract job data for submission tracking
+   */
+  async extractJobDataForSubmission() {
     const jobDescription =
       this.cachedJobDescription || (await this.extractJobDescription());
 
-    // Update form handler with job description
-    if (this.formHandler) {
-      this.formHandler.jobDescription = jobDescription;
-      this.formHandler.userData = this.userProfile;
-    }
-
-    // Handle file uploads
-    try {
-      if (this.fileHandler && this.userProfile) {
-        await this.fileHandler.handleFileUploads(
-          form,
-          this.userProfile,
-          jobDescription
-        );
-      }
-    } catch (error) {
-      this.statusOverlay.addError("File upload failed: " + error.message);
-    }
-
-    // Fill form fields
-    try {
-      if (this.formHandler) {
-        await this.formHandler.handlePhoneInputWithCountryCode(
-          form,
-          this.userProfile
-        );
-        await this.formHandler.handleCustomSelectWithModal(
-          form,
-          this.userProfile
-        );
-        await this.formHandler.fillFormWithProfile(
-          form,
-          this.userProfile,
-          jobDescription
-        );
-
-        this.statusOverlay.addSuccess("Form fields filled");
-      }
-    } catch (error) {
-      this.statusOverlay.addWarning("Form filling failed: " + error.message);
-    }
-
-    // 6. Find submit button
-    const submitButton = this.formHandler.findSubmitButton(form);
-    if (!submitButton) {
-      throw new ApplicationError("Cannot find submit button");
-    }
-
-    // 7. Submit the form
-    const submitted = await this.formHandler.submitForm(form, {
-      dryRun: false,
-    });
-    return submitted;
+    return {
+      jobId:
+        UrlUtils.extractJobId(window.location.href, "workable") ||
+        Utils.generateId("workable_"),
+      title: jobDescription.title || document.title || "Job on Workable",
+      company: jobDescription.company || "Company on Workable",
+      location: jobDescription.location || "Not specified",
+      jobUrl: this.platformSpecificUrlNormalization(window.location.href),
+      platform: "Workable",
+      workplace: jobDescription.workplace,
+      department: jobDescription.department,
+      appliedAt: Date.now(),
+    };
   }
 
   // ========================================
   // UTILITY METHODS
   // ========================================
 
+  /**
+   * Extract job description using DomUtils
+   */
   async extractJobDescription() {
     try {
       console.log("🔍 Extracting job details...");
@@ -804,7 +1092,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         ]),
       };
 
-      // Extract company name from URL
+      // Extract company name from URL using UrlUtils
       jobDescription.company = UrlUtils.extractCompanyFromUrl(
         window.location.href,
         "workable"
@@ -837,7 +1125,8 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     if (
       window.location.href.includes("success") ||
       window.location.href.includes("confirmation") ||
-      window.location.href.includes("thanks")
+      window.location.href.includes("thanks") ||
+      window.location.href.includes("thank")
     ) {
       this.statusOverlay.addSuccess(
         "URL indicates success page - application submitted"
@@ -845,37 +1134,125 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       return true;
     }
 
-    // Check for success messages
+    // Check for Workable-specific success messages based on your HTML
+    const workableSuccessSelectors = [
+      '[data-ui="successful-submit"]',
+      '.styles--1kLCz[data-ui="successful-submit"]',
+    ];
+
+    for (const selector of workableSuccessSelectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        this.statusOverlay.addSuccess(
+          "Success message found - application submitted"
+        );
+        return true;
+      }
+    }
+
+    const h3Elements = document.querySelectorAll("h3");
+    for (const h3 of h3Elements) {
+      const text = h3.textContent.trim();
+      if (
+        text.includes("Thank you!") ||
+        text.includes("Your application has been submitted successfully")
+      ) {
+        this.statusOverlay.addSuccess(
+          "Success message found - application submitted"
+        );
+        return true;
+      }
+    }
+
+    // Check for generic success messages
     const successElements = document.querySelectorAll(
-      ".application-confirmation, .success-message, h1.success-message, div[class*='success'], div.thank-you, div[class*='thankyou']"
+      ".application-confirmation, .success-message, h1.success-message, div[class*='success'], div.thank-you, div[class*='thankyou'], div[class*='submitted']"
     );
 
     if (successElements.length > 0) {
+      // Check if any contain success-related text
+      for (const el of successElements) {
+        const text = el.textContent.toLowerCase();
+        if (
+          text.includes("thank") ||
+          text.includes("success") ||
+          text.includes("submitted") ||
+          text.includes("received") ||
+          text.includes("application")
+        ) {
+          this.statusOverlay.addSuccess(
+            "Success message found - application submitted"
+          );
+          return true;
+        }
+      }
+    }
+
+    // Check for success text in the page
+    const bodyText = document.body.textContent.toLowerCase();
+    if (
+      bodyText.includes("your application has been submitted") ||
+      bodyText.includes("application submitted successfully") ||
+      bodyText.includes("thank you for your application")
+    ) {
       this.statusOverlay.addSuccess(
-        "Success message found - application submitted"
+        "Success text found in page - application submitted"
       );
       return true;
     }
 
+    return false;
+  }
+
+  /**
+   * Check for submission errors
+   */
+  checkSubmissionErrors() {
     // Check for error messages
     const errorElements = document.querySelectorAll(
-      ".error, .error-message, .form-error, .alert-error, .validation-error"
+      ".error, .error-message, .form-error, .alert-error, .validation-error, .field-error, [class*='error'], [class*='invalid']"
     );
 
     if (errorElements.length > 0) {
       const errorMessages = Array.from(errorElements)
         .map((el) => el.textContent.trim())
-        .filter((text) => text.length > 0);
+        .filter(
+          (text) => text.length > 0 && !text.toLowerCase().includes("password")
+        )
+        .slice(0, 3); // Limit to first 3 errors
 
       if (errorMessages.length > 0) {
-        this.statusOverlay.addError(
-          "Form has validation errors: " + errorMessages.join(", ")
-        );
-        return false;
+        return errorMessages.join(", ");
       }
     }
 
-    return false;
+    // Check for Workable-specific error indicators
+    const workableErrorSelectors = [
+      '[data-ui="error"]',
+      '[role="alert"]',
+      ".validation-error",
+      ".field-validation-error",
+    ];
+
+    for (const selector of workableErrorSelectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent.trim()) {
+        return element.textContent.trim();
+      }
+    }
+
+    // Check for generic error text
+    const bodyText = document.body.textContent.toLowerCase();
+    if (
+      bodyText.includes("please fill") ||
+      bodyText.includes("required field") ||
+      bodyText.includes("invalid") ||
+      bodyText.includes("error occurred")
+    ) {
+      return "Form validation errors detected";
+    }
+
+    return null;
   }
 
   validateHandlers() {
@@ -904,7 +1281,9 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     );
   }
 
-  // ✅ FIXED: Updated to handle both search and job pages
+  /**
+   * Wait for valid page using Utils.delay
+   */
   async waitForValidPage(timeout = 30000) {
     const startTime = Date.now();
 
@@ -920,12 +1299,15 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         return;
       }
 
-      await this.delay(1000);
+      await Utils.delay(1000);
     }
 
-    throw new Error("Timeout waiting for valid page");
+    throw Utils.createError("Timeout waiting for valid page", "PAGE_TIMEOUT");
   }
 
+  /**
+   * Set session context with improved error handling using Utils
+   */
   async setSessionContext(sessionContext) {
     try {
       this.sessionContext = sessionContext;
@@ -942,37 +1324,41 @@ export default class WorkablePlatform extends BasePlatformAutomation {
           this.userProfile = sessionContext.userProfile;
           console.log("👤 User profile loaded from session context");
         } else {
-          this.userProfile = {
-            ...this.userProfile,
-            ...sessionContext.userProfile,
-          };
+          this.userProfile = Utils.deepMerge(
+            this.userProfile,
+            sessionContext.userProfile
+          );
           console.log("👤 User profile merged with session context");
         }
       }
 
-      // Fetch user profile if still missing
+      // Fetch user profile if still missing using UserService
       if (!this.userProfile && this.userId) {
-        try {
-          console.log("📡 Fetching user profile from user service...");
-          this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
-        } catch (error) {
-          console.error("❌ Failed to fetch user profile:", error);
-          this.statusOverlay?.addError(
-            "Failed to fetch user profile: " + error.message
-          );
-        }
+        await this.ensureUserProfile();
       }
 
       // Update services with user context
-      if (
-        this.userId &&
-        (!this.userService || this.userService.userId !== this.userId)
-      ) {
-        this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userId,
-        });
-        this.userService = new UserService({ userId: this.userId });
+      if (this.userId) {
+        if (!this.userService || this.userService.userId !== this.userId) {
+          this.userService = new UserService({ userId: this.userId });
+        }
+
+        if (
+          !this.applicationTracker ||
+          this.applicationTracker.userId !== this.userId
+        ) {
+          this.applicationTracker = new ApplicationTrackerService({
+            userId: this.userId,
+          });
+        }
+
+        if (!this.stateManager) {
+          this.stateManager = new StateManagerService({
+            sessionId: this.sessionId,
+            storageKey: `workable_automation_${this.sessionId || "default"}`,
+          });
+        }
+
         console.log("📋 Updated services with new userId:", this.userId);
       }
 
@@ -1003,31 +1389,60 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
   errorToString(e) {
     if (!e) return "Unknown error (no details)";
+
+    // Handle DOMException specifically
+    if (e instanceof DOMException) {
+      return `DOMException: ${e.name} - ${e.message} (code: ${e.code})`;
+    }
+
     if (e instanceof Error) {
       return e.message + (e.stack ? `\n${e.stack}` : "");
     }
+
+    // Handle objects that might be stringified incorrectly
+    if (typeof e === "object") {
+      try {
+        return JSON.stringify(e, null, 2);
+      } catch (jsonError) {
+        return `Object error: ${Object.prototype.toString.call(e)}`;
+      }
+    }
+
     return String(e);
   }
 
   /**
-   * Verify application status with background script
+   * Verify application status with background script using StateManager
    */
   async verifyApplicationStatus() {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
       if (!this.port) {
-        this.applicationState.isApplicationInProgress = false;
+        await this.resetApplicationState();
         resolve(false);
         return;
+      }
+
+      // Check StateManager first
+      if (this.stateManager) {
+        try {
+          const state = await this.stateManager.getState();
+          if (state && state.isProcessing !== undefined) {
+            resolve(state.isProcessing);
+            return;
+          }
+        } catch (error) {
+          console.warn("Error checking StateManager status:", error);
+        }
       }
 
       const requestId = "status_" + Date.now();
       let resolved = false;
 
       // Set timeout to prevent hanging
-      const timeoutId = setTimeout(() => {
+      const timeoutId = setTimeout(async () => {
         if (!resolved) {
           resolved = true;
-          this.applicationState.isApplicationInProgress = false;
+          await this.resetApplicationState();
           resolve(false);
         }
       }, 3000);
@@ -1035,7 +1450,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       // Store resolver for response handling
       this.pendingStatusRequests = this.pendingStatusRequests || {};
       this.pendingStatusRequests[requestId] = {
-        resolve: (result) => {
+        resolve: async (result) => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeoutId);
@@ -1057,22 +1472,49 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   // ========================================
 
   cleanup() {
+    // Clear debounce timers
+    Object.values(this.debounceTimers).forEach((timerId) => {
+      clearTimeout(timerId);
+    });
+    this.debounceTimers = {};
+
+    // Clear cached data
+    this.cachedJobDescription = null;
+
+    // Reset StateManager if available
+    if (this.stateManager) {
+      this.stateManager.setProcessingStatus(false);
+    }
+
     // Base class handles most cleanup
     super.cleanup();
 
-    // Workable-specific cleanup
-    this.cachedJobDescription = null;
     this.log("🧹 Workable-specific cleanup completed");
   }
 
   /**
-   * Enhanced health check with recovery mechanisms
+   * Enhanced health check with recovery mechanisms using StateManager
    */
   async checkHealth() {
     try {
-      // Verify application state with background script
-      if (window.location.href.includes("google.com/search")) {
-        await this.verifyApplicationStatus();
+      // Verify application state with StateManager
+      if (
+        this.stateManager &&
+        window.location.href.includes("google.com/search")
+      ) {
+        const state = await this.stateManager.getState();
+
+        // Sync local state with StateManager
+        if (
+          state &&
+          state.isProcessing !== this.applicationState.isApplicationInProgress
+        ) {
+          this.applicationState.isApplicationInProgress = state.isProcessing;
+
+          if (!state.isProcessing) {
+            this.applicationState.applicationStartTime = null;
+          }
+        }
       }
 
       // Check for stuck application
@@ -1090,8 +1532,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
             "Application appears to be stuck for over 5 minutes, resetting state"
           );
 
-          this.applicationState.isApplicationInProgress = false;
-          this.applicationState.applicationStartTime = null;
+          await this.resetApplicationState();
 
           this.statusOverlay.addWarning(
             "Application timeout detected - resetting state"
@@ -1108,15 +1549,11 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       this.log("❌ Error in health check:", error);
     }
   }
+
   /**
-   * Debounce function for preventing rapid-fire calls
+   * Debounce function using Utils for preventing rapid-fire calls
    */
   debounce(key, fn, delay) {
-    // Initialize debounce timers if not exists
-    if (!this.debounceTimers) {
-      this.debounceTimers = {};
-    }
-
     // Clear existing timer
     if (this.debounceTimers[key]) {
       clearTimeout(this.debounceTimers[key]);
@@ -1129,5 +1566,3 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }, delay);
   }
 }
-
-//checkHealth(

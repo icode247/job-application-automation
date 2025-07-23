@@ -1222,4 +1222,20 @@ export default class BasePlatformAutomation extends BasePlatform {
       setTimeout(() => resolve(false), timeout);
     });
   }
+
+  setupErrorRecovery() {
+    this._errorCount = 0;
+    this._debounceTimers = new Map();
+    this._lastErrorTime = null;
+  }
+
+  async handleGenericError(error, context = {}) {
+    console.error("❌ Generic error:", error);
+    this.statusOverlay?.addError(`Error: ${error.message || error}`);
+
+    // Platform-specific error handling
+    if (this.handlePlatformSpecificError) {
+      await this.handlePlatformSpecificError(error, context);
+    }
+  }
 }

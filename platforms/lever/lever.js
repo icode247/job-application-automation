@@ -8,7 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-//Error in apply
+//handlePlatformSpecificMessage
 export default class LeverPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -155,6 +155,14 @@ export default class LeverPlatform extends BasePlatformAutomation {
         this.handleApplicationStatusResponse(data);
         break;
 
+      case "ERROR":
+        this.handleError(data);
+        break;
+
+      case "APPLICATION_STATUS":
+        this.handleApplicationStatus(data);
+        break;
+
       case "SUCCESS":
         this.handleSuccessMessage(data);
         break;
@@ -165,6 +173,116 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
       default:
         super.handlePlatformSpecificMessage(type, data);
+    }
+  }
+
+  handleError(message) {
+    const errorMessage =
+      message?.message || message || "Unknown error from background script";
+    console.error("❌ Error from background script:", errorMessage);
+    this.statusOverlay.addError("Background error: " + errorMessage);
+
+    // If we're on a search page, continue after a delay with exponential backoff
+    if (window.location.href.includes("google.com/search")) {
+      const errorCount = this.getErrorCount();
+      const delay = Math.min(5000 * Math.pow(1.5, errorCount), 30000); // Max 30 seconds
+
+      this.debounce(
+        "searchNext",
+        () => {
+          this.log(
+            `🔄 Recovering from error, continuing search after ${delay}ms delay`
+          );
+          this.searchNext();
+        },
+        delay
+      );
+
+      this.incrementErrorCount();
+    }
+  }
+
+  handleApplicationStatus(data) {
+    try {
+      console.log("📊 Application status received:", data);
+
+      if (data.inProgress !== this.applicationState.isApplicationInProgress) {
+        console.log("🔄 Synchronizing application state with background");
+        this.applicationState.isApplicationInProgress = data.inProgress;
+
+        if (data.inProgress) {
+          this.applicationState.applicationStartTime = Date.now();
+          this.statusOverlay.addInfo(
+            "Application is in progress according to background"
+          );
+          this.statusOverlay.updateStatus("applying");
+        } else {
+          this.applicationState.applicationStartTime = null;
+          this.statusOverlay.addInfo(
+            "No application in progress according to background"
+          );
+          this.statusOverlay.updateStatus("ready");
+
+          if (window.location.href.includes("google.com/search")) {
+            this.debounce(
+              "searchNext",
+              () => {
+                this.log("🔄 Resuming search after state synchronization");
+                this.searchNext();
+              },
+              1000
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error handling application status:", error);
+      this.statusOverlay.addError(
+        "Error handling application status: " + error.message
+      );
+    }
+  }
+
+  getErrorCount() {
+    if (!this._errorCount) this._errorCount = 0;
+    return this._errorCount;
+  }
+
+  incrementErrorCount() {
+    if (!this._errorCount) this._errorCount = 0;
+    this._errorCount++;
+  }
+
+  resetErrorCount() {
+    this._errorCount = 0;
+  }
+
+  debounce(key, func, delay) {
+    if (!this._debounceTimers) this._debounceTimers = new Map();
+
+    if (this._debounceTimers.has(key)) {
+      clearTimeout(this._debounceTimers.get(key));
+    }
+
+    const timer = setTimeout(() => {
+      func();
+      this._debounceTimers.delete(key);
+    }, delay);
+
+    this._debounceTimers.set(key, timer);
+  }
+
+  async verifyApplicationState() {
+    if (this.applicationState.isApplicationInProgress) {
+      const success = this.safeSendPortMessage({
+        type: "VERIFY_APPLICATION_STATUS",
+      });
+
+      if (!success) {
+        console.warn("⚠️ Failed to verify application status with background");
+        this.applicationState.isApplicationInProgress = false;
+        this.applicationState.applicationStartTime = null;
+      }
     }
   }
 
