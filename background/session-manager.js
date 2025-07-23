@@ -1,4 +1,5 @@
 // background/session-manager.js
+
 export default class SessionManager {
   constructor() {
     this.sessions = new Map();
@@ -93,20 +94,20 @@ export default class SessionManager {
   async addNotification(sessionId, notificationData) {
     if (!sessionId) {
       // Handle cases where sessionId might be null
-      console.warn('Cannot add notification: sessionId is null');
+      console.warn("Cannot add notification: sessionId is null");
       return false;
     }
-    
+
     const session = this.sessions.get(sessionId);
     if (session) {
       if (!session.notifications) {
         session.notifications = [];
       }
-      
+
       session.notifications.push({
         ...notificationData,
         id: this.generateNotificationId(),
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
 
       // Keep only last 50 notifications per session
@@ -123,19 +124,20 @@ export default class SessionManager {
   }
 
   async handleWindowClosed(windowId) {
-    // Find sessions associated with this window and mark as interrupted
     for (const [sessionId, session] of this.sessions.entries()) {
-      if (session.windowId === windowId && session.status === "running") {
-        await this.updateSession(sessionId, {
-          status: "interrupted",
-          interruptedAt: Date.now(),
-        });
+      if (
+        session.windowId === windowId &&
+        ["running", "starting", "paused"].includes(session.status)
+      ) {
+        console.log(
+          `🛑 Force stopping session ${sessionId} due to window close`
+        );
+        await this.forceStopSession(sessionId, "Window closed by user");
       }
     }
   }
 
   async handleTabUpdated(tabId, tab) {
-    // Update session with current tab information if needed
     for (const [sessionId, session] of this.sessions.entries()) {
       if (session.windowId === tab.windowId && session.status === "running") {
         await this.updateSession(sessionId, {
@@ -166,7 +168,12 @@ export default class SessionManager {
   }
 
   generateNotificationId() {
-    return 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5);
+    return (
+      "notif_" +
+      Date.now().toString(36) +
+      "_" +
+      Math.random().toString(36).substr(2, 5)
+    );
   }
 
   async cleanupOldSessions(maxAge = 7 * 24 * 60 * 60 * 1000) {
@@ -184,6 +191,39 @@ export default class SessionManager {
     if (cleaned > 0) {
       await this.saveSessions();
       console.log(`🧹 Cleaned up ${cleaned} old sessions`);
+    }
+  }
+
+  async forceStopSession(sessionId, reason = "Window closed") {
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) {
+        console.log(`⚠️ Session ${sessionId} not found for force stop`);
+        return false;
+      }
+
+      // Update session with stopped status
+      await this.updateSession(sessionId, {
+        status: "stopped",
+        stoppedAt: Date.now(),
+        endTime: Date.now(),
+        reason: reason,
+        forceStop: true,
+      });
+
+      // Add notification about the forced stop
+      await this.addNotification(sessionId, {
+        type: "automation_force_stopped",
+        reason: reason,
+        timestamp: Date.now(),
+        message: `Automation was forcefully stopped: ${reason}`,
+      });
+
+      console.log(`✅ Session ${sessionId} force stopped successfully`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Error force stopping session ${sessionId}:`, error);
+      return false;
     }
   }
 }

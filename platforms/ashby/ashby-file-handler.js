@@ -1,5 +1,5 @@
 // platforms/ashby/ashby-file-handler.js
-// handleFileUploads
+
 export class AshbyFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
@@ -640,7 +640,25 @@ export class AshbyFileHandler {
    */
   extractFileNameFromUrl(url) {
     try {
-      const decodedUrl = decodeURIComponent(url);
+      if (!url || typeof url !== "string") {
+        return `resume_${Date.now()}.pdf`;
+      }
+
+      let workingUrl = url.trim();
+
+      if (
+        !workingUrl.startsWith("http://") &&
+        !workingUrl.startsWith("https://")
+      ) {
+        workingUrl = "https://" + workingUrl;
+      }
+
+      let decodedUrl;
+      try {
+        decodedUrl = decodeURIComponent(workingUrl);
+      } catch (decodeError) {
+        decodedUrl = workingUrl;
+      }
 
       const urlObj = new URL(decodedUrl);
       let fileName = urlObj.pathname.split("/").pop();
@@ -672,7 +690,6 @@ export class AshbyFileHandler {
 
       return `resume_${Date.now()}.pdf`;
     } catch (error) {
-      console.error("Error extracting filename:", error);
       return `resume_${Date.now()}.pdf`;
     }
   }

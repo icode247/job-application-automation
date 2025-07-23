@@ -1,4 +1,5 @@
 // platforms/breezy/breezy-file-handler.js
+//Extract
 export class BreezyFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
@@ -431,67 +432,58 @@ export class BreezyFileHandler {
   /**
    * Enhanced filename extraction with proper URL decoding
    */
-  /**
-   * Enhanced filename extraction with proper URL validation and decoding
-   */
   extractFileNameFromUrl(url) {
     try {
-      // Handle null, undefined, or empty strings
-      if (!url || typeof url !== "string" || url.trim() === "") {
+      if (!url || typeof url !== "string") {
         return `resume_${Date.now()}.pdf`;
       }
 
-      const decodedUrl = decodeURIComponent(url);
-      let fileName = "";
+      let workingUrl = url.trim();
 
-      // Try to parse as a URL first (for full URLs with protocol)
+      if (
+        !workingUrl.startsWith("http://") &&
+        !workingUrl.startsWith("https://")
+      ) {
+        workingUrl = "https://" + workingUrl;
+      }
+
+      let decodedUrl;
       try {
-        const urlObj = new URL(decodedUrl);
-        fileName = urlObj.pathname.split("/").pop();
-      } catch (urlError) {
-        // If URL construction fails, treat it as a path or filename
-        console.log("Not a valid URL, treating as path/filename:", decodedUrl);
+        decodedUrl = decodeURIComponent(workingUrl);
+      } catch (decodeError) {
+        decodedUrl = workingUrl;
+      }
 
-        // Extract filename from path-like string
+      const urlObj = new URL(decodedUrl);
+      let fileName = urlObj.pathname.split("/").pop();
+
+      if (!fileName || !fileName.includes(".") || fileName.includes("%")) {
         const pathParts = decodedUrl.split("/");
-        fileName = pathParts[pathParts.length - 1];
-
-        // If still no filename found, search through path parts for file extensions
-        if (!fileName || !fileName.includes(".")) {
-          for (let i = pathParts.length - 1; i >= 0; i--) {
-            const part = pathParts[i];
-            if (part.includes(".pdf") || part.includes(".doc")) {
-              fileName = part;
-              break;
-            }
+        for (let i = pathParts.length - 1; i >= 0; i--) {
+          const part = pathParts[i];
+          if (part.includes(".pdf") || part.includes(".doc")) {
+            fileName = part;
+            break;
           }
         }
       }
 
-      // Clean and validate the extracted filename
       if (fileName && fileName.includes(".")) {
         fileName = fileName
-          .replace(/%[0-9A-F]{2}/gi, "") // Remove URL encoding artifacts
-          .replace(/[^\w\s.-]/gi, "") // Remove invalid filename characters
-          .replace(/\s+/g, "_") // Replace spaces with underscores
+          .replace(/%[0-9A-F]{2}/gi, "")
+          .replace(/[^\w\s.-]/gi, "")
+          .replace(/\s+/g, "_")
           .trim();
 
-        // Ensure it has a valid extension
         if (!fileName.match(/\.(pdf|doc|docx)$/i)) {
           fileName += ".pdf";
         }
 
-        // Validate final filename isn't empty after cleaning
-        if (fileName.length > 4) {
-          // At least some chars + extension
-          return fileName;
-        }
+        return fileName;
       }
 
-      // Final fallback if no valid filename could be extracted
       return `resume_${Date.now()}.pdf`;
     } catch (error) {
-      console.error("Error extracting filename:", error);
       return `resume_${Date.now()}.pdf`;
     }
   }

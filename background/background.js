@@ -2,7 +2,7 @@
 import WindowManager from "./window-manager.js";
 import MessageHandler from "./message-handler.js";
 import SessionManager from "./session-manager.js";
-
+//setupWindowEvents
 class BackgroundService {
   constructor() {
     this.windowManager = new WindowManager();
@@ -73,11 +73,42 @@ class BackgroundService {
       return;
     }
 
-    // Clean up when windows are closed
     chrome.windows.onRemoved.addListener(async (windowId) => {
-      await this.windowManager.handleWindowClosed(windowId);
-      await this.sessionManager.handleWindowClosed(windowId);
-      await this.messageHandler.handleWindowClosed(windowId);
+      try {
+        console.log(
+          `🪟 Window ${windowId} removed - starting comprehensive cleanup`
+        );
+
+        // Parallel cleanup for better performance
+        const cleanupPromises = [
+          this.windowManager.handleWindowClosed(windowId),
+          this.sessionManager.handleWindowClosed(windowId),
+          this.messageHandler.handleWindowClosed(windowId),
+        ];
+
+        // Wait for all cleanup to complete
+        await Promise.allSettled(cleanupPromises);
+
+        console.log(`✅ All cleanup completed for window ${windowId}`);
+      } catch (error) {
+        console.error(
+          `❌ Error in window close cleanup for ${windowId}:`,
+          error
+        );
+
+        // Force cleanup even if there are errors
+        try {
+          await this.messageHandler.handleWindowClosed(windowId);
+        } catch (fallbackError) {
+          console.error(`❌ Fallback cleanup also failed:`, fallbackError);
+        }
+      }
+    });
+
+    chrome.windows.onFocusChanged.addListener(async (windowId) => {
+      if (windowId === chrome.windows.WINDOW_ID_NONE) {
+        console.log("👁️ User switched away from Chrome");
+      }
     });
 
     // Handle tab updates
@@ -87,8 +118,8 @@ class BackgroundService {
       }
     });
 
-    this.windowListenersSetup = true; // ✅ ADD: Mark window listeners as set up
-    console.log("✅ Window listeners set up");
+    this.windowListenersSetup = true;
+    console.log("✅ Enhanced window listeners set up");
   }
 }
 

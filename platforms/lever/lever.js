@@ -8,7 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
+//Error in apply
 export default class LeverPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -492,20 +492,19 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
   async apply() {
     try {
-      this.statusOverlay.addInfo("Starting application process");
-      this.statusOverlay.updateStatus("applying");
+      if (this.statusOverlay) {
+        this.statusOverlay.addInfo("Starting application process");
+        this.statusOverlay.updateStatus("applying");
+      }
 
-      // Validate handlers
       if (!this.validateHandlers()) {
         throw new Error("Required handlers are not properly initialized");
       }
 
-      // Check for page errors
       if (this.hasPageErrors()) {
         throw new Error("Cannot start send cv: Page error");
       }
 
-      // Find application form
       const form = this.findApplicationForm();
       if (!form) {
         await this.wait(2000);

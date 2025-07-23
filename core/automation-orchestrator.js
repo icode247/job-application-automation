@@ -325,22 +325,47 @@ export default class AutomationOrchestrator {
   }
 
   async handleWindowClosed(windowId) {
+    console.log(`🪟 Orchestrator handling window ${windowId} closure`);
+
     const sessionId = this.windowSessions.get(windowId);
 
     if (sessionId) {
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        await automation.stop();
+        console.log(
+          `🛑 Orchestrator stopping automation ${sessionId} for closed window ${windowId}`
+        );
+
+        try {
+          // Properly stop the automation session
+          automation.status = "stopped";
+          automation.endTime = Date.now();
+
+          await automation.sendMessageToContentScript({
+            action: "stopAutomation",
+            reason: "Window closed",
+          });
+
+          // Call cleanup if available
+          if (typeof automation.cleanup === "function") {
+            await automation.cleanup();
+          }
+        } catch (error) {
+          console.error(
+            `❌ Error in orchestrator window close cleanup:`,
+            error
+          );
+        }
+
         this.activeAutomations.delete(sessionId);
       }
 
       // Clean up tracking
       this.windowSessions.delete(windowId);
 
-      this.logger.info(`🧹 Cleaned up automation for closed window`, {
-        sessionId,
-        windowId,
-      });
+      console.log(
+        `✅ Orchestrator cleanup completed for window ${windowId}, session ${sessionId}`
+      );
     }
   }
 
@@ -809,8 +834,8 @@ export default class AutomationOrchestrator {
   }
 
   buildAshbyUrl(preferences) {
-    const keywords = this.getFirstOrString(preferences.positions)
-    const location = this.getFirstOrString(preferences.location)
+    const keywords = this.getFirstOrString(preferences.positions);
+    const location = this.getFirstOrString(preferences.location);
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -822,8 +847,8 @@ export default class AutomationOrchestrator {
   }
 
   buildBreezyUrl(preferences) {
-    const keywords = this.getFirstOrString(preferences.positions)
-    const location = this.getFirstOrString(preferences.location)
+    const keywords = this.getFirstOrString(preferences.positions);
+    const location = this.getFirstOrString(preferences.location);
     const remoteKeyword =
       preferences.remoteOnly || preferences.workMode?.includes("Remote")
         ? " remote"
@@ -834,8 +859,8 @@ export default class AutomationOrchestrator {
   }
 
   buildWorkdayUrl(preferences) {
-    const keywords = this.getFirstOrString(preferences.positions)
-    const location = this.getFirstOrString(preferences.location)
+    const keywords = this.getFirstOrString(preferences.positions);
+    const location = this.getFirstOrString(preferences.location);
 
     return `https://www.google.com/search?q=site:myworkdayjobs.com+"${encodeURIComponent(
       keywords
@@ -843,8 +868,8 @@ export default class AutomationOrchestrator {
   }
 
   buildRecruiteeUrl(preferences) {
-    const keywords = this.getFirstOrString(preferences.positions)
-    const location = this.getFirstOrString(preferences.location)
+    const keywords = this.getFirstOrString(preferences.positions);
+    const location = this.getFirstOrString(preferences.location);
 
     return `https://www.google.com/search?q=site:recruitee.com+"${encodeURIComponent(
       keywords
@@ -852,8 +877,8 @@ export default class AutomationOrchestrator {
   }
 
   buildLeverUrl(preferences) {
-    const keywords = this.getFirstOrString(preferences.positions)
-    const location = this.getFirstOrString(preferences.location)
+    const keywords = this.getFirstOrString(preferences.positions);
+    const location = this.getFirstOrString(preferences.location);
 
     return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(
       keywords

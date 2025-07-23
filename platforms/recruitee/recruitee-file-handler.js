@@ -1,4 +1,5 @@
-// platforms/recruitee/recruitee-file-handler.j
+// platforms/recruitee/recruitee-file-handler.js
+//ExtractFileNameFromUrl
 export class RecruiteeFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
@@ -138,13 +139,16 @@ export class RecruiteeFileHandler {
       console.log("Generating and downloading cover letter PDF...");
 
       // Call your Flask endpoint to generate the PDF
-      const response = await fetch(`${this.aiBaseUrl}/generate-cover-letter-pdf`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(letterData),
-      });
+      const response = await fetch(
+        `${this.aiBaseUrl}/generate-cover-letter-pdf`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(letterData),
+        }
+      );
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -193,7 +197,6 @@ export class RecruiteeFileHandler {
 
       console.log("Waiting for upload to complete...");
 
-      
       // Wait for upload completion (no crop modal needed for PDFs)
       const finalUploadSuccess = await this.waitForUploadProcess(fileInput);
 
@@ -507,29 +510,36 @@ export class RecruiteeFileHandler {
    */
   extractFileNameFromUrl(url) {
     try {
-      if (!url || typeof url !== "string" || url.trim() === "") {
+      if (!url || typeof url !== "string") {
         return `resume_${Date.now()}.pdf`;
       }
 
-      const decodedUrl = decodeURIComponent(url);
-      let fileName = "";
+      let workingUrl = url.trim();
 
+      if (
+        !workingUrl.startsWith("http://") &&
+        !workingUrl.startsWith("https://")
+      ) {
+        workingUrl = "https://" + workingUrl;
+      }
+
+      let decodedUrl;
       try {
-        const urlObj = new URL(decodedUrl);
-        fileName = urlObj.pathname.split("/").pop();
-      } catch (urlError) {
-        console.log("Not a valid URL, treating as path/filename:", decodedUrl);
+        decodedUrl = decodeURIComponent(workingUrl);
+      } catch (decodeError) {
+        decodedUrl = workingUrl;
+      }
 
+      const urlObj = new URL(decodedUrl);
+      let fileName = urlObj.pathname.split("/").pop();
+
+      if (!fileName || !fileName.includes(".") || fileName.includes("%")) {
         const pathParts = decodedUrl.split("/");
-        fileName = pathParts[pathParts.length - 1];
-
-        if (!fileName || !fileName.includes(".")) {
-          for (let i = pathParts.length - 1; i >= 0; i--) {
-            const part = pathParts[i];
-            if (part.includes(".pdf") || part.includes(".doc")) {
-              fileName = part;
-              break;
-            }
+        for (let i = pathParts.length - 1; i >= 0; i--) {
+          const part = pathParts[i];
+          if (part.includes(".pdf") || part.includes(".doc")) {
+            fileName = part;
+            break;
           }
         }
       }
@@ -545,14 +555,11 @@ export class RecruiteeFileHandler {
           fileName += ".pdf";
         }
 
-        if (fileName.length > 4) {
-          return fileName;
-        }
+        return fileName;
       }
 
       return `resume_${Date.now()}.pdf`;
     } catch (error) {
-      console.error("Error extracting filename:", error);
       return `resume_${Date.now()}.pdf`;
     }
   }

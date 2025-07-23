@@ -940,7 +940,7 @@ export default class MessageHandler {
   }
 
   async handleWindowClosed(windowId) {
-    console.log(`🪟 Window ${windowId} closed, cleaning up...`);
+    console.log(`🪟 Window ${windowId} closed, performing thorough cleanup...`);
 
     const sessionId = this.orchestrator.getSessionForWindow(windowId);
 
@@ -948,9 +948,50 @@ export default class MessageHandler {
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
         console.log(
-          `🛑 Stopping automation ${sessionId} for closed window ${windowId}`
+          `🛑 Properly stopping automation ${sessionId} for closed window ${windowId}`
         );
 
+        // ✅ CRITICAL FIX: Properly stop the automation instead of just deleting it
+        try {
+          // Call the automation's stop method to clean up properly
+          await automation.stop();
+
+          // Update session status in database
+          await this.sessionManager.updateSession(sessionId, {
+            status: "stopped",
+            stoppedAt: Date.now(),
+            reason: "Window closed by user",
+            endTime: Date.now(),
+          });
+
+          // Notify frontend about the stop
+          this.notifyFrontend({
+            type: "automation_stopped",
+            sessionId,
+            platform: automation.platform,
+            reason: "Window closed",
+            timestamp: Date.now(),
+          });
+
+          console.log(
+            `✅ Automation ${sessionId} properly stopped and cleaned up`
+          );
+        } catch (error) {
+          console.error(`❌ Error stopping automation ${sessionId}:`, error);
+
+          // Force cleanup even if stop() fails
+          await this.sessionManager.updateSession(sessionId, {
+            status: "interrupted",
+            interruptedAt: Date.now(),
+            reason: "Window closed - forced cleanup",
+            error: error.message,
+          });
+        }
+
+        // Remove from active automations after proper cleanup
+        this.activeAutomations.delete(sessionId);
+
+        // Clear any pending requests
         const platform = automation.platform;
         const userId = automation.userId;
         const requestKey = `startApplying_${userId}_${platform}`;
@@ -959,24 +1000,10 @@ export default class MessageHandler {
           this.pendingRequests.delete(requestKey);
           console.log(`🧹 Cleaned up pending request: ${requestKey}`);
         }
-
-        await automation.stop();
-        this.activeAutomations.delete(sessionId);
-
-        await this.sessionManager.updateSession(sessionId, {
-          status: "stopped",
-          stoppedAt: Date.now(),
-          reason: "Window closed",
-        });
-
-        this.notifyFrontend({
-          type: "automation_stopped",
-          sessionId,
-          reason: "Window closed",
-        });
       }
     }
 
+    // Clean up tab sessions for this window
     const tabsToRemove = [];
     for (const [tabId, sessionData] of this.tabSessions.entries()) {
       if (sessionData.windowId === windowId) {
@@ -990,9 +1017,11 @@ export default class MessageHandler {
       console.log(`🧹 Cleaned up tab ${tabId} session and injection tracking`);
     }
 
+    // Clean up orchestrator and window manager
     await this.orchestrator.handleWindowClosed(windowId);
+    await this.windowManager.handleWindowClosed(windowId);
 
-    console.log(`✅ Cleanup completed for window ${windowId}`);
+    console.log(`✅ Complete cleanup finished for window ${windowId}`);
   }
 
   initializePlatformHandler(platform) {
