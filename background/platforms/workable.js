@@ -192,11 +192,15 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    */
   async handleStartApplication(port, data) {
     try {
-      const { url, title } = data;
+      const { url, title, requestId } = data;
       const windowId = port.sender?.tab?.windowId;
+      const searchTabId = port.sender?.tab?.id;
 
-      console.log(`🎯 Opening Workable job in new tab: ${url}`);
+      console.log(
+        `🎯 START_APPLICATION request: ${url} (requestId: ${requestId})`
+      );
 
+      // Find automation session
       let automation = null;
       for (const [
         sessionId,
@@ -209,46 +213,80 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       }
 
       if (!automation) {
-        throw new Error("No Workable automation session found");
-      }
-
-      if (automation.platformState.isProcessingJob) {
+        const errorMsg = "No Workable automation session found";
         this.safePortSend(port, {
           type: "ERROR",
-          message: "Already processing another job",
+          message: errorMsg,
         });
+
+        // Send specific response if requestId provided
+        if (requestId && searchTabId) {
+          chrome.tabs.sendMessage(searchTabId, {
+            type: "APPLICATION_START_RESPONSE",
+            requestId,
+            success: false,
+            message: errorMsg,
+          });
+        }
+        return;
+      }
+
+      // Check if already processing
+      if (automation.platformState.isProcessingJob) {
+        const errorMsg = "Already processing another job";
+        console.log(
+          `⚠️ ${errorMsg} - current: ${automation.platformState.currentJobUrl}`
+        );
+
+        this.safePortSend(port, {
+          type: "ERROR",
+          message: errorMsg,
+        });
+
+        if (requestId && searchTabId) {
+          chrome.tabs.sendMessage(searchTabId, {
+            type: "APPLICATION_START_RESPONSE",
+            requestId,
+            success: false,
+            message: errorMsg,
+          });
+        }
         return;
       }
 
       // Check for duplicates
       const normalizedUrl = this.messageHandler.normalizeUrl(url);
-      if (
-        automation.platformState.submittedLinks?.some(
-          (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
-        )
-      ) {
+      const isDuplicate = automation.platformState.submittedLinks?.some(
+        (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
+      );
+
+      if (isDuplicate) {
+        console.log(`🔄 Duplicate job detected: ${url}`);
+
         this.safePortSend(port, {
           type: "DUPLICATE",
           message: "This job has already been processed",
           data: { url },
         });
+
+        if (requestId && searchTabId) {
+          chrome.tabs.sendMessage(searchTabId, {
+            type: "APPLICATION_START_RESPONSE",
+            requestId,
+            success: false,
+            duplicate: true,
+            message: "This job has already been processed",
+          });
+        }
         return;
       }
 
-      // Create new tab for job application
-      const tab = await chrome.tabs.create({
-        url: url,
-        windowId: windowId,
-        active: true,
-      });
-
-      // Update automation state
+      // Set processing state BEFORE creating tab
       automation.platformState.isProcessingJob = true;
       automation.platformState.currentJobUrl = url;
-      automation.platformState.currentJobTabId = tab.id;
       automation.platformState.applicationStartTime = Date.now();
 
-      // Add to submitted links
+      // Add to submitted links with PROCESSING status
       if (!automation.platformState.submittedLinks) {
         automation.platformState.submittedLinks = [];
       }
@@ -258,18 +296,68 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         timestamp: Date.now(),
       });
 
+      // Send starting confirmation
       this.safePortSend(port, {
         type: "APPLICATION_STARTING",
         data: { url },
       });
 
-      console.log(`✅ Workable job tab created: ${tab.id} for URL: ${url}`);
+      if (requestId && searchTabId) {
+        chrome.tabs.sendMessage(searchTabId, {
+          type: "APPLICATION_START_RESPONSE",
+          requestId,
+          success: true,
+          data: { url },
+        });
+      }
+
+      // Create application tab
+      try {
+        const tab = await chrome.tabs.create({
+          url: url,
+          windowId: windowId,
+          active: true,
+        });
+
+        automation.platformState.currentJobTabId = tab.id;
+        console.log(`✅ Application tab created: ${tab.id} for ${url}`);
+      } catch (tabError) {
+        console.error("❌ Error creating application tab:", tabError);
+
+        // Reset state on error
+        automation.platformState.isProcessingJob = false;
+        automation.platformState.currentJobUrl = null;
+        automation.platformState.applicationStartTime = null;
+
+        // Remove from submitted links
+        automation.platformState.submittedLinks =
+          automation.platformState.submittedLinks.filter(
+            (link) =>
+              this.messageHandler.normalizeUrl(link.url) !== normalizedUrl
+          );
+
+        // Notify of error
+        await this.sendSearchNextMessage(windowId, {
+          url,
+          status: "ERROR",
+          message: "Failed to create application tab: " + tabError.message,
+        });
+      }
     } catch (error) {
-      console.error("❌ Error handling Workable START_APPLICATION:", error);
+      console.error("❌ Error in handleStartApplication:", error);
       this.safePortSend(port, {
         type: "ERROR",
-        message: error.message,
+        message: "Error starting application: " + error.message,
       });
+
+      if (data?.requestId && port.sender?.tab?.id) {
+        chrome.tabs.sendMessage(port.sender.tab.id, {
+          type: "APPLICATION_START_RESPONSE",
+          requestId: data.requestId,
+          success: false,
+          message: "Error starting application: " + error.message,
+        });
+      }
     }
   }
 
@@ -302,6 +390,12 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    */
   async handleVerifyApplicationStatus(port, data) {
     const windowId = port.sender?.tab?.windowId;
+    const tabId = port.sender?.tab?.id;
+    const requestId = data?.requestId;
+
+    console.log(
+      `🔍 Verifying application status for window ${windowId}, tab ${tabId}`
+    );
 
     let automation = null;
     for (const [
@@ -314,18 +408,34 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       }
     }
 
-    const isActive = automation
-      ? automation.platformState.isProcessingJob
-      : false;
+    const statusData = {
+      inProgress: automation ? automation.platformState.isProcessingJob : false,
+      url: automation?.platformState.currentJobUrl || null,
+      tabId: automation?.platformState.currentJobTabId || null,
+      startTime: automation?.platformState.applicationStartTime || null,
+    };
 
-    this.safePortSend(port, {
-      type: "APPLICATION_STATUS_RESPONSE",
-      data: {
-        active: isActive,
-        url: automation?.platformState.currentJobUrl || null,
-        tabId: automation?.platformState.currentJobTabId || null,
-      },
-    });
+    const response = {
+      type: "APPLICATION_STATUS",
+      data: statusData,
+    };
+
+    // Include requestId if provided for correlation
+    if (requestId) {
+      response.requestId = requestId;
+    }
+
+    console.log(`📊 Sending application status:`, statusData);
+
+    this.safePortSend(port, response);
+
+    if (tabId) {
+      try {
+        chrome.tabs.sendMessage(tabId, response);
+      } catch (error) {
+        console.warn("⚠️ Error sending redundant status message:", error);
+      }
+    }
   }
 
   /**
@@ -344,28 +454,226 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    * Override base class method to provide Workable-specific continuation logic
    */
   async continueOrComplete(automation, windowId, status, data) {
-    if (status === "SUCCESS") {
-      automation.platformState.searchData.current++;
+    try {
+      // Update counters based on status
+      if (status === "SUCCESS") {
+        automation.platformState.searchData.current++;
+      }
+
+      const oldUrl = automation.platformState.currentJobUrl;
+
+      // Check if we've reached the limit
+      if (
+        automation.platformState.searchData.current >=
+        automation.platformState.searchData.limit
+      ) {
+        console.log(
+          `🏁 Reached application limit (${automation.platformState.searchData.limit})`
+        );
+
+        try {
+          chrome.notifications.create({
+            type: "basic",
+            iconUrl: "icons/icon48.png",
+            title: "Workable Automation Complete",
+            message: `Successfully completed ${automation.platformState.searchData.current} applications.`,
+          });
+        } catch (notifError) {
+          console.warn("⚠️ Error showing completion notification:", notifError);
+        }
+        return;
+      }
+
+      // Calculate delay based on error count
+      const errorCount =
+        this.messageHandler.getErrorCount?.(automation.sessionId) || 0;
+      const delay =
+        status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 1000;
+
+      console.log(
+        `⏱️ Continuing automation after ${delay}ms delay (status: ${status})`
+      );
+
+      // Continue with next job after delay
+      setTimeout(async () => {
+        await this.sendSearchNextMessage(windowId, {
+          url: oldUrl,
+          status: status,
+          data: data,
+          message:
+            typeof data === "string"
+              ? data
+              : status === "ERROR"
+              ? "Application error"
+              : status === "SKIPPED"
+              ? "Application skipped"
+              : undefined,
+        });
+      }, delay);
+    } catch (error) {
+      console.error("❌ Error in continueOrComplete:", error);
     }
+  }
 
-    const oldUrl = automation.platformState.currentJobUrl;
+  /**
+   * Enhanced task completion with better state management
+   */
+  async handleTaskCompletion(port, data, status) {
+    try {
+      const windowId = port.sender?.tab?.windowId;
+      const tabId = port.sender?.tab?.id;
 
-    // Workable-specific delay logic
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
-    const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
+      console.log(`🎯 Handling ${status} completion for window ${windowId}`);
 
-    setTimeout(async () => {
-      await this.sendSearchNextMessage(windowId, {
-        url: oldUrl,
+      // Find the automation session
+      let automation = null;
+      for (const [
+        sessionId,
+        auto,
+      ] of this.messageHandler.activeAutomations.entries()) {
+        if (auto.windowId === windowId) {
+          automation = auto;
+          break;
+        }
+      }
+
+      if (!automation) {
+        console.warn(`⚠️ No automation found for window ${windowId}`);
+        this.safePortSend(port, {
+          type: "ERROR",
+          message: "No automation session found",
+        });
+        return;
+      }
+
+      const currentUrl = automation.platformState.currentJobUrl;
+
+      // Update submitted links
+      if (!automation.platformState.submittedLinks) {
+        automation.platformState.submittedLinks = [];
+      }
+
+      // Remove any existing PROCESSING entry for this URL
+      automation.platformState.submittedLinks =
+        automation.platformState.submittedLinks.filter(
+          (link) =>
+            this.messageHandler.normalizeUrl(link.url) !==
+            this.messageHandler.normalizeUrl(currentUrl)
+        );
+
+      // Add the completion entry
+      automation.platformState.submittedLinks.push({
+        url: currentUrl,
         status: status,
-        data: data,
-        message:
-          typeof data === "string"
-            ? data
-            : status === "ERROR"
-            ? "Application error"
-            : undefined,
+        timestamp: Date.now(),
+        data: status === "SUCCESS" ? data : undefined,
+        error: status === "ERROR" ? data : undefined,
+        reason: status === "SKIPPED" ? data : undefined,
       });
-    }, delay);
+
+      // Handle API calls for successful applications
+      if (status === "SUCCESS" && automation.userId) {
+        try {
+          // Track application count
+          const appResponse = await fetch(
+            `${this.messageHandler.serverHost}/api/applications`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId: automation.userId }),
+            }
+          );
+
+          // Add job details if provided
+          if (data && typeof data === "object") {
+            const jobResponse = await fetch(
+              `${this.messageHandler.serverHost}/api/applied-jobs`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  ...data,
+                  userId: automation.userId,
+                  applicationPlatform: "Workable",
+                }),
+              }
+            );
+          }
+
+          console.log("✅ API tracking completed successfully");
+        } catch (apiError) {
+          console.error("❌ API tracking failed:", apiError);
+          // Don't fail the entire process for API errors
+        }
+      }
+
+      // Close the application tab
+      try {
+        if (automation.platformState.currentJobTabId) {
+          await chrome.tabs.remove(automation.platformState.currentJobTabId);
+          console.log(
+            `🗑️ Closed application tab ${automation.platformState.currentJobTabId}`
+          );
+        }
+      } catch (tabError) {
+        console.warn("⚠️ Error closing application tab:", tabError);
+      }
+
+      // Reset application state
+      automation.platformState.isProcessingJob = false;
+      automation.platformState.currentJobUrl = null;
+      automation.platformState.currentJobTabId = null;
+      automation.platformState.applicationStartTime = null;
+
+      // Increment counter for successful applications
+      if (status === "SUCCESS") {
+        automation.platformState.searchData.current++;
+      }
+
+      // Send acknowledgment
+      this.safePortSend(port, {
+        type: "SUCCESS",
+        message: `${status} completion acknowledged`,
+      });
+
+      // Continue automation or complete
+      await this.continueOrComplete(automation, windowId, status, data);
+
+      console.log(`✅ ${status} completion handled successfully`);
+    } catch (error) {
+      console.error(`❌ Error handling ${status} completion:`, error);
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: `Error processing ${status}: ${error.message}`,
+      });
+    }
+  }
+  /**
+   * Send SEARCH_NEXT message to continue automation
+   */
+  async sendSearchNextMessage(windowId, data) {
+    try {
+      // Find search tab for this window
+      const tabs = await chrome.tabs.query({ windowId: windowId });
+      const searchTab = tabs.find(
+        (tab) =>
+          tab.url.includes("google.com/search") &&
+          tab.url.includes("site:workable.com")
+      );
+
+      if (searchTab) {
+        console.log(`🔄 Sending SEARCH_NEXT to tab ${searchTab.id}`);
+        await chrome.tabs.sendMessage(searchTab.id, {
+          type: "SEARCH_NEXT",
+          data: data,
+        });
+      } else {
+        console.warn(`⚠️ No search tab found for window ${windowId}`);
+      }
+    } catch (error) {
+      console.error("❌ Error sending SEARCH_NEXT message:", error);
+    }
   }
 }
+
+//sendSearchNextMessage

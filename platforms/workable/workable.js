@@ -8,7 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-//dry
+
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -95,6 +95,30 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     this.statusOverlay.addSuccess("Workable-specific components initialized");
   }
 
+  /**
+   * Handle duplicate job detection
+   */
+  handleDuplicate(data) {
+    try {
+      this.log("Duplicate job detected:", data);
+
+      // Reset application state
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
+
+      this.statusOverlay.addInfo(
+        "Job already processed: " + (data?.url || "Unknown URL")
+      );
+      this.statusOverlay.updateStatus("ready");
+
+      // Continue search after a short delay
+      this.debounce("searchNext", () => this.searchNext(), 1000);
+    } catch (error) {
+      this.log("❌ Error handling duplicate:", error);
+      this.statusOverlay.addError("Error handling duplicate: " + error.message);
+    }
+  }
+
   async start(params = {}) {
     try {
       this.isRunning = true;
@@ -159,7 +183,63 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
-  // ✅ ADDED: Method to navigate to application tab and start
+  /**
+   * Handle search next event with state management
+   */
+  handleSearchNext(data) {
+    try {
+      this.log("Handling search next:", data);
+
+      // Reset application state
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
+
+      // Increment processed count if we have search data
+      if (this.searchData) {
+        this.searchData.current++;
+      }
+
+      // Acknowledge that we're ready for the next job
+      this.safeSendPortMessage({ type: "SEARCH_NEXT_READY" });
+
+      if (!data || !data.url) {
+        this.log("No URL data in handleSearchNext");
+        this.statusOverlay.addInfo("Job processed, searching next...");
+        this.debounce("searchNext", () => this.searchNext(), 1000);
+        return;
+      }
+
+      const url = data.url;
+
+      // Update visual status based on result
+      if (data.status === "SUCCESS") {
+        this.statusOverlay.addSuccess("Successfully submitted: " + url);
+      } else if (data.status === "ERROR") {
+        this.statusOverlay.addError(
+          "Error with: " + url + (data.message ? ` - ${data.message}` : "")
+        );
+      } else {
+        this.statusOverlay.addInfo(
+          "Skipped: " + url + (data.message ? ` - ${data.message}` : "")
+        );
+      }
+
+      // Continue search after a delay to prevent rapid firing
+      this.debounce("searchNext", () => this.searchNext(), 2000);
+    } catch (error) {
+      this.log("❌ Error handling search next:", error);
+      this.statusOverlay.addError(
+        "Error handling search next: " + error.message
+      );
+
+      // Reset application state and continue
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
+
+      this.debounce("searchNext", () => this.searchNext(), 5000);
+    }
+  }
+
   async navigateToApplicationAndStart() {
     try {
       // Extract job description from overview page first
@@ -280,8 +360,24 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         this.handleApplicationStarting(data);
         break;
 
+      case "APPLICATION_STATUS":
+        this.handleApplicationStatus(data);
+        break;
+
       case "PROFILE_DATA":
         this.handleProfileData(data);
+        break;
+
+      case "DUPLICATE":
+        this.handleDuplicate(data);
+        break;
+
+      case "SEARCH_NEXT":
+        this.handleSearchNext(data);
+        break;
+
+      case "ERROR":
+        this.handleError(data);
         break;
 
       case "CONNECTION_ESTABLISHED":
@@ -303,12 +399,66 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     }
   }
 
+  /**
+   * Handle error messages with automatic recovery (FROM ORIGINAL CODE)
+   */
+  handleError(message) {
+    const errorMessage =
+      message.message || "Unknown error from background script";
+    this.log("❌ Error from background script:", errorMessage);
+    this.statusOverlay.addError("Background error: " + errorMessage);
+
+    // If we're on a search page, continue after a delay
+    if (window.location.href.includes("google.com/search")) {
+      this.debounce("searchNext", () => this.searchNext(), 5000);
+    }
+  }
+
   handleSearchTaskData(data) {
     this.processSearchTaskData(data);
   }
 
   handleApplicationTaskData(data) {
     this.processApplicationTaskData(data);
+  }
+
+  /**
+   * Handle application status synchronization (FROM ORIGINAL CODE)
+   */
+  handleApplicationStatus(data) {
+    try {
+      this.log("Application status received:", data);
+
+      // Update local state based on background state
+      if (data.inProgress !== this.applicationState.isApplicationInProgress) {
+        this.log("Synchronizing application state with background");
+        this.applicationState.isApplicationInProgress = data.inProgress;
+
+        if (data.inProgress) {
+          this.applicationState.applicationStartTime = Date.now();
+          this.statusOverlay.addInfo(
+            "Application is in progress according to background"
+          );
+          this.statusOverlay.updateStatus("applying");
+        } else {
+          this.applicationState.applicationStartTime = null;
+          this.statusOverlay.addInfo(
+            "No application in progress according to background"
+          );
+          this.statusOverlay.updateStatus("ready");
+
+          // Continue search if we're on a search page
+          if (window.location.href.includes("google.com/search")) {
+            this.debounce("searchNext", () => this.searchNext(), 1000);
+          }
+        }
+      }
+    } catch (error) {
+      this.log("❌ Error handling application status:", error);
+      this.statusOverlay.addError(
+        "Error handling application status: " + error.message
+      );
+    }
   }
 
   handleApplicationStarting(data) {
@@ -859,6 +1009,49 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     return String(e);
   }
 
+  /**
+   * Verify application status with background script
+   */
+  async verifyApplicationStatus() {
+    return new Promise((resolve) => {
+      if (!this.port) {
+        this.applicationState.isApplicationInProgress = false;
+        resolve(false);
+        return;
+      }
+
+      const requestId = "status_" + Date.now();
+      let resolved = false;
+
+      // Set timeout to prevent hanging
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          this.applicationState.isApplicationInProgress = false;
+          resolve(false);
+        }
+      }, 3000);
+
+      // Store resolver for response handling
+      this.pendingStatusRequests = this.pendingStatusRequests || {};
+      this.pendingStatusRequests[requestId] = {
+        resolve: (result) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeoutId);
+            resolve(result);
+          }
+        },
+      };
+
+      // Send the status check request
+      this.safeSendPortMessage({
+        type: "CHECK_APPLICATION_STATUS",
+        requestId,
+      });
+    });
+  }
+
   // ========================================
   // CLEANUP
   // ========================================
@@ -871,4 +1064,70 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     this.cachedJobDescription = null;
     this.log("🧹 Workable-specific cleanup completed");
   }
+
+  /**
+   * Enhanced health check with recovery mechanisms
+   */
+  async checkHealth() {
+    try {
+      // Verify application state with background script
+      if (window.location.href.includes("google.com/search")) {
+        await this.verifyApplicationStatus();
+      }
+
+      // Check for stuck application
+      if (
+        this.applicationState.isApplicationInProgress &&
+        this.applicationState.applicationStartTime
+      ) {
+        const now = Date.now();
+        const applicationTime =
+          now - this.applicationState.applicationStartTime;
+
+        // If application has been active for over 5 minutes, it's probably stuck
+        if (applicationTime > 5 * 60 * 1000) {
+          this.log(
+            "Application appears to be stuck for over 5 minutes, resetting state"
+          );
+
+          this.applicationState.isApplicationInProgress = false;
+          this.applicationState.applicationStartTime = null;
+
+          this.statusOverlay.addWarning(
+            "Application timeout detected - resetting state"
+          );
+          this.statusOverlay.updateStatus("error");
+
+          if (window.location.href.includes("google.com/search")) {
+            // Continue search on search page
+            this.debounce("searchNext", () => this.searchNext(), 2000);
+          }
+        }
+      }
+    } catch (error) {
+      this.log("❌ Error in health check:", error);
+    }
+  }
+  /**
+   * Debounce function for preventing rapid-fire calls
+   */
+  debounce(key, fn, delay) {
+    // Initialize debounce timers if not exists
+    if (!this.debounceTimers) {
+      this.debounceTimers = {};
+    }
+
+    // Clear existing timer
+    if (this.debounceTimers[key]) {
+      clearTimeout(this.debounceTimers[key]);
+    }
+
+    // Set new timer
+    this.debounceTimers[key] = setTimeout(() => {
+      delete this.debounceTimers[key];
+      fn();
+    }, delay);
+  }
 }
+
+//checkHealth(
