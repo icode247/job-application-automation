@@ -19,7 +19,7 @@ export default class ZipRecruiterPlatform extends BasePlatform {
 
     // Initialize services
     const apiHost =
-      config.apiHost || config.config?.apiHost || "http://localhost:3000";
+      config.apiHost || config.config?.apiHost || "https://fastapply.co";
     this.HOST = apiHost;
 
     this.aiService = new AIService({ apiHost });

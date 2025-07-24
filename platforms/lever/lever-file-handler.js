@@ -2,7 +2,7 @@
 export default class LeverFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
-    this.apiHost = config.apiHost || "http://localhost:3000";
+    this.apiHost = config.apiHost || "https://fastapply.co";
     this.aiBaseUrl = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
     this.processedInputs = new Set(); // Track processed inputs to avoid duplicates
 

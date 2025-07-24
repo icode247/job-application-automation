@@ -520,7 +520,7 @@ export default class ZipRecruiterFormHandler {
   async uploadFileFromUrl(fileInput, url) {
     try {
       const proxyURL = `${
-        window.HOST || "http://localhost:3000"
+        window.HOST || "https://fastapply.co"
       }/api/proxy-file?url=${encodeURIComponent(url)}`;
       const response = await fetch(proxyURL);
 

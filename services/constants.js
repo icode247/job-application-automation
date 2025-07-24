@@ -5,5 +5,5 @@ export const PLAN_LIMITS = {
   UNLIMITED: Infinity,
 };
 
-export const API_HOST_URL = "http://localhost:3000";
+export const API_HOST_URL = "https://fastapply.co";
 export const AI_BASE_URL = "https://resumify.fastapply.co/api";

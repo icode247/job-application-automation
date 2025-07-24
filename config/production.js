@@ -4,8 +4,8 @@ export const PRODUCTION_CONFIG = {
   extensionId: "your-production-extension-id",
 
   // API endpoints
-  apiBaseUrl: "http://localhost:3000",
-  webhookUrl: "http://localhost:3000/automation/webhook",
+  apiBaseUrl: "https://fastapply.co",
+  webhookUrl: "https://fastapply.co/automation/webhook",
 
   // Rate limiting
   requestDelay: { min: 3000, max: 8000 },

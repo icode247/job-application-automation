@@ -2,7 +2,7 @@
 import WindowManager from "./window-manager.js";
 import MessageHandler from "./message-handler.js";
 import SessionManager from "./session-manager.js";
-//setupWindowEvents
+
 class BackgroundService {
   constructor() {
     this.windowManager = new WindowManager();
@@ -29,6 +29,9 @@ class BackgroundService {
 
       // Set up window event listeners
       this.setupWindowEvents();
+
+      // ✅ NEW: Set up extension action (icon click) listener
+      this.setupExtensionActionListener();
 
       this.isInitialized = true;
       console.log("✅ Background service initialized");
@@ -63,7 +66,7 @@ class BackgroundService {
       );
     });
 
-    this.listenersSetup = true; // ✅ ADD: Mark listeners as set up
+    this.listenersSetup = true;
     console.log("✅ Message listeners set up");
   }
 
@@ -121,6 +124,48 @@ class BackgroundService {
     this.windowListenersSetup = true;
     console.log("✅ Enhanced window listeners set up");
   }
+
+  setupExtensionActionListener() {
+    chrome.action.onClicked.addListener(async (tab) => {
+      try {
+        console.log("🔗 Extension icon clicked - opening FastApply website");
+        await this.openFastApplyWebsite();
+      } catch (error) {
+        console.error(
+          "❌ Error opening FastApply website on icon click:",
+          error
+        );
+      }
+    });
+    console.log("✅ Extension action listener set up");
+  }
+
+  // ✅ NEW: Open FastApply website
+  async openFastApplyWebsite() {
+    try {
+      const url = "https://fastapply.co";
+
+      // Check if the website is already open in any tab
+      const tabs = await chrome.tabs.query({ url: `${url}/*` });
+
+      if (tabs.length > 0) {
+        // If already open, focus on the existing tab
+        const existingTab = tabs[0];
+        await chrome.tabs.update(existingTab.id, { active: true });
+        await chrome.windows.update(existingTab.windowId, { focused: true });
+        console.log(`✅ Focused existing FastApply tab: ${existingTab.id}`);
+      } else {
+        // If not open, create a new tab
+        const newTab = await chrome.tabs.create({
+          url: url,
+          active: true,
+        });
+        console.log(`✅ Created new FastApply tab: ${newTab.id}`);
+      }
+    } catch (error) {
+      console.error("❌ Error opening FastApply website:", error);
+    }
+  }
 }
 
 // Create single instance
@@ -134,13 +179,32 @@ async function initializeService() {
   await backgroundService.initialize();
 }
 
-chrome.runtime.onStartup.addListener(() => {
-  initializeService();
+chrome.runtime.onStartup.addListener(async () => {
+  console.log("🚀 Extension startup detected");
+  await initializeService();
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-  initializeService();
+chrome.runtime.onInstalled.addListener(async (details) => {
+  console.log("📦 Extension installed/updated:", details.reason);
+
+  await initializeService();
+
+  // Open FastApply website on fresh install or extension update
+  if (details.reason === "install") {
+    console.log("🎉 Fresh installation - opening FastApply website");
+    try {
+      // Wait a moment for the service to fully initialize
+      setTimeout(async () => {
+        if (backgroundService) {
+          await backgroundService.openFastApplyWebsite();
+        }
+      }, 1000);
+    } catch (error) {
+      console.error("❌ Error opening website on install:", error);
+    }
+  } else if (details.reason === "update") {
+    console.log("🔄 Extension updated - optionally open FastApply website");
+  }
 });
 
-// Immediate initialization
 initializeService();

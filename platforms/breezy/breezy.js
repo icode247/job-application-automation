@@ -250,7 +250,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       this.sessionApiHost ||
       this.sessionContext?.apiHost ||
       this.config.apiHost ||
-      "http://localhost:3000"
+      "https://fastapply.co"
     );
   }
 

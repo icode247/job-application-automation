@@ -454,7 +454,7 @@ export default class MessageHandler {
         userCredits,
         dailyRemaining,
         preferences = {},
-        apiHost = "http://localhost:3000",
+        apiHost = "https://fastapply.co",
       } = request;
 
       let userProfile = null;

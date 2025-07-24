@@ -1,16 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "AI Job Application Assistant",
-  "version": "2.1.0",
-  "description": "Intelligent job application automation across LinkedIn, Indeed, Glassdoor, Recruitee, and Workday platforms",
-  "author": "FastApply Team",
+  "name": "FastApply - Free AI Automated Job Application Copilot",
+  "version": "2.1",
   "permissions": [
-    "storage",
-    "tabs",
     "activeTab",
+    "storage",
     "scripting",
-    "background",
-    "declarativeNetRequest"
+    "tabs",
+    "alarms",
+    "power",
+    "webNavigation",
+    "declarativeNetRequest",
+    "background"
   ],
   "externally_connectable": {
     "matches": [
@@ -49,7 +50,6 @@
         "platforms/indeed/indeed.js",
         "platforms/recruitee/recruitee.js",
         "platforms/glassdoor/glassdoor.js",
-
         "platforms/workday/workday.js",
         "platforms/lever/lever.js",
         "platforms/lever/lever-form-handler.js",
@@ -100,7 +100,7 @@
     }
   ],
   "action": {
-    "default_title": "Job Application Assistant",
+    "default_title": "Open FastApply",
     "default_icon": {
       "16": "icons/icon16.png",
       "24": "icons/icon16.png",

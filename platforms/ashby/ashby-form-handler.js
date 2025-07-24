@@ -5,7 +5,7 @@ import Utils from "../../utils/utils.js";
 export class AshbyFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;
-    this.host = options.host || "http://localhost:3000";
+    this.host = options.host || "https://fastapply.co";
     this.userData = options.userData || {};
     this.jobDescription = options.jobDescription || "";
     this.aiService = new AIService({ apiHost: this.host });

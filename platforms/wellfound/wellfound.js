@@ -231,7 +231,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.sessionApiHost ||
       this.sessionContext?.apiHost ||
       this.config.apiHost ||
-      "http://localhost:3000"
+      "https://fastapply.co"
     );
   }
 
@@ -1102,7 +1102,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   async apply() {
     try {
       this.statusOverlay.automationState = "searching";
-      this.statusOverlay.updateControls();
 
       // Show what we're about to do
       this.statusOverlay.addFormattedMessage(
