@@ -1,9 +1,7 @@
 // services/application-tracker-service.js
-import { API_HOST_URL } from "./constants.js";
-
 export default class ApplicationTrackerService {
   constructor(config) {
-    this.apiHost = API_HOST_URL;
+    this.apiHost = config.apiHost;
     this.userId = config.userId
   }
 

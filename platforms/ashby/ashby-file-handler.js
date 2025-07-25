@@ -3,7 +3,7 @@
 export class AshbyFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
-    this.apiHost = config.apiHost || "https://fastapply.co";
+    this.apiHost = config.apiHost;
     this.aiBaseUrl = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
     this.processedInputs = new Set();
 
@@ -14,9 +14,6 @@ export class AshbyFileHandler {
     });
   }
 
-  /**
-   * Handle all file uploads in the form with duplicate prevention
-   */
   /**
    * Handle all file uploads in the form with enhanced debugging
    */

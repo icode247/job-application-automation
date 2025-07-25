@@ -1,52 +1,162 @@
 // platforms/ziprecruiter/ziprecruiter.js
-import BasePlatform from "../base-platform.js";
-import AIService from "../../services/ai-service.js";
-import ApplicationTrackerService from "../../services/application-tracker-service.js";
-import UserService from "../../services/user-service.js";
-import { StatusOverlay } from "../../services/index.js";
-// import FileHandlerService from "../../services/file-handler-service.js";
-import ZipRecruiterFormHandler from "./ziprecruiter-form-handler.js";
+import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
+import { UrlUtils, DomUtils } from "../../shared/utilities/index.js";
+import {
+  AIService,
+  ApplicationTrackerService,
+  UserService,
+} from "../../services/index.js";
+import FormHandler from "../../shared/ziprecruiter/form-handler.js";
+import { AI_BASE_URL } from "../../services/constants.js";
 
-export default class ZipRecruiterPlatform extends BasePlatform {
+const ZIPRECRUITER_SELECTORS = {
+  JOB_CARDS: [
+    ".job_result_two_pane",
+    ".job_result",
+    "[data-testid='job-card']",
+    ".job",
+  ],
+  JOB_TITLE: [
+    "h2.font-bold.text-primary",
+    ".job-title",
+    "[data-testid='job-title']",
+    "h2 a",
+  ],
+  COMPANY_NAME: [
+    "[data-testid='job-card-company']",
+    ".company-name",
+    "a[aria-label*='company']",
+  ],
+  LOCATION: [
+    "[data-testid='job-card-location']",
+    ".location",
+    "p.text-primary",
+  ],
+  SALARY: [
+    "p.text-primary:contains('$')",
+    ".salary",
+    "[data-testid='salary']",
+  ],
+  APPLY_BUTTON: [
+    "button[aria-label*='1-Click Apply']",
+    "button[aria-label*='Quick Apply']",
+    ".apply-button",
+  ],
+  APPLIED_INDICATOR: [
+    "button[aria-label*='Applied']",
+    ".applied-status",
+  ],
+  MODAL_CONTAINER: [
+    ".ApplyFlowApp",
+    ".application-modal",
+    ".modal",
+  ],
+  MODAL_QUESTIONS: [
+    ".question_form fieldset",
+    "fieldset",
+  ],
+  CONTINUE_BUTTON: [
+    "button[type='submit']",
+    ".continue-button",
+  ],
+  NO_JOBS_FOUND: [
+    ".jobs_not_found",
+    ".no-results",
+  ],
+  NEXT_PAGE_BUTTON: [
+    "a[title='Next Page']",
+    ".next-page",
+    ".pagination-next",
+  ],
+};
+
+const ZIPRECRUITER_CONFIG = {
+  PLATFORM: "ziprecruiter",
+  URL_PATTERNS: {
+    SEARCH_PAGE: /ziprecruiter\.com\/(jobs|search)/,
+    JOB_PAGE: /ziprecruiter\.com\/job\//,
+    APPLY_PAGE: /ziprecruiter\.com\/apply/,
+  },
+  TIMEOUTS: {
+    STANDARD: 3000,
+    EXTENDED: 8000,
+    APPLICATION_TIMEOUT: 8 * 60 * 1000,
+  },
+  PLAN_LIMITS: {
+    FREE: 5,
+    STARTER: 50,
+    PRO: 200,
+  },
+  DEBUG: true,
+  BRAND_COLOR: "#4a90e2",
+};
+
+class ZipRecruiterJobParser {
+  constructor() {
+    this.targetClass = "job-description";
+  }
+
+  getElementText(element) {
+    if (element.tagName === "UL" || element.tagName === "OL") {
+      return Array.from(element.querySelectorAll("li"))
+        .map((li) => `• ${li.textContent.trim()}`)
+        .filter((text) => text !== "• ")
+        .join("\n");
+    }
+    return element.textContent.trim();
+  }
+
+  processTextBlock(text) {
+    return text
+      ?.replace(/\s+/g, " ")
+      .replace(/\n\s*\n/g, "\n")
+      .trim() || "";
+  }
+
+  scrapeDescription(format = "string") {
+    try {
+      const container = document.querySelector(`.${this.targetClass}`) ||
+        document.querySelector('.job-details') ||
+        document.querySelector('.description');
+
+      if (!container) return format === "string" ? "No description found" : { error: "Container not found" };
+
+      let description = "";
+      Array.from(container.children).forEach((element) => {
+        const text = this.getElementText(element);
+        if (text) description += `${text}\n\n`;
+      });
+
+      return format === "string" ? this.processTextBlock(description) : { description };
+    } catch (error) {
+      return format === "string" ? "Error extracting description" : { error: error.message };
+    }
+  }
+
+  static extract(format = "string") {
+    const parser = new ZipRecruiterJobParser();
+    return parser.scrapeDescription(format);
+  }
+}
+
+export default class ZipRecruiterPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
     this.platform = "ziprecruiter";
     this.baseUrl = "https://www.ziprecruiter.com";
-    this.hasStarted = false;
-    this.automationStarted = false;
-    this.processedJobs = new Set();
-    this.answerCache = new Map();
 
-    // Initialize services
-    const apiHost =
-      config.apiHost || config.config?.apiHost || "https://fastapply.co";
-    this.HOST = apiHost;
-
-    this.aiService = new AIService({ apiHost });
-    this.appTracker = new ApplicationTrackerService({
-      apiHost,
-      userId: config.userId,
+    this.aiService = new AIService({ apiHost: this.getApiHost() });
+    this.applicationTracker = new ApplicationTrackerService({
+      userId: this.userId,
     });
-    this.userService = new UserService({ apiHost, userId: config.userId });
+    this.userService = new UserService({ userId: this.userId });
 
-    this.statusOverlay = new StatusOverlay({
-      id: "ziprecruiter-status-overlay",
-      title: "ZIPRECRUITER AUTOMATION",
-      icon: "⚡",
-      position: { top: "10px", right: "10px" },
-    });
-
-    // this.fileHandler = new FileHandlerService({ apiHost });
-    this.fileHandler.setStatusManager(this.statusOverlay);
-
-    // ZipRecruiter specific state
     this.state = {
       initialized: false,
       ready: false,
       isRunning: false,
       isApplicationInProgress: false,
       applicationStartTime: null,
-      formDetected: false,
       processedCards: new Set(),
       processedCount: 0,
       currentJobIndex: 0,
@@ -57,541 +167,265 @@ export default class ZipRecruiterPlatform extends BasePlatform {
       currentPage: 1,
       totalPages: 0,
       noMorePages: false,
+      formDetected: false,
     };
 
-    this.config = {
-      SELECTORS: {
-        JOB_CARDS: ".job_result_two_pane",
-        JOB_TITLE: "h2.font-bold.text-primary",
-        COMPANY_NAME: "[data-testid='job-card-company']",
-        LOCATION: "[data-testid='job-card-location']",
-        SALARY: "p.text-primary:contains('$')",
-        APPLY_BUTTON: "button[aria-label*='1-Click Apply']",
-        APPLIED_INDICATOR: "button[aria-label*='Applied']",
-        MODAL_CONTAINER: ".ApplyingToHeader",
-        MODAL_QUESTIONS: ".question_form fieldset",
-        MODAL_SELECT: "[role='combobox']",
-        MODAL_SELECT_OPTIONS: "[role='listbox'] li",
-        MODAL_CONTINUE_BUTTON: "button[type='submit']",
-        MODAL_SUCCESS: ".apply-success, .application-success",
-        NO_JOBS_FOUND: ".jobs_not_found",
-        NEXT_PAGE_BUTTON: "a[title='Next Page']",
-        PAGINATION_CONTAINER: ".pagination_container_two_pane",
-        LAST_PAGE_INDICATOR: "button[title='Next Page'][disabled]",
-      },
-      TIMEOUTS: {
-        STANDARD: 3000,
-        EXTENDED: 8000,
-        APPLICATION_TIMEOUT: 8 * 60 * 1000, // 8 minutes
-      },
+    this.formHandler = null;
+    this.cachedJobDescription = null;
+    this.processedJobCards = new Set();
+    this.healthCheckTimer = null;
+    this.answerCache = new Map();
+
+    this.applicationState = {
+      isApplicationInProgress: false,
+      applicationStartTime: null,
+      currentJobData: null,
+      processedUrls: new Set(),
     };
 
-    this.log(`🔧 ZipRecruiter services initialized with API host: ${apiHost}`);
+    this.healthCheckTimer = setInterval(() => this.checkHealth(), 30000);
+    this.setupFormDetectionObserver();
+  }
+
+  getPlatformDomains() {
+    return ["https://www.ziprecruiter.com"];
+  }
+
+  getSearchLinkPattern() {
+    return /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|apply).*$/;
+  }
+
+  isValidJobPage(url) {
+    return /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|apply)/.test(url);
+  }
+
+  getApiHost() {
+    return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
+  }
+
+  isApplicationPage(url) {
+    return url.includes("ziprecruiter.com/apply") ||
+      url.includes("ziprecruiter.com/job");
+  }
+
+  getJobTaskMessageType() {
+    return "openJobInNewTab";
+  }
+
+  platformSpecificUrlNormalization(url) {
+    return url
+      .replace(/[?&](utm_|source=|campaign=)[^&]*/g, "")
+      .replace(/[?&]+$/, "");
   }
 
   async initialize() {
     await super.initialize();
-    this.log("🔗 ZipRecruiter platform initialized");
 
-    // Create status overlay
-    this.statusOverlay.create();
-    this.statusOverlay.addSuccess("ZipRecruiter automation initialized");
+    try {
+      this.formHandler = new FormHandler({
+        enableDebug: true,
+        logger: (message) => this.statusOverlay.addInfo(message),
+        host: this.getApiHost(),
+        userData: this.userProfile || {},
+        jobDescription: "",
+        platform: "ziprecruiter",
+      });
+
+      this.statusOverlay.addSuccess("ZipRecruiter components initialized");
+    } catch (error) {
+      this.log("⚠️ Could not load ZipRecruiter handlers:", error);
+      this.statusOverlay.addWarning("ZipRecruiter handlers not available");
+    }
 
     this.state.initialized = true;
-    this.state.ready = true;
   }
 
   async start(params = {}) {
-    if (this.hasStarted) {
-      this.log("⚠️ ZipRecruiter automation already started");
-      this.statusOverlay.addWarning("ZipRecruiter automation already started");
-      return;
-    }
-
-    this.hasStarted = true;
-    this.isRunning = true;
-    this.state.isRunning = true;
-    this.log("🚀 Starting ZipRecruiter automation");
-    this.statusOverlay.addInfo("Starting ZipRecruiter automation");
-
     try {
-      // Merge config
+      this.isRunning = true;
+      this.state.isRunning = true;
+      this.log("🚀 Starting ZipRecruiter automation");
+      this.statusOverlay.addInfo("Starting ZipRecruiter automation");
+
+      if (!this.userProfile && this.userId) {
+        try {
+          this.userProfile = await this.userService.getUserDetails();
+          this.statusOverlay.addSuccess("User profile loaded");
+
+          if (this.formHandler && this.userProfile) {
+            this.formHandler.userData = this.userProfile;
+          }
+        } catch (error) {
+          this.statusOverlay.addWarning("Failed to load user profile");
+        }
+      }
+
       this.config = { ...this.config, ...params };
-
-      // Update services with proper userId
-      if (this.config.userId) {
-        this.appTracker = new ApplicationTrackerService({
-          apiHost: this.HOST,
-          userId: this.config.userId,
-        });
-        this.userService = new UserService({
-          apiHost: this.HOST,
-          userId: this.config.userId,
-        });
-      }
-
-      this.log("📋 Configuration loaded:", {
-        jobsToApply: this.config.jobsToApply,
-        userId: this.config.userId,
-      });
-
-      if (!this.config.jobsToApply || this.config.jobsToApply <= 0) {
-        throw new Error("Invalid jobsToApply configuration");
-      }
-
-      // Check user authorization
-      await this.checkUserAuthorization();
-
-      this.updateProgress({ total: this.config.jobsToApply });
-
-      // Wait for page readiness
       await this.waitForPageLoad();
-      this.log("📄 Page loaded, current URL:", window.location.href);
-
-      // Check if we're on the right page
-      const currentUrl = window.location.href.toLowerCase();
-      if (!currentUrl.includes("ziprecruiter.com")) {
-        throw new Error("Not on ZipRecruiter domain");
-      }
-
-      // Check if no jobs were found
-      if (this.checkNoJobsFound()) {
-        this.statusOverlay.addWarning("No jobs found for this search");
-        this.log("No jobs found for this search");
-        return;
-      }
-
-      // Detect pagination info
-      this.detectPaginationInfo();
-
-      // Start processing jobs
-      this.automationStarted = true;
-      this.statusOverlay.updateStatus("applying", "Processing jobs");
-      await this.processJobs();
+      await this.detectPageTypeAndStart();
     } catch (error) {
-      this.hasStarted = false;
       this.reportError(error, { phase: "start" });
-      this.statusOverlay.addError("Failed to start: " + error.message);
     }
   }
 
-  async checkUserAuthorization() {
-    try {
-      this.statusOverlay.addInfo("Checking user authorization...");
+  async detectPageTypeAndStart() {
+    const url = window.location.href;
+    this.log(`🔍 Detecting page type for: ${url}`);
 
-      const canApply = await this.userService.canApplyMore();
-      if (!canApply) {
-        const remaining = await this.userService.getRemainingApplications();
-        const userDetails = await this.userService.getUserDetails();
-
-        const message =
-          userDetails.userRole === "credit"
-            ? `Insufficient credits (${userDetails.credits} remaining)`
-            : `Daily limit reached (${remaining} applications remaining)`;
-
-        this.statusOverlay.addWarning(`Cannot apply: ${message}`);
-        throw new Error(`Cannot apply: ${message}`);
-      }
-
-      this.log("✅ User authorization check passed");
-      this.statusOverlay.addSuccess("User authorization check passed");
-    } catch (error) {
-      this.log("❌ User authorization check failed:", error.message);
-      this.statusOverlay.addError(
-        "User authorization check failed: " + error.message
-      );
-      throw error;
-    }
-  }
-
-  async processJobs() {
-    let appliedCount = 0;
-    let skippedCount = 0;
-    let currentPage = 1;
-    let noNewJobsCount = 0;
-    const MAX_NO_NEW_JOBS = 3;
-    const targetJobs = this.config.jobsToApply;
-
-    try {
-      this.log(`Starting to process jobs. Target: ${targetJobs} jobs`);
-      this.statusOverlay.addInfo(`Starting to process ${targetJobs} jobs`);
-
-      while (appliedCount < targetJobs && this.state.isRunning) {
-        if (
-          this.state.isApplicationInProgress ||
-          this.state.jobProcessingLock
-        ) {
-          this.log("Application in progress, waiting...");
-          await this.delay(5000);
-          continue;
-        }
-
-        const jobCards = this.getUnprocessedJobCards();
-        this.log(`Found ${jobCards.length} job cards on page ${currentPage}`);
-
-        if (jobCards.length === 0) {
-          if (this.state.noMorePages) {
-            this.log("No more jobs or pages to process");
-            this.statusOverlay.addWarning("No more jobs available");
-            break;
-          }
-
-          if (await this.goToNextPage()) {
-            currentPage++;
-            this.log(`Navigated to page ${currentPage}`);
-            this.statusOverlay.addInfo(`Moving to page ${currentPage}`);
-            await this.waitForPageLoad();
-            continue;
-          } else {
-            this.log("No more pages available");
-            break;
-          }
-        }
-
-        let newApplicableJobsFound = false;
-
-        for (const jobCard of jobCards) {
-          if (appliedCount >= targetJobs || !this.state.isRunning) break;
-
-          const jobId = this.getJobIdFromCard(jobCard);
-          if (!jobId || this.state.processedCards.has(jobId)) continue;
-
-          this.state.processedCards.add(jobId);
-          newApplicableJobsFound = true;
-
-          try {
-            // Acquire processing lock
-            this.state.jobProcessingLock = true;
-            this.state.lastProcessedCard = jobCard;
-
-            // Extract job details and click
-            const jobDetails = this.extractJobDetailsFromCard(jobCard);
-            this.state.currentJobDetails = jobDetails;
-
-            this.log(
-              `Processing job: ${jobDetails.title} at ${jobDetails.company}`
-            );
-            this.statusOverlay.addInfo(`Processing: ${jobDetails.title}`);
-
-            // Begin application process
-            await this.beginApplication();
-
-            // Click job card and process
-            await this.clickJobCard(jobCard);
-            await this.waitForJobDetailsLoad();
-
-            // Process the application
-            const success = await this.processJobApplication(
-              jobCard,
-              jobDetails
-            );
-
-            if (success) {
-              appliedCount++;
-              this.updateProgress({ completed: appliedCount });
-              await this.userService.updateApplicationCount();
-
-              this.log(
-                `Successfully applied to job ${appliedCount}/${targetJobs}`
-              );
-              this.statusOverlay.addSuccess(
-                `Applied to job ${appliedCount}/${targetJobs}`
-              );
-
-              this.reportApplicationSubmitted(jobDetails, {
-                method: "1-Click Apply",
-                userId: this.config.userId,
-              });
-            } else {
-              skippedCount++;
-              this.updateProgress({ failed: this.progress.failed + 1 });
-            }
-
-            await this.endApplication(success);
-          } catch (error) {
-            this.log(`Error processing job ${jobId}: ${error.message}`);
-            this.statusOverlay.addError(
-              `Error processing job: ${error.message}`
-            );
-            await this.endApplication(false);
-          } finally {
-            this.state.jobProcessingLock = false;
-            await this.delay(2000); // Rate limiting
-          }
-        }
-
-        if (!newApplicableJobsFound) {
-          noNewJobsCount++;
-          if (noNewJobsCount >= MAX_NO_NEW_JOBS) {
-            this.log("No more applicable jobs found");
-            break;
-          }
-        } else {
-          noNewJobsCount = 0;
-        }
-      }
-
-      const message =
-        appliedCount >= targetJobs
-          ? `Successfully applied to target of ${appliedCount}/${targetJobs} jobs`
-          : `Applied to ${appliedCount}/${targetJobs} jobs - no more jobs available`;
-
-      this.log(message);
-      this.statusOverlay.addSuccess(message);
-      this.reportComplete();
-    } catch (error) {
-      this.log("Error in processJobs:", error.message);
-      this.statusOverlay.addError("Error in processJobs: " + error.message);
-      this.reportError(error, { phase: "processJobs" });
-    }
-  }
-
-  async processJobApplication(jobCard, jobDetails) {
-    try {
-      // Find apply button
-      const applyButton = await this.findApplyButton();
-      if (!applyButton || !this.isElementVisible(applyButton)) {
-        this.log("No apply button found, skipping job");
-        this.markJobCard(jobCard, "skipped");
-        return false;
-      }
-
-      // Check if already applied
-      if (applyButton.textContent.includes("Applied")) {
-        this.log("Job already applied to");
-        this.markJobCard(jobCard, "already_applied");
-        return false;
-      }
-
-      // Check if already applied using service
-      const alreadyApplied = await this.appTracker.checkIfAlreadyApplied(
-        jobDetails.jobId
-      );
-      if (alreadyApplied) {
-        this.log("Already applied to job (from database)");
-        this.markJobCard(jobCard, "already_applied");
-        return false;
-      }
-
-      this.log("Starting application process");
-      this.markJobCard(jobCard, "processing");
-
-      // Click apply button
-      applyButton.click();
-      await this.delay(2000);
-
-      // Handle application flow
-      const success = await this.handleApplicationFlow(jobDetails);
-
-      if (success) {
-        this.markJobCard(jobCard, "applied");
-        await this.saveAppliedJob(jobDetails);
-        return true;
-      } else {
-        this.markJobCard(jobCard, "error");
-        return false;
-      }
-    } catch (error) {
-      this.log(`Error in job application: ${error.message}`);
-      this.markJobCard(jobCard, "error");
-      return false;
-    }
-  }
-
-  async handleApplicationFlow(jobDetails) {
-    try {
-      // Wait for modal or success to appear
-      await this.delay(1500);
-
-      // Check for modal
-      const modalContainer = document.querySelector(
-        this.config.SELECTORS.MODAL_CONTAINER
-      );
-
-      if (modalContainer && this.isElementVisible(modalContainer)) {
-        this.log("Application modal detected - handling form");
-        return await this.handleApplicationForm(jobDetails);
-      }
-
-      // Check for instant success
-      const appliedButton = document.querySelector(
-        this.config.SELECTORS.APPLIED_INDICATOR
-      );
-      if (appliedButton) {
-        this.log("Application submitted instantly");
-        return true;
-      }
-
-      // Check for success in page content
-      const pageContent = document.body.innerText.toLowerCase();
-      const successPhrases = [
-        "application submitted",
-        "successfully applied",
-        "thank you for applying",
-        "application complete",
-      ];
-
-      if (successPhrases.some((phrase) => pageContent.includes(phrase))) {
-        this.log("Application success detected in content");
-        return true;
-      }
-
-      this.log("No success indicators found");
-      return false;
-    } catch (error) {
-      this.log(`Error in application flow: ${error.message}`);
-      return false;
-    }
-  }
-
-  async handleApplicationForm(jobDetails) {
-    try {
-      const userDetails = await this.userService.getUserDetails();
-      const formHandler = new ZipRecruiterFormHandler({
-        logger: (message) => this.statusOverlay.addInfo(message),
-        userData: userDetails,
-        jobDescription: this.scrapeJobDescription(jobDetails),
-        fileHandler: this.fileHandler,
-        aiService: this.aiService,
-      });
-
-      return await formHandler.fillCompleteForm();
-    } catch (error) {
-      this.log(`Form handling error: ${error.message}`);
-      await this.closeFailedApplicationModals();
-      return false;
-    }
-  }
-
-  // Helper methods
-  async beginApplication() {
-    this.state.isApplicationInProgress = true;
-    this.state.applicationStartTime = Date.now();
-    this.statusOverlay.addInfo("Application process started");
-  }
-
-  async endApplication(success) {
-    this.state.isApplicationInProgress = false;
-    this.state.applicationStartTime = null;
-    this.state.formDetected = false;
-
-    if (success) {
-      this.statusOverlay.addSuccess("Application completed successfully");
+    if (url.includes("google.com/search")) {
+      this.statusOverlay.addInfo("Google search page detected");
+      await this.startSearchProcess();
+    } else if (this.isZipRecruiterApplicationPage(url)) {
+      this.statusOverlay.addInfo("ZipRecruiter application page detected");
+      await this.startApplicationProcess();
+    } else if (this.isZipRecruiterJobPage(url)) {
+      this.statusOverlay.addInfo("ZipRecruiter job page detected");
+      await this.handleJobListingPage();
+    } else if (this.isZipRecruiterSearchPage(url)) {
+      this.statusOverlay.addInfo("ZipRecruiter search page detected");
+      await this.startJobSearchProcess();
     } else {
-      this.statusOverlay.addWarning("Application process ended");
+      this.log("❓ Unknown page type, waiting for navigation");
+      await this.waitForValidPage();
     }
   }
 
-  checkNoJobsFound() {
-    return !!document.querySelector(this.config.SELECTORS.NO_JOBS_FOUND);
-  }
-
-  detectPaginationInfo() {
-    try {
-      const paginationContainer = document.querySelector(
-        this.config.SELECTORS.PAGINATION_CONTAINER
-      );
-
-      if (!paginationContainer) {
-        this.state.totalPages = 1;
-        return;
-      }
-
-      const pageLinks =
-        paginationContainer.querySelectorAll("a[title^='Page:']");
-      if (pageLinks.length > 0) {
-        const pageNumbers = Array.from(pageLinks)
-          .map((link) => {
-            const match = link.getAttribute("title").match(/Page: (\d+)/);
-            return match ? parseInt(match[1], 10) : 0;
-          })
-          .filter((num) => num > 0);
-
-        if (pageNumbers.length > 0) {
-          this.state.totalPages = Math.max(...pageNumbers);
+  getZipRecruiterJobCards() {
+    for (const selector of ZIPRECRUITER_SELECTORS.JOB_CARDS) {
+      const cards = document.querySelectorAll(selector);
+      if (cards.length > 0) {
+        const visibleCards = Array.from(cards).filter((card) =>
+          this.isElementVisible(card)
+        );
+        if (visibleCards.length > 0) {
+          return visibleCards;
         }
       }
-
-      // Check if on last page
-      const nextPageDisabled = paginationContainer.querySelector(
-        this.config.SELECTORS.LAST_PAGE_INDICATOR
-      );
-      if (nextPageDisabled) {
-        this.state.noMorePages = true;
-      }
-
-      this.log(
-        `Pagination detected: Page ${this.state.currentPage} of ${this.state.totalPages}`
-      );
-    } catch (error) {
-      this.state.currentPage = 1;
-      this.state.totalPages = 1;
     }
+
+    const fallbackCards = document.querySelectorAll(
+      '[data-job], [class*="job"], [id*="job"]'
+    );
+    return Array.from(fallbackCards).filter(
+      (card) => this.isElementVisible(card) && card.querySelector('a[href*="job"]')
+    );
   }
 
   getUnprocessedJobCards() {
-    const allCards = document.querySelectorAll(this.config.SELECTORS.JOB_CARDS);
+    const allCards = this.getZipRecruiterJobCards();
     return Array.from(allCards).filter((card) => {
-      const cardId = this.getJobIdFromCard(card);
-      return cardId && !this.state.processedCards.has(cardId);
+      const cardId = this.getJobCardId(card);
+      return !this.state.processedCards.has(cardId);
     });
   }
 
-  getJobIdFromCard(jobCard) {
+  getJobCardId(jobCard) {
     try {
-      const dataId =
-        jobCard.getAttribute("data-job-id") ||
+      const dataId = jobCard.getAttribute("data-job-id") ||
         jobCard.getAttribute("data-id") ||
         jobCard.id;
 
       if (dataId) return dataId;
 
-      const jobLink = jobCard.querySelector(
-        "a[href*='ziprecruiter.com/jobs/']"
-      );
-      if (jobLink?.href) return jobLink.href;
+      const titleLink = jobCard.querySelector('a[href*="job"]');
+      if (titleLink && titleLink.href) {
+        return titleLink.href;
+      }
 
-      const title =
-        jobCard
-          .querySelector(this.config.SELECTORS.JOB_TITLE)
-          ?.textContent.trim() || "";
-      const company =
-        jobCard
-          .querySelector(this.config.SELECTORS.COMPANY_NAME)
-          ?.textContent.trim() || "";
+      const title = this.getJobTitleFromCard(jobCard) || "";
+      const company = this.getCompanyFromCard(jobCard) || "";
+      const fallbackId = `${title}-${company}`
+        .replace(/\s+/g, "")
+        .toLowerCase();
 
-      return `${title}-${company}`.replace(/\s+/g, "").toLowerCase();
+      return fallbackId || `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     } catch (error) {
-      return Math.random().toString(36).substring(2, 15);
+      return `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }
+  }
+
+  getJobUrlFromCard(card) {
+    const selectors = [
+      'a[href*="ziprecruiter.com/jobs"]',
+      'a[href*="job"]',
+      "h2 a",
+      "a",
+    ];
+
+    for (const selector of selectors) {
+      const link = card.querySelector(selector);
+      if (link && link.href && link.href.includes("ziprecruiter.com")) {
+        return link.href;
+      }
+    }
+
+    return null;
+  }
+
+  getJobTitleFromCard(card) {
+    for (const selector of ZIPRECRUITER_SELECTORS.JOB_TITLE) {
+      const element = card.querySelector(selector);
+      if (element) {
+        const title = element.getAttribute("title") || element.textContent?.trim();
+        if (title && title.length > 0) {
+          return title;
+        }
+      }
+    }
+    return "Job Application";
+  }
+
+  getCompanyFromCard(jobCard) {
+    for (const selector of ZIPRECRUITER_SELECTORS.COMPANY_NAME) {
+      const element = jobCard.querySelector(selector);
+      if (element) {
+        return element.textContent?.trim() || "";
+      }
+    }
+    return "";
+  }
+
+  getLocationFromCard(jobCard) {
+    for (const selector of ZIPRECRUITER_SELECTORS.LOCATION) {
+      const element = jobCard.querySelector(selector);
+      if (element) {
+        return element.textContent?.trim() || "";
+      }
+    }
+    return "";
+  }
+
+  getSalaryFromCard(jobCard) {
+    for (const selector of ZIPRECRUITER_SELECTORS.SALARY) {
+      const element = jobCard.querySelector(selector);
+      if (element) {
+        return element.textContent?.trim() || "";
+      }
+    }
+    return "";
   }
 
   extractJobDetailsFromCard(jobCard) {
     try {
-      const title =
-        jobCard
-          .querySelector(this.config.SELECTORS.JOB_TITLE)
-          ?.textContent.trim() || "Unknown Position";
-      const company =
-        jobCard
-          .querySelector(this.config.SELECTORS.COMPANY_NAME)
-          ?.textContent.trim() || "Unknown Company";
-      const location =
-        jobCard
-          .querySelector(this.config.SELECTORS.LOCATION)
-          ?.textContent.trim() || "Unknown Location";
-
-      const jobId = this.getJobIdFromCard(jobCard);
-      const jobUrl = window.location.href;
+      const title = this.getJobTitleFromCard(jobCard) || "Unknown Position";
+      const company = this.getCompanyFromCard(jobCard) || "Unknown Company";
+      const location = this.getLocationFromCard(jobCard) || "Unknown Location";
+      const salary = this.getSalaryFromCard(jobCard) || "Not specified";
+      const jobUrl = this.getJobUrlFromCard(jobCard) || window.location.href;
+      const jobId = this.getJobCardId(jobCard);
 
       return {
         jobId,
         title,
         company,
         location,
+        salary,
         jobUrl,
-        platform: this.platform,
+        platform: "ziprecruiter",
         extractedAt: Date.now(),
+        workplace: "Not specified",
+        postedDate: this.extractPostedDate(jobCard),
+        applicants: "Not specified",
       };
     } catch (error) {
       return {
@@ -599,40 +433,71 @@ export default class ZipRecruiterPlatform extends BasePlatform {
         title: "Unknown Position",
         company: "Unknown Company",
         location: "Unknown Location",
+        salary: "Not specified",
         jobUrl: window.location.href,
-        platform: this.platform,
+        platform: "ziprecruiter",
+        extractedAt: Date.now(),
       };
+    }
+  }
+
+  extractPostedDate(jobCard) {
+    try {
+      const elements = jobCard.querySelectorAll("p.text-primary, .date, .posted");
+      for (const element of elements) {
+        const text = element.textContent.trim();
+        if (text && text.toLowerCase().includes("posted")) {
+          return text;
+        }
+      }
+      return "Not specified";
+    } catch (error) {
+      return "Not specified";
     }
   }
 
   markJobCard(jobCard, status) {
     try {
-      if (!jobCard) return;
-
       const existingHighlight = jobCard.querySelector(".job-highlight");
-      if (existingHighlight) existingHighlight.remove();
+      if (existingHighlight) {
+        existingHighlight.remove();
+      }
 
       const highlight = document.createElement("div");
       highlight.className = "job-highlight";
 
-      const statusConfig = {
-        processing: { color: "#2196F3", text: "Processing" },
-        applied: { color: "#4CAF50", text: "Applied" },
-        already_applied: { color: "#8BC34A", text: "Already Applied" },
-        skipped: { color: "#FF9800", text: "Skipped" },
-        error: { color: "#F44336", text: "Error" },
-      };
-
-      const config = statusConfig[status] || {
-        color: "#9E9E9E",
-        text: "Unknown",
-      };
+      let color, text;
+      switch (status) {
+        case "processing":
+          color = "#2196F3";
+          text = "Processing";
+          break;
+        case "applied":
+          color = "#4CAF50";
+          text = "Applied";
+          break;
+        case "already_applied":
+          color = "#8BC34A";
+          text = "Already Applied";
+          break;
+        case "skipped":
+          color = "#FF9800";
+          text = "Skipped";
+          break;
+        case "error":
+          color = "#F44336";
+          text = "Error";
+          break;
+        default:
+          color = "#9E9E9E";
+          text = "Unknown";
+      }
 
       highlight.style.cssText = `
         position: absolute;
         top: 0;
         right: 0;
-        background-color: ${config.color};
+        background-color: ${color};
         color: white;
         padding: 3px 8px;
         font-size: 12px;
@@ -640,208 +505,1089 @@ export default class ZipRecruiterPlatform extends BasePlatform {
         border-radius: 0 0 0 5px;
         z-index: 999;
       `;
-      highlight.textContent = config.text;
+      highlight.textContent = text;
 
-      jobCard.style.border = `2px solid ${config.color}`;
+      jobCard.style.border = `2px solid ${color}`;
       jobCard.style.position = "relative";
       jobCard.appendChild(highlight);
     } catch (error) {
-      this.log("Error marking job card:", error.message);
+      this.log("Error marking job card:", error);
     }
   }
 
-  async findApplyButton() {
+  async startSearchProcess() {
     try {
-      const button = await this.waitForElement(
-        this.config.SELECTORS.APPLY_BUTTON,
-        5000
+      this.statusOverlay.addInfo("Starting job search process");
+      this.statusOverlay.updateStatus("searching");
+      await this.fetchSearchTaskData();
+    } catch (error) {
+      this.reportError(error, { phase: "search" });
+    }
+  }
+
+  async startJobSearchProcess() {
+    try {
+      this.statusOverlay.addInfo("Starting job search on ZipRecruiter results page");
+      this.statusOverlay.updateStatus("searching");
+      await this.fetchSearchTaskData();
+    } catch (error) {
+      this.reportError(error, { phase: "jobSearch" });
+    }
+  }
+
+  async fetchSearchTaskData() {
+    this.log("📡 Fetching search task data from background");
+    this.statusOverlay.addInfo("Fetching search task data...");
+
+    const success = this.safeSendPortMessage({ type: "GET_SEARCH_TASK" });
+    if (!success) {
+      throw new Error("Failed to request search task data");
+    }
+  }
+
+  processSearchTaskData(data) {
+    try {
+      this.log("📊 Processing search task data:", data);
+
+      if (!data) {
+        this.log("⚠️ No search task data provided");
+        return;
+      }
+
+      this.searchData = {
+        tabId: data.tabId,
+        limit: data.limit || 10,
+        current: data.current || 0,
+        domain: data.domain || this.getPlatformDomains(),
+        submittedLinks: data.submittedLinks
+          ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
+          : [],
+        searchLinkPattern: data.searchLinkPattern
+          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
+          : this.getSearchLinkPattern(),
+      };
+
+      this.statusOverlay.addSuccess("Search initialization complete");
+      setTimeout(() => this.searchNext(), 1000);
+    } catch (error) {
+      this.statusOverlay.addError("Error processing search task data: " + error.message);
+    }
+  }
+
+  async searchNext() {
+    try {
+      if (this.state.isApplicationInProgress) {
+        this.log("Application in progress, checking status...");
+        this.statusOverlay.addInfo("Application in progress, waiting...");
+
+        const now = Date.now();
+        const applicationDuration = now - (this.state.applicationStartTime || now);
+
+        if (applicationDuration > ZIPRECRUITER_CONFIG.TIMEOUTS.APPLICATION_TIMEOUT) {
+          this.log("Application timeout detected, resetting...");
+          this.statusOverlay.addWarning("Application timeout detected, resetting...");
+          this.resetApplicationStateOnError();
+        } else {
+          this.safeSendPortMessage({ type: "CHECK_APPLICATION_STATUS" });
+          return;
+        }
+      }
+
+      this.statusOverlay.addInfo("Searching for job cards...");
+
+      if (this.isZipRecruiterSearchPage(window.location.href)) {
+        await this.processZipRecruiterJobCards();
+      } else if (window.location.href.includes("google.com/search")) {
+        await super.searchNext();
+      } else {
+        this.statusOverlay.addWarning("Unknown page type for search");
+        await this.waitForValidPage();
+      }
+    } catch (err) {
+      this.statusOverlay.addError("Error in search: " + err.message);
+      this.resetApplicationStateOnError();
+      setTimeout(() => {
+        if (!this.state.isApplicationInProgress) {
+          this.searchNext();
+        }
+      }, 5000);
+    }
+  }
+
+  async processZipRecruiterJobCards() {
+    try {
+      const jobCards = this.getZipRecruiterJobCards();
+      this.log(`Found ${jobCards.length} job cards on ZipRecruiter page`);
+
+      if (jobCards.length === 0) {
+        await this.handleNoJobCardsFound();
+        return;
+      }
+
+      const unprocessedCard = await this.findValidUnprocessedJobCard(jobCards);
+
+      if (unprocessedCard) {
+        await this.processZipRecruiterJobCard(unprocessedCard);
+      } else {
+        await this.handleNoUnprocessedJobCards();
+      }
+    } catch (error) {
+      this.statusOverlay.addError("Error processing job cards: " + error.message);
+      throw error;
+    }
+  }
+
+  async findValidUnprocessedJobCard(jobCards) {
+    for (const card of jobCards) {
+      try {
+        const cardId = this.getJobCardId(card);
+
+        if (this.state.processedCards.has(cardId)) {
+          continue;
+        }
+
+        const jobUrl = this.getJobUrlFromCard(card);
+        if (!jobUrl) {
+          continue;
+        }
+
+        if (!this.isValidJobUrl(jobUrl)) {
+          continue;
+        }
+
+        const normalizedUrl = this.normalizeUrlFully(jobUrl);
+
+        if (this.isLinkProcessed(normalizedUrl)) {
+          this.state.processedCards.add(cardId);
+          continue;
+        }
+
+        const hasTitle = this.getJobTitleFromCard(card);
+        if (!hasTitle || hasTitle === "Job Application") {
+          continue;
+        }
+
+        return { card, url: jobUrl, cardId };
+      } catch (error) {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  isValidJobUrl(url) {
+    if (!url || typeof url !== "string") return false;
+
+    try {
+      const urlObj = new URL(url);
+      if (!urlObj.hostname.includes("ziprecruiter.com")) return false;
+      if (!url.includes("job")) return false;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async processZipRecruiterJobCard(jobData) {
+    const { card, url, cardId } = jobData;
+
+    try {
+      this.statusOverlay.addSuccess("Found ZipRecruiter job to apply: " + url);
+      this.state.processedCards.add(cardId);
+
+      if (this.state.isApplicationInProgress) {
+        return;
+      }
+
+      const canApply = await this.userService.canApplyMore();
+      if (!canApply) {
+        this.statusOverlay.addWarning("Application limit reached");
+        return;
+      }
+
+      const jobDetails = this.extractJobDetailsFromCard(card);
+      this.markJobCard(card, "processing");
+
+      this.state.isApplicationInProgress = true;
+      this.state.applicationStartTime = Date.now();
+      this.state.lastProcessedCard = card;
+      this.currentJobDetails = jobDetails;
+
+      if (!this.applicationState.processedUrls) {
+        this.applicationState.processedUrls = new Set();
+      }
+      this.applicationState.processedUrls.add(this.normalizeUrlFully(url));
+
+      this.safeSendPortMessage({
+        type: this.getJobTaskMessageType(),
+        data: {
+          url,
+          title: jobDetails.title,
+          company: jobDetails.company,
+          location: jobDetails.location,
+        },
+      });
+    } catch (err) {
+      this.handleJobTaskError(err, url, card);
+    }
+  }
+
+  async handleNoJobCardsFound() {
+    this.statusOverlay.addInfo("No job cards found, attempting to load more...");
+
+    window.scrollTo(0, document.body.scrollHeight);
+    await this.wait(2000);
+
+    const jobCardsAfterScroll = this.getZipRecruiterJobCards();
+    if (jobCardsAfterScroll.length > 0) {
+      this.statusOverlay.addInfo("Found jobs after scrolling");
+      return await this.processZipRecruiterJobCards();
+    }
+
+    const nextButton = document.querySelector(
+      ZIPRECRUITER_SELECTORS.NEXT_PAGE_BUTTON[0]
+    );
+
+    if (nextButton && this.isElementVisible(nextButton) && !nextButton.disabled) {
+      this.statusOverlay.addInfo('Clicking "Next Page" button');
+      nextButton.click();
+      await this.wait(3000);
+
+      if (!this.state.isApplicationInProgress) {
+        return this.searchNext();
+      }
+    } else {
+      this.statusOverlay.addSuccess("All ZipRecruiter jobs processed!");
+      this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+    }
+  }
+
+  async startApplicationProcess() {
+    try {
+      this.log("📝 Starting ZipRecruiter application process");
+      this.statusOverlay.addInfo("Starting application process");
+
+      if (!this.userProfile) {
+        await this.fetchSendCvTaskData();
+      }
+
+      if (this.checkApplicationSuccess()) {
+        await this.handleAlreadyApplied();
+        return;
+      }
+
+      await this.apply();
+    } catch (error) {
+      this.reportError(error, { phase: "application" });
+      this.handleApplicationError(error);
+    }
+  }
+
+  async handleJobListingPage() {
+    try {
+      this.statusOverlay.addInfo("ZipRecruiter job listing page detected");
+
+      this.cachedJobDescription = await this.extractZipRecruiterJobDescription();
+
+      const applyButton = await this.findZipRecruiterApplyButton();
+      if (!applyButton) {
+        throw new Error("Cannot find Apply button on ZipRecruiter job listing page");
+      }
+
+      applyButton.click();
+      await this.waitForZipRecruiterApplicationPage();
+      this.statusOverlay.addSuccess("Application page loaded successfully");
+
+      await this.startApplicationProcess();
+    } catch (error) {
+      this.reportError(error, { phase: "jobListing" });
+      this.handleApplicationError(error);
+    }
+  }
+
+  async apply() {
+    try {
+      this.statusOverlay.addInfo("Starting ZipRecruiter application process");
+      this.statusOverlay.updateStatus("applying");
+
+      if (!this.validateHandlers()) {
+        throw new Error("Required handlers are not properly initialized");
+      }
+
+      return await this.handleApplyForm();
+    } catch (e) {
+      throw new Error("Error during application process: " + this.errorToString(e));
+    }
+  }
+
+  async handleApplyForm() {
+    try {
+      await this.sleep(1500);
+
+      if (!this.formHandler) {
+        this.statusOverlay.addError("Form handler not available");
+        return false;
+      }
+
+      this.formHandler.jobDescription =
+        this.cachedJobDescription || (await this.extractZipRecruiterJobDescription());
+      this.formHandler.userData = this.userProfile;
+
+      this.statusOverlay.addInfo("Starting comprehensive form filling process");
+
+      const success = await this.formHandler.fillCompleteForm();
+
+      if (success) {
+        this.statusOverlay.addSuccess("Application submitted successfully!");
+        this.markLastJobCardIfAvailable("applied");
+        await this.trackApplication(this.currentJobDetails);
+      } else {
+        this.statusOverlay.addInfo("Application process completed but success not confirmed");
+      }
+
+      return success;
+    } catch (error) {
+      this.statusOverlay.addError("Form submission error: " + error.message);
+      this.markLastJobCardIfAvailable("error");
+      return false;
+    }
+  }
+
+  async findZipRecruiterApplyButton() {
+    try {
+      for (const selector of ZIPRECRUITER_SELECTORS.APPLY_BUTTON) {
+        const button = document.querySelector(selector);
+        if (button && this.isElementVisible(button) && !button.disabled) {
+          this.statusOverlay.addSuccess("✅ Found Apply button");
+          return button;
+        }
+      }
+
+      const allButtons = document.querySelectorAll("button, a");
+      for (const button of allButtons) {
+        if (
+          button.textContent.toLowerCase().includes("apply") &&
+          this.isElementVisible(button) &&
+          !button.disabled
+        ) {
+          return button;
+        }
+      }
+
+      this.statusOverlay.addWarning("❌ No apply button found");
+      return null;
+    } catch (error) {
+      this.statusOverlay.addError("Error finding apply button: " + error.message);
+      return null;
+    }
+  }
+
+  isOnApplyFormPage() {
+    const url = window.location.href;
+
+    if (url.includes("ziprecruiter.com/apply") || url.includes("ziprecruiter.com/job")) {
+      return true;
+    }
+
+    const hasFormElements = ZIPRECRUITER_SELECTORS.MODAL_CONTAINER.some((selector) => {
+      const element = document.querySelector(selector);
+      return element && this.isElementVisible(element);
+    });
+
+    return hasFormElements;
+  }
+
+  setupFormDetectionObserver() {
+    try {
+      this.formObserver = new MutationObserver((mutations) => {
+        if (this.state.isApplicationInProgress || this.isOnApplyPage()) {
+          const hasForm = ZIPRECRUITER_SELECTORS.MODAL_CONTAINER.some((selector) => {
+            const element = document.querySelector(selector);
+            return element && this.isElementVisible(element);
+          });
+
+          if (hasForm && !this.state.formDetected) {
+            this.state.formDetected = true;
+            setTimeout(() => {
+              this.handleDetectedForm();
+            }, 1000);
+          }
+        }
+      });
+
+      this.formObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    } catch (error) {
+      this.log("Error setting up form observer:", error);
+    }
+  }
+
+  isOnApplyPage() {
+    const url = window.location.href;
+    return url.includes("ziprecruiter.com/apply") ||
+      url.includes("ziprecruiter.com/job");
+  }
+
+  async trackApplication(jobDetails) {
+    try {
+      if (!this.userProfile || !this.userId) {
+        return;
+      }
+
+      await this.applicationTracker.updateApplicationCount();
+      await this.applicationTracker.saveAppliedJob({
+        ...jobDetails,
+        userId: this.userId,
+        applicationPlatform: "ziprecruiter",
+      });
+    } catch (error) {
+      this.log("Error tracking application:", error);
+    }
+  }
+
+  async extractZipRecruiterJobDescription() {
+    try {
+      this.statusOverlay.addInfo("Extracting job details...");
+
+      const jobDescription = {
+        title: DomUtils.extractText([
+          "h1",
+          ".job-title",
+          "[data-testid='job-title']",
+        ]),
+        company: DomUtils.extractText([
+          ".company-name",
+          "[data-testid='company-name']",
+          ".hiring-company",
+        ]),
+        location: DomUtils.extractText([
+          ".location",
+          "[data-testid='location']",
+          ".job-location",
+        ]),
+        salary: DomUtils.extractText([
+          ".salary",
+          "[data-testid='salary']",
+          ".compensation",
+        ]),
+      };
+
+      const fullDescriptionElement = document.querySelector(
+        '.job-description, .description, [data-testid="job-description"]'
       );
-      return button;
+
+      if (fullDescriptionElement) {
+        jobDescription.fullDescription = fullDescriptionElement.textContent.trim();
+      }
+
+      return jobDescription;
+    } catch (error) {
+      this.log("❌ Error extracting ZipRecruiter job details:", error);
+      return { title: document.title || "Job Position" };
+    }
+  }
+
+  extractJobIdFromUrl() {
+    try {
+      const url = window.location.href;
+      const match = url.match(/\/job\/([^\/\?]+)/);
+      return match ? match[1] : null;
     } catch (error) {
       return null;
     }
   }
 
-  async clickJobCard(jobCard) {
+  async getProfileData() {
     try {
-      const clickableElement = jobCard.querySelector("h2 a") || jobCard;
-      clickableElement.click();
-      await this.delay(2000);
-      return true;
-    } catch (error) {
-      throw new Error("Failed to click job card");
-    }
-  }
-
-  async waitForJobDetailsLoad() {
-    await this.delay(1000);
-    // Basic wait - ZipRecruiter loads details quickly
-  }
-
-  async goToNextPage() {
-    try {
-      const nextButton = document.querySelector(
-        this.config.SELECTORS.NEXT_PAGE_BUTTON
-      );
-
-      if (nextButton && this.isElementVisible(nextButton)) {
-        const isDisabled =
-          nextButton.hasAttribute("disabled") ||
-          nextButton.classList.contains("disabled");
-
-        if (isDisabled) {
-          this.state.noMorePages = true;
-          return false;
-        }
-
-        this.state.currentPage++;
-        nextButton.click();
-        return true;
+      if (this.userProfile) {
+        return this.userProfile;
       }
 
-      this.state.noMorePages = true;
-      return false;
+      this.statusOverlay.addInfo("Fetching profile data");
+
+      try {
+        return new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            { action: "getProfileData" },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                this.statusOverlay.addInfo("Error from background: " + chrome.runtime.lastError.message);
+                resolve(this.getFallbackProfile());
+              } else if (response && response.success && response.data) {
+                this.statusOverlay.addInfo("Got profile data from background script");
+                resolve(response.data);
+              } else {
+                this.statusOverlay.addInfo("No valid profile data in response, using fallback");
+                resolve(this.getFallbackProfile());
+              }
+            }
+          );
+        });
+      } catch (err) {
+        this.statusOverlay.addInfo("Error requesting profile data: " + err.message);
+        return this.getFallbackProfile();
+      }
     } catch (error) {
-      return false;
+      this.log("Error getting profile data:", error);
+      return this.getFallbackProfile();
     }
   }
 
-  async closeFailedApplicationModals() {
-    try {
-      const closeButtons = Array.from(
-        document.querySelectorAll(
-          'button[title="Close"], button[aria-label="Close"]'
-        )
-      );
+  getFallbackProfile() {
+    this.statusOverlay.addInfo("Using fallback profile data");
+    return this.userProfile;
+  }
 
-      for (const button of closeButtons) {
-        if (this.isElementVisible(button)) {
-          button.click();
-          await this.delay(1000);
+  checkApplicationSuccess() {
+    const url = window.location.href;
+    if (url.includes("success") || url.includes("confirmation") || url.includes("applied")) {
+      this.statusOverlay.addSuccess("URL indicates success - application submitted");
+      return true;
+    }
+
+    const successSelectors = [
+      ".application-success",
+      ".success-message",
+      ".confirmation",
+      ".applied-status",
+    ];
+
+    for (const selector of successSelectors) {
+      if (document.querySelector(selector)) {
+        this.statusOverlay.addSuccess("Success message found - application submitted");
+        return true;
+      }
+    }
+
+    const pageText = document.body.innerText.toLowerCase();
+    return pageText.includes("application submitted") ||
+      pageText.includes("successfully applied") ||
+      pageText.includes("thank you for applying") ||
+      pageText.includes("application complete");
+  }
+
+  checkAlreadyApplied() {
+    const pageText = document.body.innerText.toLowerCase();
+    const alreadyAppliedTexts = [
+      "you've applied to this job",
+      "already applied",
+      "application submitted",
+      "you applied",
+    ];
+
+    return alreadyAppliedTexts.some((text) => pageText.includes(text));
+  }
+
+  async checkZipRecruiterAlreadyApplied() {
+    try {
+      const url = window.location.href;
+
+      if (url.includes("ziprecruiter.com")) {
+        const pageText = document.body.innerText;
+        const alreadyAppliedText = "You've applied to this job";
+
+        if (pageText.includes(alreadyAppliedText)) {
+          this.statusOverlay.addInfo("Found 'You've applied to this job' message - already applied");
           return true;
         }
       }
-      return false;
-    } catch (error) {
-      return false;
-    }
-  }
 
-  async saveAppliedJob(jobDetails) {
-    try {
-      const success = await this.appTracker.saveAppliedJob({
-        jobId: jobDetails.jobId,
-        title: jobDetails.title,
-        company: jobDetails.company,
-        location: jobDetails.location,
-        jobUrl: window.location.href,
-        salary: jobDetails.salary || "Not specified",
-        platform: this.platform,
-      });
+      const appliedIndicators = [
+        ".applied-status",
+        ".application-submitted",
+        ".already-applied",
+      ];
 
-      if (success) {
-        await this.appTracker.updateApplicationCount();
-        this.log(`✅ Job application saved: ${jobDetails.title}`);
-        return true;
+      for (const selector of appliedIndicators) {
+        if (document.querySelector(selector)) {
+          this.statusOverlay.addInfo("Found applied indicator - already applied");
+          return true;
+        }
       }
+
       return false;
     } catch (error) {
-      this.log(`❌ Error saving job application: ${error.message}`);
       return false;
     }
   }
 
-  scrapeJobDescription(jobDetails) {
-    const descriptionElement = document.querySelector(
-      ".job-description, .job-details-description"
-    );
-    if (descriptionElement) {
-      return descriptionElement.textContent.trim();
-    }
-    return `${jobDetails.title} at ${jobDetails.company} in ${jobDetails.location}`;
+  isZipRecruiterSearchPage(url) {
+    return /ziprecruiter\.com\/(jobs|search)/.test(url);
   }
 
-  // Utility methods
-  async waitForPageLoad() {
-    try {
-      await this.waitForElement(this.config.SELECTORS.JOB_CARDS, 10000);
-      await this.delay(2000);
-    } catch (error) {
-      this.log("Page load timeout");
-    }
+  isZipRecruiterJobPage(url) {
+    return /ziprecruiter\.com\/job\//.test(url);
   }
 
-  async waitForElement(selector, timeout = 10000) {
+  isZipRecruiterApplicationPage(url) {
+    return /ziprecruiter\.com\/apply/.test(url);
+  }
+
+  async waitForZipRecruiterApplicationPage(timeout = 10000) {
     const startTime = Date.now();
+
     while (Date.now() - startTime < timeout) {
-      const element = document.querySelector(selector);
-      if (element) return element;
-      await this.delay(100);
+      if (this.isZipRecruiterApplicationPage(window.location.href)) {
+        const form = document.querySelector(ZIPRECRUITER_SELECTORS.MODAL_CONTAINER[0]);
+        if (form) {
+          return true;
+        }
+      }
+      await this.wait(500);
     }
-    throw new Error(`Element not found: ${selector}`);
+
+    throw new Error("Timeout waiting for ZipRecruiter application page to load");
+  }
+
+  async handleDetectedForm() {
+    try {
+      const alreadyApplied = await this.checkZipRecruiterAlreadyApplied();
+      if (alreadyApplied) {
+        this.statusOverlay.addInfo("Job already applied to, moving to next job");
+        if (this.state.isRunning) {
+          setTimeout(() => this.processNextJob(), 2000);
+        }
+        return;
+      }
+
+      this.statusOverlay.addInfo("Form detected, starting application process");
+
+      if (!this.userProfile) {
+        this.userProfile = await this.getProfileData();
+      }
+
+      if (this.userProfile) {
+        const success = await this.handleApplyForm();
+
+        if (success) {
+          this.statusOverlay.addSuccess("Application submitted successfully");
+          if (this.currentJobDetails) {
+            this.trackApplication(this.currentJobDetails);
+          }
+          this.markLastJobCardIfAvailable("applied");
+        } else {
+          this.statusOverlay.addInfo("Failed to complete application");
+          this.markLastJobCardIfAvailable("error");
+        }
+
+        this.state.isApplicationInProgress = false;
+        this.state.applicationStartTime = null;
+        this.state.formDetected = false;
+
+        if (this.state.isRunning) {
+          this.statusOverlay.addInfo("Moving to next job...");
+          setTimeout(() => this.processNextJob(), 2000);
+        }
+      } else {
+        this.statusOverlay.addError("No profile data available for form filling");
+        this.state.isApplicationInProgress = false;
+        this.state.applicationStartTime = null;
+        this.state.formDetected = false;
+
+        if (this.state.isRunning) {
+          setTimeout(() => this.processNextJob(), 2000);
+        }
+      }
+    } catch (error) {
+      this.statusOverlay.addError("Error handling form: " + error.message);
+
+      this.state.isApplicationInProgress = false;
+      this.state.applicationStartTime = null;
+      this.state.formDetected = false;
+
+      if (this.state.isRunning) {
+        setTimeout(() => this.processNextJob(), 2000);
+      }
+    }
+  }
+
+  checkHealth() {
+    try {
+      if (this.state.isApplicationInProgress && this.state.applicationStartTime) {
+        const now = Date.now();
+        const applicationTime = now - this.state.applicationStartTime;
+
+        if (applicationTime > ZIPRECRUITER_CONFIG.TIMEOUTS.APPLICATION_TIMEOUT) {
+          this.log("Application appears to be stuck, resetting state");
+          this.markLastJobCardIfAvailable("error");
+
+          this.state.isApplicationInProgress = false;
+          this.state.applicationStartTime = null;
+          this.state.formDetected = false;
+
+          this.statusOverlay.addWarning("Application timeout detected - resetting state");
+          this.statusOverlay.updateStatus("error");
+
+          if (this.state.isRunning) {
+            setTimeout(() => this.processNextJob(), 2000);
+          }
+        }
+      }
+
+      if (this.state.isRunning) {
+        const now = Date.now();
+        const inactiveTime = now - this.state.lastActivity;
+
+        if (inactiveTime > 120000) {
+          this.log("Automation appears inactive, attempting recovery");
+
+          if (this.state.isApplicationInProgress) {
+            this.state.isApplicationInProgress = false;
+            this.state.applicationStartTime = null;
+            this.state.formDetected = false;
+          }
+
+          this.state.lastActivity = now;
+          this.processNextJob();
+        }
+      }
+    } catch (error) {
+      this.log("Error in health check:", error);
+    }
+  }
+
+  handlePlatformSpecificMessage(type, data) {
+    switch (type) {
+      case "SUCCESS":
+        this.handleSuccessMessage(data);
+        break;
+
+      case "APPLICATION_STATUS_RESPONSE":
+        this.handleApplicationStatusResponse(data);
+        break;
+
+      case "JOB_TAB_STATUS":
+        this.handleJobTabStatus(data);
+        break;
+
+      case "NEXT_READY_ACKNOWLEDGED":
+        this.handleSearchNextReady(data);
+        break;
+
+      default:
+        super.handlePlatformSpecificMessage(type, data);
+    }
+  }
+
+  handleSuccessMessage(data) {
+    if (data) {
+      if (data.submittedLinks !== undefined) {
+        this.processSearchTaskData(data);
+      } else if (data.profile !== undefined && !this.userProfile) {
+        this.processSendCvTaskData(data);
+      }
+    }
+  }
+
+  handleApplicationStatusResponse(data) {
+    if (data && data.active === false && this.state.isApplicationInProgress) {
+      this.log("⚠️ State mismatch detected! Resetting application progress flag");
+      this.state.isApplicationInProgress = false;
+      this.state.applicationStartTime = null;
+      this.statusOverlay.addWarning("Detected state mismatch - resetting flags");
+      setTimeout(() => this.searchNext(), 1000);
+    }
+  }
+
+  handleJobTabStatus(data) {
+    if (data && !data.isOpen && this.state.isApplicationInProgress) {
+      this.log("⚠️ Job tab closed but application still in progress - resetting");
+      this.resetApplicationStateOnError();
+    }
+  }
+
+  handleSearchNextReady(data) {
+    setTimeout(() => {
+      if (!this.state.isApplicationInProgress) {
+        this.searchNext();
+      }
+    }, 1000);
+  }
+
+  async fetchSendCvTaskData() {
+    if (this.userProfile && this.hasSessionContext) {
+      return;
+    }
+
+    this.statusOverlay.addInfo("Fetching CV task data...");
+
+    const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
+    if (!success) {
+      throw new Error("Failed to request send CV task data");
+    }
+  }
+
+  processSendCvTaskData(data) {
+    try {
+      if (data?.profile && !this.userProfile) {
+        this.userProfile = data.profile;
+      }
+
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      this.statusOverlay.addSuccess("Apply initialization complete");
+    } catch (error) {
+      this.statusOverlay.addError("Error processing CV data: " + error.message);
+    }
+  }
+
+  async handleAlreadyApplied() {
+    const jobId = UrlUtils.extractJobId(window.location.href, "ziprecruiter");
+    const jobDetails = await this.extractZipRecruiterJobDescription();
+
+    this.safeSendPortMessage({
+      type: "SEND_CV_TASK_DONE",
+      data: {
+        jobId: jobId,
+        title: jobDetails.title || "Job on ZipRecruiter",
+        company: jobDetails.company || "Company on ZipRecruiter",
+        location: jobDetails.location || "Not specified",
+        jobUrl: window.location.href,
+        platform: "ziprecruiter",
+      },
+    });
+
+    this.state.isApplicationInProgress = false;
+    this.statusOverlay.addSuccess("Application completed successfully");
+  }
+
+  handleJobTaskError(error, url, card) {
+    this.statusOverlay.addError("Error processing job: " + error.message);
+
+    this.state.isApplicationInProgress = false;
+    this.state.applicationStartTime = null;
+    this.state.formDetected = false;
+
+    if (card) {
+      card.style.border = "";
+      card.style.backgroundColor = "";
+      const indicator = card.querySelector(".processing-indicator");
+      if (indicator) {
+        indicator.remove();
+      }
+    }
+
+    setTimeout(() => {
+      if (!this.state.isApplicationInProgress) {
+        this.searchNext();
+      }
+    }, 3000);
+  }
+
+  handleApplicationError(error) {
+    if (error.name === "SendCvSkipError" || error.name === "ApplicationSkipError") {
+      this.statusOverlay.addWarning("Application skipped: " + error.message);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: error.message,
+      });
+    } else {
+      this.statusOverlay.addError("Application error: " + error.message);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_ERROR",
+        data: this.errorToString(error),
+      });
+    }
+
+    this.resetApplicationStateOnError();
+  }
+
+  resetApplicationStateOnError() {
+    this.state.isApplicationInProgress = false;
+    this.state.applicationStartTime = null;
+    this.state.formDetected = false;
+    this.state.lastProcessedCard = null;
+
+    this.applicationState.isApplicationInProgress = false;
+    this.applicationState.applicationStartTime = null;
+    this.applicationState.currentJobData = null;
+
+    this.statusOverlay.addInfo("Application state reset - ready for next job");
+  }
+
+  markLastJobCardIfAvailable(status) {
+    if (this.state.lastProcessedCard) {
+      this.markJobCard(this.state.lastProcessedCard, status);
+    }
+  }
+
+  validateHandlers() {
+    const issues = [];
+
+    if (!this.statusOverlay) issues.push("Status overlay not initialized");
+    if (!this.userProfile) issues.push("User profile not available");
+
+    if (issues.length > 0) {
+      this.statusOverlay?.addError("Initialization issues: " + issues.join(", "));
+      return false;
+    }
+
+    return true;
   }
 
   isElementVisible(element) {
     if (!element) return false;
-    const style = window.getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      style.opacity !== "0" &&
-      rect.width > 0 &&
-      rect.height > 0
-    );
+    try {
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    } catch (error) {
+      return false;
+    }
   }
 
-  async delay(ms) {
+  sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // Navigation event handlers
-  onDOMChange() {
-    if (this.automationStarted && this.isRunning && !this.isPaused) {
-      // Handle DOM changes if needed
+  wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async waitForValidPage(timeout = 30000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      const url = window.location.href;
+
+      if (url.includes("google.com/search") || this.isValidJobPage(url) || this.isApplicationPage(url)) {
+        await this.detectPageTypeAndStart();
+        return;
+      }
+
+      await this.sleep(1000);
     }
+
+    throw new Error("Timeout waiting for valid page");
   }
 
-  onNavigation(oldUrl, newUrl) {
-    this.log(`🔄 Navigation detected: ${oldUrl} → ${newUrl}`);
-    if (!newUrl.includes("ziprecruiter.com") && this.isRunning) {
-      this.log("⚠️ Navigated away from ZipRecruiter");
-      this.statusOverlay.addWarning("Navigated away from ZipRecruiter");
+  async setSessionContext(sessionContext) {
+    try {
+      this.sessionContext = sessionContext;
+      this.hasSessionContext = true;
+
+      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
+      if (sessionContext.platform) this.platform = sessionContext.platform;
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+
+      if (sessionContext.userProfile) {
+        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
+          this.userProfile = sessionContext.userProfile;
+        } else {
+          this.userProfile = { ...this.userProfile, ...sessionContext.userProfile };
+        }
+      }
+
+      if (!this.userProfile && this.userId) {
+        try {
+          this.userProfile = await this.userService.getUserDetails();
+        } catch (error) {
+          this.statusOverlay?.addError("Failed to fetch user profile: " + error.message);
+        }
+      }
+
+      if (this.userId && (!this.userService || this.userService.userId !== this.userId)) {
+        this.applicationTracker = new ApplicationTrackerService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userId });
+      }
+
+      if (sessionContext.apiHost) {
+        this.sessionApiHost = sessionContext.apiHost;
+      }
+
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+    } catch (error) {
+      this.statusOverlay?.addError("❌ Error setting session context: " + error.message);
     }
-  }
-
-  async pause() {
-    await super.pause();
-    this.state.isRunning = false;
-    this.statusOverlay.addWarning("ZipRecruiter automation paused");
-  }
-
-  async resume() {
-    await super.resume();
-    this.state.isRunning = true;
-    this.statusOverlay.addSuccess("ZipRecruiter automation resumed");
-  }
-
-  async stop() {
-    await super.stop();
-    this.hasStarted = false;
-    this.automationStarted = false;
-    this.state.isRunning = false;
-    this.statusOverlay.addWarning("ZipRecruiter automation stopped");
   }
 
   cleanup() {
     super.cleanup();
-    this.state.processedCards.clear();
-    this.answerCache.clear();
 
-    if (this.statusOverlay) {
-      this.statusOverlay.destroy();
+    this.state.processedCards.clear();
+    this.cachedJobDescription = null;
+    this.currentJobDetails = null;
+
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
     }
 
-    this.log("🧹 ZipRecruiter platform cleanup completed");
+    if (this.formObserver) {
+      this.formObserver.disconnect();
+      this.formObserver = null;
+    }
+
+    this.resetApplicationStateOnError();
+  }
+
+  handleChromeMessage(message, sender, sendResponse) {
+    try {
+      const { action, type } = message;
+      const messageType = action || type;
+
+      switch (messageType) {
+        case "startJobSearch":
+        case "startAutomation":
+          this.startAutomation();
+          sendResponse({ status: "processing" });
+          break;
+
+        case "stopAutomation":
+          this.state.isRunning = false;
+          this.statusOverlay.addInfo("Automation stopped by user");
+          this.statusOverlay.updateStatus("stopped");
+          sendResponse({ status: "stopped" });
+          break;
+
+        case "checkStatus":
+          sendResponse({
+            success: true,
+            data: {
+              initialized: this.state.initialized,
+              isApplicationInProgress: this.state.isApplicationInProgress,
+              processedCount: this.state.processedCount,
+              isRunning: this.state.isRunning,
+              platform: "ziprecruiter",
+            },
+          });
+          break;
+
+        case "resetState":
+          this.resetApplicationStateOnError();
+          this.statusOverlay.updateStatus("ready");
+          this.statusOverlay.addInfo("State reset complete");
+          sendResponse({ success: true, message: "State reset" });
+          break;
+
+        default:
+          sendResponse({
+            success: false,
+            message: `Unknown message type: ${messageType}`,
+          });
+      }
+    } catch (error) {
+      sendResponse({ success: false, message: error.message });
+    }
+
+    return true;
+  }
+
+  errorToString(e) {
+    if (!e) return "Unknown error (no details)";
+    if (e instanceof Error) {
+      return e.message + (e.stack ? `\n${e.stack}` : "");
+    }
+    return String(e);
   }
 }

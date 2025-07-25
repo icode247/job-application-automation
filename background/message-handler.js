@@ -215,8 +215,7 @@ export default class MessageHandler {
         }
 
         console.log(
-          `💉 Attempting profile injection for tab ${tabId} (attempt ${
-            injectionStatus.attempts + 1
+          `💉 Attempting profile injection for tab ${tabId} (attempt ${injectionStatus.attempts + 1
           })`
         );
 
@@ -235,7 +234,6 @@ export default class MessageHandler {
         if (success) {
           console.log(`✅ Profile injection successful for tab ${tabId}`);
         } else {
-          console.warn(`⚠️ Profile injection failed for tab ${tabId}`);
 
           // Retry with exponential backoff
           if (injectionStatus.attempts < 3) {
@@ -243,9 +241,7 @@ export default class MessageHandler {
               2000 * Math.pow(2, injectionStatus.attempts),
               10000
             );
-            console.log(
-              `🔄 Retrying profile injection for tab ${tabId} in ${retryDelay}ms`
-            );
+
             this.scheduleProfileInjection(tabId, sessionContext, retryDelay);
           }
         }
@@ -268,14 +264,6 @@ export default class MessageHandler {
       }
 
       if (!this.isUserProfileComplete(sessionData.userProfile)) {
-        console.warn(`⚠️ Incomplete user profile for tab ${tabId}:`, {
-          hasProfile: !!sessionData.userProfile,
-          hasUserId: !!sessionData.userProfile?.userId,
-          hasEmail: !!sessionData.userProfile?.email,
-          hasName: !!(
-            sessionData.userProfile?.name || sessionData.userProfile?.firstName
-          ),
-        });
         return false;
       }
 
@@ -283,16 +271,6 @@ export default class MessageHandler {
         target: { tabId: tabId },
         func: (sessionData) => {
           try {
-            // ✅ FIXED: More robust injection with validation
-            console.log("🔧 Injecting enhanced session context:", {
-              sessionId: sessionData.sessionId,
-              platform: sessionData.platform,
-              hasUserProfile: !!sessionData.userProfile,
-              userProfileKeys: sessionData.userProfile
-                ? Object.keys(sessionData.userProfile)
-                : [],
-            });
-
             // Store session data in window (highest priority)
             window.automationSessionId = sessionData.sessionId;
             window.automationPlatform = sessionData.platform;
@@ -309,13 +287,7 @@ export default class MessageHandler {
                 sessionData.userProfile.firstName)
             ) {
               window.automationUserProfile = sessionData.userProfile;
-              console.log("✅ User profile injected into window:", {
-                userId: sessionData.userProfile.userId,
-                email: sessionData.userProfile.email,
-                name:
-                  sessionData.userProfile.name ||
-                  sessionData.userProfile.firstName,
-              });
+
             } else {
               console.warn(
                 "⚠️ User profile validation failed during injection"
@@ -356,7 +328,6 @@ export default class MessageHandler {
                   "automationUserProfile",
                   JSON.stringify(sessionData.userProfile)
                 );
-                console.log("✅ User profile stored in sessionStorage");
               }
 
               if (sessionData.sessionConfig) {
@@ -383,7 +354,6 @@ export default class MessageHandler {
             window.automationContextTimestamp = Date.now();
             window.automationProfileInjected = !!sessionData.userProfile;
 
-            console.log("✅ Enhanced session context injection completed");
             return true;
           } catch (error) {
             console.error("❌ Error during context injection:", error);
@@ -437,7 +407,6 @@ export default class MessageHandler {
 
   async handleStartApplying(request, sendResponse) {
     try {
-      console.log("📨 Start applying request received:", request);
 
       const validation = this.validateStartApplyingRequest(request);
       if (!validation.valid) {
@@ -453,43 +422,19 @@ export default class MessageHandler {
         userPlan,
         userCredits,
         dailyRemaining,
-        preferences = {},
-        apiHost = "https://fastapply.co",
+        apiHost,
       } = request;
 
       let userProfile = null;
       try {
-        console.log(`📡 Fetching user profile for user ${userId}`);
         const response = await fetch(`${apiHost}/api/user/${userId}`);
         if (response.ok) {
           userProfile = await response.json();
+          console.log("Fetched User Profile", userProfile)
 
           if (userProfile && !userProfile.userId) {
             userProfile.userId = userId;
-            console.log(`🔧 Added missing userId to user profile: ${userId}`);
           }
-
-          if (this.isUserProfileComplete(userProfile)) {
-          } else {
-            console.warn(`⚠️ Incomplete user profile fetched:`, {
-              hasUserId: !!userProfile?.userId,
-              hasEmail: !!userProfile?.email,
-              hasName: !!(userProfile?.name || userProfile?.firstName),
-              profileKeys: userProfile
-                ? Object.keys(userProfile).slice(0, 10)
-                : [], // Show first 10 keys
-              profileSample: userProfile
-                ? {
-                    userId: userProfile.userId,
-                    email: userProfile.email,
-                    name: userProfile.name,
-                    firstName: userProfile.firstName,
-                  }
-                : null,
-            });
-          }
-        } else {
-          console.warn(`⚠️ Failed to fetch user profile: ${response.status}`);
         }
       } catch (error) {
         console.error(`❌ Error fetching user profile:`, error);
@@ -508,13 +453,11 @@ export default class MessageHandler {
 
         const errorMessage = `Network Error, Please check your internet and try again....`;
         console.error("❌ " + errorMessage);
-        console.error(
-          "❌ Available profile fields:",
-          userProfile ? Object.keys(userProfile) : "No profile"
-        );
         sendResponse({ status: "error", message: errorMessage });
         return;
       }
+
+      console.log("User Profile", userProfile.jobPreferences)
 
       // Create automation session
       const sessionId = await this.sessionManager.createSession({
@@ -536,7 +479,7 @@ export default class MessageHandler {
         platform,
         userId,
         jobsToApply,
-        preferences,
+        preferences: userProfile.jobPreferences,
         apiHost,
         userProfile,
       });
@@ -549,9 +492,6 @@ export default class MessageHandler {
 
         if (userProfile && !userProfile.userId) {
           userProfile.userId = userId;
-          console.log(
-            `🔧 Added missing userId to user profile before storing: ${userId}`
-          );
         }
 
         automationInstance.userProfile = userProfile;
@@ -561,7 +501,7 @@ export default class MessageHandler {
           userId,
           userProfile,
           apiHost,
-          preferences,
+          preferences: userProfile.jobPreferences,
         };
 
         automationInstance.platformState = {
@@ -581,18 +521,6 @@ export default class MessageHandler {
 
         this.activeAutomations.set(sessionId, automationInstance);
 
-        console.log(
-          `🪟 Window ${result.windowId} mapped to session ${sessionId}`
-        );
-        console.log(`👤 Complete user profile stored in automation:`, {
-          hasProfile: !!automationInstance.userProfile,
-          userId: automationInstance.userProfile?.userId,
-          email: automationInstance.userProfile?.email,
-          name:
-            automationInstance.userProfile?.name ||
-            automationInstance.userProfile?.firstName,
-        });
-
         await this.injectProfileIntoWindowTabs(result.windowId, {
           sessionId,
           platform,
@@ -600,7 +528,7 @@ export default class MessageHandler {
           userProfile,
           sessionConfig: automationInstance.sessionConfig,
           apiHost,
-          preferences,
+          preferences: userProfile.jobPreferences,
         });
 
         sendResponse({
@@ -1403,9 +1331,8 @@ export default class MessageHandler {
     if (!supportedPlatforms.includes(request.platform)) {
       return {
         valid: false,
-        error: `Unsupported platform: ${
-          request.platform
-        }. Supported platforms: ${supportedPlatforms.join(", ")}`,
+        error: `Unsupported platform: ${request.platform
+          }. Supported platforms: ${supportedPlatforms.join(", ")}`,
       };
     }
 

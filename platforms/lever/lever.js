@@ -47,12 +47,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
   }
 
   getApiHost() {
-    return (
-      this.sessionApiHost ||
-      this.sessionContext?.apiHost ||
-      this.config.apiHost ||
-      "https://fastapply.co"
-    );
+    return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
   }
 
   isApplicationPage(url) {

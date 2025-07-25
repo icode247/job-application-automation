@@ -170,7 +170,7 @@ export default class ZipRecruiterAutomationHandler {
         throw new Error("User ID not available");
       }
 
-      const apiHost = sessionContext?.apiHost || "https://fastapply.co";
+      const apiHost = sessionContext?.apiHost;
       const response = await fetch(`${apiHost}/api/user/${userId}`);
 
       if (!response.ok) {
@@ -206,7 +206,7 @@ export default class ZipRecruiterAutomationHandler {
           devMode: sessionContext?.devMode || false,
           profile: sessionContext?.userProfile,
           session: sessionContext?.sessionConfig,
-          apiHost: sessionContext?.apiHost || "https://fastapply.co",
+          apiHost: sessionContext?.apiHost,
         },
       });
 
@@ -350,7 +350,7 @@ export default class ZipRecruiterAutomationHandler {
         this.getTabIdFromPort(port)
       );
       const userId = sessionContext?.userId;
-      const apiHost = sessionContext?.apiHost || "https://fastapply.co";
+      const apiHost = sessionContext?.apiHost;
 
       if (userId) {
         const apiPromises = [];

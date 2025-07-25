@@ -3,7 +3,7 @@
 export class RecruiteeFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
-    this.apiHost = config.apiHost || "https://fastapply.co";
+    this.apiHost = config.apiHost;
     this.aiBaseUrl = "https://resumify.fastapply.co/api";
     this.processedInputs = new Set();
   }

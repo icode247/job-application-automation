@@ -10,7 +10,7 @@ import {
   StateManagerService,
 } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
-
+//Unknown page type, waiting
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -59,12 +59,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   }
 
   getApiHost() {
-    return (
-      this.sessionApiHost ||
-      this.sessionContext?.apiHost ||
-      this.config.apiHost ||
-      "https://fastapply.co"
-    );
+    return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
   }
 
   getJobTaskMessageType() {
@@ -202,8 +197,19 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       );
       await this.navigateToApplicationAndStart();
     } else {
-      this.log("❓ Unknown page type, waiting for navigation");
-      await this.waitForValidPage();
+      this.log("❓ Unknown page type, skipping to next job");
+      this.statusOverlay.addWarning("Unknown page type - skipping to next job");
+
+      // Skip to next job instead of waiting
+      if (window.location.href.includes("google.com/search")) {
+        this.debounce("searchNext", () => this.searchNext(), 1000);
+      } else {
+        // If we're not on a search page, try to navigate back or signal completion
+        this.safeSendPortMessage({
+          type: "APPLICATION_SKIPPED",
+          data: "Unknown page type: " + url,
+        });
+      }
     }
   }
 

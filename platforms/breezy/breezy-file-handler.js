@@ -3,7 +3,7 @@
 export class BreezyFileHandler {
   constructor(config = {}) {
     this.statusService = config.statusService;
-    this.apiHost = config.apiHost || "https://fastapply.co";
+    this.apiHost = config.apiHost;
     this.aiBaseUrl = "https://resumify-6b8b3d9b7428.herokuapp.com/api";
     this.processedInputs = new Set();
   }

@@ -4,7 +4,7 @@ import { AIService } from "../../services/index.js";
 export default class LeverFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;
-    this.host = options.host || "https://fastapply.co";
+    this.host = options.host;
     this.userData = options.userData || {};
     this.jobDescription = options.jobDescription || "";
     this.aiService = new AIService({ apiHost: this.host });

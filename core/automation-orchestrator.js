@@ -49,8 +49,10 @@ export default class AutomationOrchestrator {
       const fullParams = {
         ...params,
         preferences: preferences,
-        apiHost: apiHost || "https://fastapply.co",
+        apiHost: apiHost,
       };
+
+      console.log("FULL PARAMS", fullParams)
 
       const automationSession = new AutomationSession({
         sessionId,
@@ -967,17 +969,12 @@ class AutomationSession {
       dailyRemaining: this.params.dailyRemaining,
       devMode: this.params.devMode || false,
       country: this.params.country || "US",
-      apiHost: this.params.apiHost || "https://fastapply.co",
+      apiHost: this.params.apiHost,
     };
   }
 
   getApiHost() {
-    return (
-      this.params.apiHost ||
-      this.orchestrator.config?.apiHost ||
-      process.env.API_HOST ||
-      "https://fastapply.co"
-    );
+    return this.params.apiHost;
   }
 
   async pause() {

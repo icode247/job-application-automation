@@ -1,10 +1,10 @@
 // platforms/linkedin/linkedin-file-handler.js
-import { AI_BASE_URL, API_HOST_URL } from "../../services/constants.js";
-//No photo file available for user
+import { AI_BASE_URL } from "../../services/constants.js";
+
 export default class LinkedInFileHandler {
   constructor(config) {
     this.AI_BASE_URL = AI_BASE_URL;
-    this.API_HOST_URL = API_HOST_URL;
+    this.apiHost = config.apiHost;
   }
 
   async uploadCoverLetterPDF(fileInput, letterData) {
@@ -18,7 +18,7 @@ export default class LinkedInFileHandler {
 
       // Call your Flask endpoint to generate the PDF
       const response = await fetch(
-        `${this.aiBaseUrl}/generate-cover-letter-pdf`,
+        `${this.apiHost}/generate-cover-letter-pdf`,
         {
           method: "POST",
           headers: {
@@ -356,7 +356,7 @@ export default class LinkedInFileHandler {
         const data = await res.json();
         console.log("HIGHEST RANKING RESUME", data.highest_ranking_resume)
         const proxyURL = `${
-          this.API_HOST_URL
+          this.apiHost
         }/api/proxy-file?url=${encodeURIComponent(
           data.highest_ranking_resume
         )}`;

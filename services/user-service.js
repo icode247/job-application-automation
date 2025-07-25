@@ -1,10 +1,10 @@
 // services/user-service.js
 
-import { PLAN_LIMITS, API_HOST_URL } from "./constants.js";
+import { PLAN_LIMITS} from "./constants.js";
 
 export default class UserService {
   constructor(config) {
-    this.apiHost = API_HOST_URL;
+    this.apiHost = config.apiHost;
     this.userId = config.userId;
     this.userDetailsCache = null;
     this.PLAN_LIMITS = PLAN_LIMITS;
