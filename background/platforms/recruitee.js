@@ -4,7 +4,8 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "recruitee"); // Pass platform name to base class
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "recruitee", devMode);
   }
 
   /**

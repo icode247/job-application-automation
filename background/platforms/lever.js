@@ -3,7 +3,8 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class LeverAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "lever"); // Pass platform name to base class
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "lever", devMode);
   }
 
   /**

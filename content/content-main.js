@@ -1,4 +1,6 @@
 //content/content-main.js
+
+//handleStartAutomation
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -833,10 +835,13 @@ class ContentScriptManager {
         // Update config
         this.config = { ...this.config, ...request.config };
 
+        const devMode = request.config?.devMode || request.sessionContext?.devMode;
+
         if (request.sessionContext) {
           this.sessionContext = {
             ...this.sessionContext,
             ...request.sessionContext,
+            devMode: devMode
           };
 
           if (
@@ -864,7 +869,7 @@ class ContentScriptManager {
           return;
         }
 
-        await this.platformAutomation.start(this.config);
+        await this.platformAutomation.start(this.config, devMode);
 
         sendResponse({
           success: true,
@@ -908,7 +913,7 @@ class ContentScriptManager {
             submittedLinks: [],
             preferences: {},
             userId: this.userId,
-          });
+          }, this.devMode);
         } catch (error) {
           throw error;
         } finally {

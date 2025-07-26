@@ -594,7 +594,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
     for (const selector of INDEED_SELECTORS.JOB_CARDS) {
       const cards = document.querySelectorAll(selector);
       if (cards.length > 0) {
-        console.log(
+        this.log(
           `Found ${cards.length} job cards using selector: ${selector}`
         );
         const visibleCards = Array.from(cards).filter((card) =>
@@ -606,7 +606,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
       }
     }
 
-    console.log("No job cards found with standard selectors, trying fallback");
+    this.log("No job cards found with standard selectors, trying fallback");
 
     const fallbackCards = document.querySelectorAll(
       '[data-jk], [class*="job"], [id*="job"]'
@@ -1565,7 +1565,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
                 );
                 resolve(this.getFallbackProfile());
               } else if (response && response.success && response.data) {
-                console.log(
+                this.log(
                   "Got profile data from background script",
                   response.data
                 );
@@ -2520,21 +2520,21 @@ export default class IndeedPlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 Fetching user profile from user service...");
+          this.log("📡 Fetching user profile from user service...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
+          this.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
           this.statusOverlay?.addError(
@@ -2551,7 +2551,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
           userId: this.userId,
         });
         this.userService = new UserService({ userId: this.userId });
-        console.log("📋 Updated services with new userId:", this.userId);
+        this.log("📋 Updated services with new userId:", this.userId);
       }
 
       if (sessionContext.apiHost) {
@@ -2562,7 +2562,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Indeed session context set successfully", {
+      this.log("✅ Indeed session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -2740,7 +2740,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
         return "limit_reached";
       }
 
-      console.log("started automation");
+      this.log("started automation");
       this.isRunning = true;
       this.jobsToApply = await this.getIndeedJobCards();
 
@@ -2751,7 +2751,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
       const remainingApplications = await this.userService.getRemainingApplications();
       const maxJobs = Math.min(remainingApplications, this.jobsToApply.length);
 
-      console.log(
+      this.log(
         `Processing ${maxJobs} out of ${this.jobsToApply.length} jobs found`
       );
 
@@ -2842,7 +2842,7 @@ export default class IndeedPlatform extends BasePlatformAutomation {
         }
 
         if (this.isExternalApplication()) {
-          console.log("Skipping external application");
+          this.log("Skipping external application");
           return;
         }
 

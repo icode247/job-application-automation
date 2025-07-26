@@ -10,7 +10,7 @@ import {
   StateManagerService,
 } from "../../services/index.js";
 import Utils from "../../utils/utils.js";
-//Unknown page type, waiting
+
 export default class WorkablePlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -157,9 +157,9 @@ export default class WorkablePlatform extends BasePlatformAutomation {
   async ensureUserProfile() {
     if (!this.userProfile && this.userId && this.userService) {
       try {
-        console.log("🔄 Fetching user profile using UserService...");
+        this.log("🔄 Fetching user profile using UserService...");
         this.userProfile = await this.userService.getUserDetails();
-        console.log("✅ User profile fetched via UserService");
+        this.log("✅ User profile fetched via UserService");
         this.statusOverlay.addSuccess("User profile loaded");
 
         // Update form handler with profile
@@ -385,7 +385,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
       // Check if URL changed and contains expected path
       if (currentUrl !== originalUrl && currentUrl.includes(expectedPath)) {
-        console.log(`✅ URL changed to: ${currentUrl}`);
+        this.log(`✅ URL changed to: ${currentUrl}`);
         return true;
       }
     }
@@ -622,7 +622,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting application process");
+      this.log("📝 Starting application process");
       this.statusOverlay.addInfo("Starting application process");
 
       // Ensure user profile is available
@@ -658,14 +658,14 @@ export default class WorkablePlatform extends BasePlatformAutomation {
 
   processApplicationTaskData(data) {
     try {
-      console.log("📊 Processing application task data:", {
+      this.log("📊 Processing application task data:", {
         hasData: !!data,
         hasProfile: !!data?.profile,
       });
 
       if (data?.profile && !this.userProfile) {
         this.userProfile = data.profile;
-        console.log("👤 User profile set from background response");
+        this.log("👤 User profile set from background response");
       }
 
       // Update form handler
@@ -1075,7 +1075,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
    */
   async extractJobDescription() {
     try {
-      console.log("🔍 Extracting job details...");
+      this.log("🔍 Extracting job details...");
       this.statusOverlay.addInfo("Extracting job details...");
 
       let jobDescription = {
@@ -1113,7 +1113,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
           fullDescriptionElement.textContent.trim();
       }
 
-      console.log("✅ Job details extracted successfully:", {
+      this.log("✅ Job details extracted successfully:", {
         title: jobDescription.title,
         company: jobDescription.company,
         location: jobDescription.location,
@@ -1328,13 +1328,13 @@ export default class WorkablePlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           this.userProfile = Utils.deepMerge(
             this.userProfile,
             sessionContext.userProfile
           );
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
@@ -1365,7 +1365,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
           });
         }
 
-        console.log("📋 Updated services with new userId:", this.userId);
+        this.log("📋 Updated services with new userId:", this.userId);
       }
 
       // Store API host from session context
@@ -1378,7 +1378,7 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Workable session context set successfully", {
+      this.log("✅ Workable session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,

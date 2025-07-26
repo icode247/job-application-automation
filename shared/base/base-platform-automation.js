@@ -6,8 +6,10 @@ import Logger from "../../core/logger.js";
 export default class BasePlatformAutomation extends BasePlatform {
   constructor(config) {
     super(config);
-
-    this.logger = new Logger("BasePlatformAutomation", false);
+    this.devMode = config.devMode ||
+      config.config?.devMode ||
+      config.sessionContext?.devMode;
+    this.logger = new Logger(`BasePlatformAutomation-${this.platform}`, this.devMode);
 
     // Initialize user profile from multiple sources
     this.userProfile =

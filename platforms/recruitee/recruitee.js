@@ -71,22 +71,22 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
       // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 Fetching user profile from user service...");
+          this.log("📡 Fetching user profile from user service...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
+          this.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
           this.statusOverlay?.addError(
@@ -113,7 +113,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Recruitee session context set successfully", {
+      this.log("✅ Recruitee session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -136,9 +136,9 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
-          console.log("🔄 Attempting to fetch user profile during start...");
+          this.log("🔄 Attempting to fetch user profile during start...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched during start");
+          this.log("✅ User profile fetched during start");
         } catch (error) {
           console.error("❌ Failed to fetch user profile during start:", error);
         }
@@ -435,13 +435,13 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting Recruitee application process");
+      this.log("📝 Starting Recruitee application process");
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
       // Validate user profile (inherited validation logic)
       if (!this.userProfile) {
-        console.log("⚠️ No user profile available, attempting to fetch...");
+        this.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchApplicationTaskData();
       }
 
@@ -452,7 +452,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
         console.error("❌ Failed to obtain user profile");
       } else {
         this.statusOverlay.addSuccess("User profile loaded successfully");
-        console.log("✅ User profile available for Recruitee");
+        this.log("✅ User profile available for Recruitee");
       }
 
       // Wait for page to fully load
@@ -511,12 +511,12 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       // Extract job ID from URL (Recruitee-specific)
       const urlParts = window.location.pathname.split("/");
       const jobId = urlParts[urlParts.length - 1] || "unknown";
-      console.log("Extracted Recruitee job ID:", jobId);
+      this.log("Extracted Recruitee job ID:", jobId);
 
       // Extract job description
       const jobDescription = this.extractJobDescription();
 
-      console.log("Job description:", jobDescription);
+      this.log("Job description:", jobDescription);
 
       // Wait for page to fully load
       await this.wait(3000);
@@ -599,7 +599,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
 
-    console.log("Recruitee application completed successfully");
+    this.log("Recruitee application completed successfully");
     this.statusOverlay.addSuccess("Application completed successfully");
     this.statusOverlay.updateStatus("success");
   }

@@ -9,7 +9,8 @@ import Utils from "../../utils/utils.js";
 
 export default class WorkableAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "workable");
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "workable", devMode);
 
     // Initialize services - will be set per automation session
     this.applicationTracker = null;

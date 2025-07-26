@@ -1,13 +1,28 @@
 // background/platforms/ziprecruiter.js
+/**
+ * ZipRecruiter Automation Handler
+ * Handles automation of job applications on ZipRecruiter platform
+ */
 export default class ZipRecruiterAutomationHandler {
   constructor(messageHandler) {
-    this.messageHandler = messageHandler;
-    this.platform = "ziprecruiter";
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "ziprecruiter", devMode);
+    
+    // Platform configuration
+    this.platformConfig = {
+      domains: ["ziprecruiter.com"],
+      searchLinkPattern: /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|jz|apply).*$/,
+      jobsPagePattern: /^https:\/\/(www\.)?ziprecruiter\.com\/job\/.*$/,
+    };
+
+    // Connection and session management
     this.portConnections = new Map();
     this.activeAutomations = new Map();
     this.tabSessions = new Map();
+    this.applicationTimeouts = new Map();
+    this.processedCompletions = new Set();
 
-    // ZipRecruiter specific state
+    // Platform state
     this.state = {
       started: false,
       applicationInProgress: false,
@@ -15,7 +30,6 @@ export default class ZipRecruiterAutomationHandler {
       applicationStartTime: null,
       jobsLimit: 100,
       jobsApplied: 0,
-      searchDomain: ["ziprecruiter.com"],
       submittedLinks: [],
       lastActivity: Date.now(),
       searchTabId: null,
@@ -23,7 +37,7 @@ export default class ZipRecruiterAutomationHandler {
       windowId: null,
     };
 
-    this.log("🎯 ZipRecruiter automation handler initialized");
+    this.log("🚀 ZipRecruiterAutomationHandler initialized");
   }
 
   handlePortConnection(port) {
@@ -57,16 +71,24 @@ export default class ZipRecruiterAutomationHandler {
     }
   }
 
-  async handlePortMessage(message, port) {
-    try {
-      this.log(`📨 Port message received:`, message);
-      this.state.lastActivity = Date.now();
+  async  /**
+   * Handle platform-specific messages from content scripts
+   */
+  async handlePlatformSpecificMessage(type, data, port) {
+    const sessionId = this.getSessionIdFromPort(port);
+    const windowId = port?.sender?.tab?.windowId;
+    const tabId = port?.sender?.tab?.id;
 
-      const { type, data, requestId } = message || {};
+    this.log(
+      `📨 Handling ZipRecruiter message: ${type} for session ${sessionId}, tab ${tabId}`
+    );
+
+    try {
+      this.state.lastActivity = Date.now();
 
       switch (type) {
         case "GET_SEARCH_TASK":
-          this.handleGetSearchTask(port);
+          await this.handleGetSearchTask(port, data);
           break;
 
         case "GET_PROFILE_DATA":
@@ -74,11 +96,11 @@ export default class ZipRecruiterAutomationHandler {
           break;
 
         case "GET_APPLICATION_TASK":
-          this.handleGetApplicationTask(port);
+          await this.handleGetApplicationTask(port, data);
           break;
 
         case "START_APPLICATION":
-          await this.handleStartApplication(data, port, requestId);
+          await this.handleStartApplication(port, data, sessionId, windowId, tabId);
           break;
 
         case "APPLICATION_COMPLETED":
@@ -94,55 +116,73 @@ export default class ZipRecruiterAutomationHandler {
           break;
 
         case "SEARCH_COMPLETED":
-          this.handleSearchCompleted();
+          await this.handleSearchCompleted(port, sessionId, windowId);
           break;
 
         case "CHECK_APPLICATION_STATUS":
-          this.handleCheckApplicationStatus(port, requestId);
+          await this.handleCheckApplicationStatus(port, data?.requestId);
           break;
 
         case "KEEPALIVE":
-          this.sendPortResponse(port, {
+          this.safePortSend(port, {
             type: "KEEPALIVE_RESPONSE",
             data: { timestamp: Date.now() },
           });
           break;
 
         default:
-          this.log(`❓ Unhandled port message type: ${type}`);
+          this.log.warn(`❓ Unhandled ZipRecruiter message type: ${type}`);
+          this.safePortSend(port, {
+            type: "ERROR",
+            message: `Unknown message type: ${type}`,
+          });
           break;
       }
     } catch (error) {
-      this.log(`❌ Error handling port message: ${error.message}`);
-      this.sendPortResponse(port, {
+      this.log(`❌ Error handling ZipRecruiter message:`, error);
+      this.safePortSend(port, {
         type: "ERROR",
-        message: error.message,
+        message: `Failed to process ${type}: ${error.message}`,
       });
     }
   }
 
-  handleGetSearchTask(port) {
-    try {
-      const searchLinkPattern =
-        /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|jz|apply).*$/;
+  /**
+   * Handle search task request - ZipRecruiter specific data structure
+   */
+  async handleGetSearchTask(port, data) {
+    const tabId = port?.sender?.tab?.id;
+    const windowId = port?.sender?.tab?.windowId;
 
-      this.sendPortResponse(port, {
+    this.log(
+      `🔍 GET_SEARCH_TASK request from ZipRecruiter tab ${tabId}, window ${windowId}`
+    );
+
+    try {
+      const sessionData = {
+        tabId,
+        limit: this.state.jobsLimit,
+        current: this.state.jobsApplied,
+        domain: this.platformConfig.domains,
+        submittedLinks: this.state.submittedLinks,
+        searchLinkPattern: this.platformConfig.searchLinkPattern.toString(),
+      };
+
+      this.log("📤 Sending search task data:", sessionData);
+      
+      const sent = this.safePortSend(port, {
         type: "SEARCH_TASK_DATA",
-        data: {
-          limit: this.state.jobsLimit,
-          current: this.state.jobsApplied,
-          domain: this.state.searchDomain,
-          submittedLinks: this.state.submittedLinks,
-          searchLinkPattern: searchLinkPattern.toString(),
-        },
+        data: sessionData,
       });
 
-      this.log("📤 Sent search task data to content script");
+      if (!sent) {
+        throw new Error("Failed to send search task data");
+      }
     } catch (error) {
-      this.log(`❌ Error handling get search task: ${error.message}`);
-      this.sendPortResponse(port, {
+      this.log(`❌ Error handling GET_SEARCH_TASK:`, error);
+      this.safePortSend(port, {
         type: "ERROR",
-        message: error.message,
+        message: `Failed to get search task: ${error.message}`,
       });
     }
   }
@@ -193,303 +233,520 @@ export default class ZipRecruiterAutomationHandler {
     }
   }
 
-  handleGetApplicationTask(port) {
-    try {
-      const sessionContext = this.messageHandler.getTabSessionContext(
-        this.getTabIdFromPort(port)
-      );
+  /**
+   * Handle application task request - ZipRecruiter specific data structure
+   */
+  async handleGetApplicationTask(port, data) {
+    const tabId = port?.sender?.tab?.id;
+    const windowId = port?.sender?.tab?.windowId;
 
-      this.sendPortResponse(port, {
+    this.log(
+      `🔍 GET_APPLICATION_TASK request from ZipRecruiter tab ${tabId}, window ${windowId}`
+    );
+
+    try {
+      const sessionContext = this.messageHandler.getTabSessionContext(tabId);
+      const applicationData = {
+        devMode: sessionContext?.devMode || false,
+        profile: sessionContext?.userProfile,
+        session: sessionContext?.sessionConfig,
+        apiHost: sessionContext?.apiHost,
+        // Include any ZipRecruiter specific application data
+        platform: "ziprecruiter",
+      };
+
+      this.log("📤 Sending application task data");
+      
+      const sent = this.safePortSend(port, {
         type: "APPLICATION_TASK_DATA",
-        data: {
-          devMode: sessionContext?.devMode || false,
-          profile: sessionContext?.userProfile,
-          session: sessionContext?.sessionConfig,
-          apiHost: sessionContext?.apiHost,
-        },
+        data: applicationData,
       });
 
-      this.log("📤 Sent application task data");
+      if (!sent) {
+        throw new Error("Failed to send application task data");
+      }
     } catch (error) {
-      this.log(`❌ Error handling get application task: ${error.message}`);
-      this.sendPortResponse(port, {
+      this.log(`❌ Error handling GET_APPLICATION_TASK:`, error);
+      this.safePortSend(port, {
         type: "ERROR",
-        message: error.message,
+        message: `Failed to get application task: ${error.message}`,
       });
     }
   }
 
-  async handleStartApplication(data, port, requestId) {
-    try {
-      const url = data.url;
+  /**
+   * Handle application start request - ZipRecruiter specific logic
+   */
+  async handleStartApplication(port, data, sessionId, windowId, tabId) {
+    const { url, title, company, location, requestId } = data || {};
+    
+    if (!url) {
+      this.log("❌ No URL provided for application start");
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: "No URL provided for application start",
+      });
+      return;
+    }
 
+    this.log(`🎯 Starting ZipRecruiter application for: ${title || url}`, {
+      url,
+      title,
+      company,
+      location,
+      tabId,
+      windowId,
+    });
+
+    try {
       // Check if already processing an application
       if (this.state.applicationInProgress) {
-        this.log("Already have an active application, ignoring new request");
-
-        if (requestId && this.getTabIdFromPort(port)) {
-          chrome.tabs.sendMessage(this.getTabIdFromPort(port), {
-            type: "APPLICATION_START_RESPONSE",
-            requestId,
-            success: false,
-            message: "An application is already in progress",
-          });
-        }
+        const message = "An application is already in progress";
+        this.log.warn(`⚠️ ${message}`);
+        
+        this.safePortSend(port, {
+          type: "APPLICATION_START_RESPONSE",
+          requestId,
+          success: false,
+          message,
+        });
         return;
       }
 
-      // Check if URL already processed
-      const isDuplicate = this.state.submittedLinks.some((link) =>
-        this.isUrlMatch(link.url, url)
+      // Check for duplicate application
+      const isDuplicate = this.state.submittedLinks.some(link => 
+        this.isUrlMatch(link.url, url) && link.status === "SUCCESS"
       );
 
       if (isDuplicate) {
-        this.log("URL already processed:", url);
-
-        this.sendPortResponse(port, {
-          type: "DUPLICATE",
-          message: "This job has already been processed",
-          data: { url },
+        const message = `Job already applied: ${title || url}`;
+        this.log.warn(`⚠️ ${message}`);
+        
+        this.safePortSend(port, {
+          type: "APPLICATION_START_RESPONSE",
+          requestId,
+          success: false,
+          duplicate: true,
+          message,
+          data: { url, title, company },
         });
-
-        if (requestId && this.getTabIdFromPort(port)) {
-          chrome.tabs.sendMessage(this.getTabIdFromPort(port), {
-            type: "APPLICATION_START_RESPONSE",
-            requestId,
-            success: false,
-            duplicate: true,
-            message: "This job has already been processed",
-          });
-        }
         return;
       }
 
-      // Set state
+      // Update state
       this.state.applicationInProgress = true;
       this.state.applicationUrl = url;
       this.state.applicationStartTime = Date.now();
+      this.state.applyTabId = tabId;
 
-      // Add to submitted links with PROCESSING status
+      // Add to submitted links
       this.state.submittedLinks.push({
         url,
+        title,
+        company,
+        location,
         status: "PROCESSING",
         timestamp: Date.now(),
       });
 
-      // Acknowledge the request
-      this.sendPortResponse(port, {
-        type: "APPLICATION_STARTING",
-        data: { url },
+      // Set application timeout (15 minutes)
+      const timeoutId = setTimeout(() => {
+        this.log(`⏰ Application timeout for: ${url}`);
+        this.handleApplicationTimeout(sessionId, url, tabId);
+      }, 15 * 60 * 1000); // 15 minutes
+
+      this.applicationTimeouts.set(url, timeoutId);
+
+      // Send response
+      this.log(`✅ Started application process for: ${title || url}`);
+      this.safePortSend(port, {
+        type: "APPLICATION_START_RESPONSE",
+        requestId,
+        success: true,
+        message: "Application process started",
+        data: { url, title, company },
       });
 
-      if (requestId && this.getTabIdFromPort(port)) {
-        chrome.tabs.sendMessage(this.getTabIdFromPort(port), {
-          type: "APPLICATION_START_RESPONSE",
-          requestId,
-          success: true,
-          data: { url },
-        });
-      }
-
-      this.log(`✅ Started application for: ${url}`);
     } catch (error) {
-      this.log(`❌ Error starting application: ${error.message}`);
-
-      this.sendPortResponse(port, {
-        type: "ERROR",
-        message: "Error starting application: " + error.message,
-      });
-
-      if (requestId && this.getTabIdFromPort(port)) {
-        chrome.tabs.sendMessage(this.getTabIdFromPort(port), {
-          type: "APPLICATION_START_RESPONSE",
-          requestId,
-          success: false,
-          message: "Error starting application: " + error.message,
-        });
+      this.log(`❌ Error in handleStartApplication:`, error);
+      
+      // Reset state on error
+      this.resetApplicationState();
+      
+      // Clean up any timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
       }
 
-      this.resetApplicationState();
+      // Send error response
+      this.safePortSend(port, {
+        type: "APPLICATION_START_RESPONSE",
+        requestId,
+        success: false,
+        message: `Failed to start application: ${error.message}`,
+        data: { url, title, company },
+      });
     }
   }
 
+  /**
+   * Handle successful application completion
+   */
   async handleApplicationCompleted(data, port) {
-    try {
-      const url = this.state.applicationUrl || data.url;
-
-      this.log("Received applicationCompleted message:", {
-        url: url,
-        data: data ? { ...data } : null,
+    const tabId = port?.sender?.tab?.id;
+    const url = this.state.applicationUrl || data?.url;
+    
+    if (!url) {
+      this.log("❌ No URL provided for application completion");
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: "No URL provided for application completion",
       });
+      return;
+    }
 
-      // Check for duplicate
+    this.log(`✅ Application completed for: ${url}`, {
+      tabId,
+      data: data ? { ...data } : null,
+    });
+
+    try {
+      // Check for duplicate completion
       const isDuplicate = this.state.submittedLinks.some(
-        (link) => this.isUrlMatch(link.url, url) && link.status === "SUCCESS"
+        link => this.isUrlMatch(link.url, url) && link.status === "SUCCESS"
       );
 
       if (isDuplicate) {
-        this.log("Ignoring duplicate application completion for URL:", url);
-        this.sendPortResponse(port, {
+        this.log.warn(`⚠️ Ignoring duplicate completion for: ${url}`);
+        this.safePortSend(port, {
           type: "SUCCESS",
           duplicate: true,
+          message: "Application already marked as completed",
         });
         return;
       }
 
-      // Update submitted links
-      this.state.submittedLinks.push({
-        url,
-        details: data || null,
-        status: "SUCCESS",
-        timestamp: Date.now(),
-      });
-
-      // Track job application via API
-      const sessionContext = this.messageHandler.getTabSessionContext(
-        this.getTabIdFromPort(port)
-      );
-      const userId = sessionContext?.userId;
-      const apiHost = sessionContext?.apiHost;
-
-      if (userId) {
-        const apiPromises = [];
-
-        // Update application count
-        apiPromises.push(
-          fetch(`${apiHost}/api/applications`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId }),
-          }).catch((e) => this.log("API applications error:", e))
-        );
-
-        // Save applied job
-        if (data) {
-          apiPromises.push(
-            fetch(`${apiHost}/api/applied-jobs`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                ...data,
-                userId,
-                applicationPlatform: "ziprecruiter",
-              }),
-            }).catch((e) => this.log("API applied-jobs error:", e))
-          );
-        }
-
-        // Execute API calls in parallel
-        if (apiPromises.length > 0) {
-          Promise.all(apiPromises).catch((error) => {
-            this.log("Error in API calls:", error);
-          });
-        }
+      // Clear any existing timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
       }
 
-      // Increment count
+      // Update submitted links with completion status
+      const applicationData = {
+        ...data,
+        status: "SUCCESS",
+        timestamp: Date.now(),
+        endTime: Date.now(),
+        duration: this.state.applicationStartTime 
+          ? Date.now() - this.state.applicationStartTime 
+          : null,
+      };
+
+      this.state.submittedLinks.push(applicationData);
+
+      // Track job application via API
+      try {
+        const sessionContext = this.messageHandler.getTabSessionContext(tabId);
+        const userId = sessionContext?.userId;
+        const apiHost = sessionContext?.apiHost;
+
+        if (userId && apiHost) {
+          const apiPromises = [];
+
+          // Update application count
+          apiPromises.push(
+            fetch(`${apiHost}/api/applications`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId }),
+            }).catch(e => this.log("API applications error:", e))
+          );
+
+          // Save applied job details
+          if (data) {
+            apiPromises.push(
+              fetch(`${apiHost}/api/applied-jobs`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  ...data,
+                  userId,
+                  applicationPlatform: "ziprecruiter",
+                  appliedAt: new Date().toISOString(),
+                }),
+              }).catch(e => this.log("API applied-jobs error:", e))
+            );
+          }
+
+          // Execute API calls in parallel and don't wait for completion
+          if (apiPromises.length > 0) {
+            Promise.all(apiPromises).catch(error => {
+              this.log("Error in API calls:", error);
+            });
+          }
+        }
+      } catch (apiError) {
+        this.log("Error tracking application via API:", apiError);
+        // Continue with the flow even if API tracking fails
+      }
+
+      // Increment successful applications counter
       this.state.jobsApplied++;
 
-      // Send success response
-      this.sendPortResponse(port, {
-        type: "SUCCESS",
+      // Send response
+      this.safePortSend(port, {
+        type: "APPLICATION_COMPLETED",
+        success: true,
         message: "Application completed successfully",
+        data: applicationData,
       });
 
       // Reset application state
       this.resetApplicationState();
 
-      // Check if reached limit
+      // Check if we've reached the application limit
       if (this.state.jobsApplied >= this.state.jobsLimit) {
         this.completeSearch("Reached application limit");
       } else {
+        // Notify search to continue with next job
         this.notifySearchNext({
           url,
           status: "SUCCESS",
+          data: {
+            title: data?.title,
+            company: data?.company,
+            location: data?.location,
+          },
         });
       }
 
-      this.log(`✅ Application completed successfully for: ${url}`);
+      this.log(`✅ Successfully processed application completion for: ${url}`);
     } catch (error) {
-      this.log(`❌ Error handling application completion: ${error.message}`);
-      this.sendPortResponse(port, {
-        type: "ERROR",
-        message: error.message,
+      this.log(`❌ Error handling application completion for ${url}:`, error);
+      
+      // Clean up on error
+      this.resetApplicationState();
+      
+      // Clear any existing timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      // Send error response
+      this.safePortSend(port, {
+        type: "APPLICATION_COMPLETED",
+        success: false,
+        message: `Failed to process application completion: ${error.message}`,
       });
 
-      this.resetApplicationState();
+      // Notify search about the error
       this.notifySearchNext({
-        url: this.state.applicationUrl,
+        url,
         status: "ERROR",
         message: error.message,
       });
     }
   }
 
+  /**
+   * Handle application error
+   */
   async handleApplicationError(data, port) {
-    try {
-      const url = this.state.applicationUrl || data.url;
+    const tabId = port?.sender?.tab?.id;
+    const url = this.state.applicationUrl || data?.url;
+    const errorMessage = data?.message || "Unknown error during application";
+    const errorType = data?.type || "APPLICATION_ERROR";
+    
+    if (!url) {
+      this.log("❌ No URL provided for application error");
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: "No URL provided for application error",
+      });
+      return;
+    }
 
-      // Update submitted links
+    this.log(`❌ Application error for ${url}: ${errorMessage}`, {
+      tabId,
+      errorType,
+      errorData: data?.error || null,
+    });
+
+    try {
+      // Clear any existing timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      // Update submitted links with error status
       this.state.submittedLinks.push({
         url,
-        error: data.message || data,
+        title: data?.title,
+        company: data?.company,
+        location: data?.location,
         status: "ERROR",
+        error: errorMessage,
+        errorType,
         timestamp: Date.now(),
+        endTime: Date.now(),
+        duration: this.state.applicationStartTime 
+          ? Date.now() - this.state.applicationStartTime 
+          : null,
       });
 
-      this.sendPortResponse(port, {
-        type: "SUCCESS",
-        message: "Error acknowledged",
+      // Send error response
+      this.safePortSend(port, {
+        type: "APPLICATION_ERROR",
+        success: false,
+        message: errorMessage,
+        errorType,
+        data: {
+          url,
+          title: data?.title,
+          company: data?.company,
+        },
       });
 
+      // Reset application state
       this.resetApplicationState();
+
+      // Notify search to continue with next job
       this.notifySearchNext({
         url,
         status: "ERROR",
-        message:
-          typeof data === "string" ? data : data.message || "Application error",
+        message: errorMessage,
+        errorType,
+        data: {
+          title: data?.title,
+          company: data?.company,
+          location: data?.location,
+        },
       });
 
-      this.log(`❌ Application error for: ${url}`);
+      this.log(`✅ Successfully processed application error for: ${url}`);
     } catch (error) {
-      this.log(`❌ Error handling application error: ${error.message}`);
-      this.sendPortResponse(port, {
-        type: "ERROR",
-        message: error.message,
+      this.log(`❌ Error handling application error for ${url}:`, error);
+      
+      // Still try to reset state and notify even if error handling fails
+      this.resetApplicationState();
+      
+      // Clear any existing timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      // Try to send error response
+      this.safePortSend(port, {
+        type: "APPLICATION_ERROR",
+        success: false,
+        message: `Failed to process application error: ${error.message}`,
+        originalError: errorMessage,
       });
     }
   }
 
+  /**
+   * Handle skipped application
+   */
   async handleApplicationSkipped(data, port) {
-    try {
-      const url = this.state.applicationUrl || data.url;
+    const tabId = port?.sender?.tab?.id;
+    const url = data?.url;
+    const reason = data?.reason || "Application skipped";
+    const skipType = data?.skipType || "SKIPPED";
+    
+    if (!url) {
+      this.log.warn("⚠️ No URL provided for skipped application");
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: "No URL provided for skipped application",
+      });
+      return;
+    }
 
-      // Update submitted links
+    this.log(`⏭️ Application ${skipType.toLowerCase()} for ${url}: ${reason}`, {
+      tabId,
+      skipType,
+      data: data || null,
+    });
+
+    try {
+      // Clear any existing timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      // Update submitted links with skipped status
       this.state.submittedLinks.push({
         url,
-        reason: data.message || data,
-        status: "SKIPPED",
+        title: data?.title,
+        company: data?.company,
+        location: data?.location,
+        status: skipType,
+        reason,
         timestamp: Date.now(),
+        endTime: Date.now(),
+        duration: this.state.applicationStartTime 
+          ? Date.now() - this.state.applicationStartTime 
+          : null,
       });
 
-      this.sendPortResponse(port, {
-        type: "SUCCESS",
-        message: "Skip acknowledged",
+      // Send response
+      this.safePortSend(port, {
+        type: "APPLICATION_SKIPPED",
+        success: true,
+        skipType,
+        message: reason,
+        data: {
+          url,
+          title: data?.title,
+          company: data?.company,
+          location: data?.location,
+        },
       });
 
-      this.resetApplicationState();
+      // Reset application state if this was the current application
+      if (this.state.applicationInProgress && this.state.applicationUrl === url) {
+        this.resetApplicationState();
+      }
+
+      // Notify search to continue with next job
       this.notifySearchNext({
         url,
-        status: "SKIPPED",
-        message: data.message || data || "Application skipped",
+        status: skipType,
+        message: reason,
+        data: {
+          title: data?.title,
+          company: data?.company,
+          location: data?.location,
+        },
       });
 
-      this.log(`⏭️ Application skipped for: ${url}`);
+      this.log(`✅ Successfully processed ${skipType.toLowerCase()} for: ${url}`);
     } catch (error) {
-      this.log(`❌ Error handling application skip: ${error.message}`);
-      this.sendPortResponse(port, {
+      this.log(`❌ Error handling ${skipType.toLowerCase()} for ${url}:`, error);
+      
+      // Still try to clean up even if error handling fails
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      if (this.state.applicationInProgress) {
+        this.resetApplicationState();
+      }
+
+      // Try to send error response
+      this.safePortSend(port, {
         type: "ERROR",
-        message: error.message,
+        success: false,
+        message: `Failed to process ${skipType.toLowerCase()}: ${error.message}`,
+        originalReason: reason,
       });
     }
   }
@@ -525,7 +782,62 @@ export default class ZipRecruiterAutomationHandler {
     }
   }
 
-  // Helper methods
+  /**
+   * Handle application timeout
+   */
+  async handleApplicationTimeout(sessionId, url, tabId) {
+    try {
+      this.log(`⏰ Application timeout for ${url} in tab ${tabId}`);
+
+      // Clear the timeout
+      if (this.applicationTimeouts.has(url)) {
+        clearTimeout(this.applicationTimeouts.get(url));
+        this.applicationTimeouts.delete(url);
+      }
+
+      // Close the tab if it exists
+      if (tabId) {
+        try {
+          await chrome.tabs.remove(tabId);
+          this.log(`✅ Closed timed out application tab ${tabId}`);
+        } catch (error) {
+          this.log.warn(`⚠️ Error closing timeout tab ${tabId}:`, error);
+        }
+      }
+
+      // Update submitted links with timeout status
+      const jobIndex = this.state.submittedLinks.findIndex(link => 
+        this.isUrlMatch(link.url, url) && link.status === "PROCESSING"
+      );
+
+      if (jobIndex !== -1) {
+        this.state.submittedLinks[jobIndex] = {
+          ...this.state.submittedLinks[jobIndex],
+          status: "TIMEOUT",
+          error: "Application timed out after 15 minutes",
+          endTime: Date.now(),
+        };
+      }
+
+      // Reset application state
+      this.resetApplicationState();
+
+      // Notify about the timeout
+      this.notifySearchNext({
+        url,
+        status: "TIMEOUT",
+        message: "Application timed out after 15 minutes",
+      });
+
+      this.log(`❌ Application timed out: ${url}`);
+    } catch (error) {
+      this.log("❌ Error handling application timeout:", error);
+    }
+  }
+
+  /**
+   * Reset the application state
+   */
   resetApplicationState() {
     this.state.applicationInProgress = false;
     this.state.applicationUrl = null;

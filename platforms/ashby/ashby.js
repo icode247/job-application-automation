@@ -78,23 +78,23 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
       // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 Fetching user profile from user service...");
+          this.log("📡 Fetching user profile from user service...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
+          this.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
           this.statusOverlay?.addError(
@@ -121,7 +121,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Ashby session context set successfully", {
+      this.log("✅ Ashby session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -150,9 +150,9 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
-          console.log("🔄 Attempting to fetch user profile during start...");
+          this.log("🔄 Attempting to fetch user profile during start...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched during start");
+          this.log("✅ User profile fetched during start");
         } catch (error) {
           console.error("❌ Failed to fetch user profile during start:", error);
         }
@@ -410,14 +410,14 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
   processSendCvTaskData(data) {
     try {
-      console.log("📊 Processing send CV task data:", {
+      this.log("📊 Processing send CV task data:", {
         hasData: !!data,
         hasProfile: !!data?.profile,
       });
 
       if (data?.profile && !this.userProfile) {
         this.userProfile = data.profile;
-        console.log("👤 User profile set from background response");
+        this.log("👤 User profile set from background response");
       }
 
       // Update form handler
@@ -673,7 +673,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
       // Extract job ID from URL (Ashby-specific)
       const jobId = UrlUtils.extractJobId(window.location.href, "ashby");
-      console.log("Extracted Ashby job ID:", jobId);
+      this.log("Extracted Ashby job ID:", jobId);
 
       // Wait for page to fully load
       await this.wait(3000);
@@ -773,7 +773,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
 
-    console.log("Ashby application completed successfully");
+    this.log("Ashby application completed successfully");
     this.statusOverlay.addSuccess("Application completed successfully");
     this.statusOverlay.updateStatus("success");
   }
@@ -1018,7 +1018,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       description = `Job: ${jobTitle} at ${companyName}`;
     }
 
-    console.log(
+    this.log(
       `📋 Extracted job description (${description.length} characters)`
     );
     return description;

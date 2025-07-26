@@ -3,7 +3,8 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class AshbyAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "ashby");
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "ashby", devMode);
   }
 
   /**
@@ -104,7 +105,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString = "";
         }
       } catch (error) {
-        this.log.error(
+        this.log(
           "❌ Error converting searchLinkPattern to string:",
           error
         );

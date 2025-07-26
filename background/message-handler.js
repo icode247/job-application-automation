@@ -4,7 +4,7 @@ import LeverAutomationHandler from "./platforms/lever.js";
 import RecruiteeAutomationHandler from "./platforms/recruitee.js";
 import LinkedInAutomationHandler from "./platforms/linkedin.js";
 import BreezyAutomationHandler from "./platforms/breezy.js";
-import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
+// import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
 import AshbyAutomationHandler from "./platforms/ashby.js";
 import IndeedAutomationHandler from "./platforms/indeed.js";
 import GlassdoorAutomationHandler from "./platforms/glassdoor.js";
@@ -12,12 +12,13 @@ import WorkableAutomationHandler from "./platforms/workable.js";
 import WellfoundAutomationHandler from "./platforms/wellfound.js";
 
 export default class MessageHandler {
-  constructor(logger, sessionManager, windowManager) {
+  constructor(logger, sessionManager, windowManager, devMode = false) {
     this.logger = logger;
     this.sessionManager = sessionManager;
     this.windowManager = windowManager;
+    this.devMode = devMode;
 
-    this.orchestrator = new AutomationOrchestrator(this.logger);
+    this.orchestrator = new AutomationOrchestrator(this.logger, this.devMode);
     this.activeAutomations = new Map();
     this.portConnections = new Map();
     this.platformHandlers = new Map();
@@ -422,6 +423,7 @@ export default class MessageHandler {
         userCredits,
         dailyRemaining,
         apiHost,
+        devMode
       } = request;
 
       let userProfile = null;
@@ -481,6 +483,7 @@ export default class MessageHandler {
         preferences: userProfile.jobPreferences,
         apiHost,
         userProfile,
+        devMode
       });
 
       if (result.success) {
@@ -488,6 +491,7 @@ export default class MessageHandler {
 
         automationInstance.platform = platform;
         automationInstance.userId = userId;
+        automationInstance.devMode = devMode;
 
         if (userProfile && !userProfile.userId) {
           userProfile.userId = userId;
@@ -976,9 +980,9 @@ export default class MessageHandler {
       case "breezy":
         handler = new BreezyAutomationHandler(this);
         break;
-      case "ziprecruiter":
-        handler = new ZipRecruiterAutomationHandler(this);
-        break;
+      // case "ziprecruiter":
+      //   handler = new ZipRecruiterAutomationHandler(this);
+      //   break;
       case "ashby":
         handler = new AshbyAutomationHandler(this);
         break;

@@ -1,10 +1,11 @@
 // background/window-manager.js
 
 export default class WindowManager {
-  constructor(logger) {
+  constructor(logger, devMode = false) {
     this.automationWindows = new Map();
     this.storageKey = "automationWindows";
     this.logger = logger;
+    this.devMode = devMode;
   }
 
   async initialize() {

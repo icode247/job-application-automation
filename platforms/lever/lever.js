@@ -79,9 +79,9 @@ export default class LeverPlatform extends BasePlatformAutomation {
       // ✅ FIX: Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
-          console.log("🔄 Attempting to fetch user profile during start...");
+          this.log("🔄 Attempting to fetch user profile during start...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched during start");
+          this.log("✅ User profile fetched during start");
           this.statusOverlay.addSuccess("User profile loaded");
 
           // Update form handler with profile
@@ -325,23 +325,23 @@ export default class LeverPlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
       // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 Fetching user profile from user service...");
+          this.log("📡 Fetching user profile from user service...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
+          this.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
           this.statusOverlay?.addError(
@@ -359,7 +359,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
           userId: this.userId,
         });
         this.userService = new UserService({ userId: this.userId });
-        console.log("📋 Updated services with new userId:", this.userId);
+        this.log("📋 Updated services with new userId:", this.userId);
       }
 
       // Store API host from session context
@@ -372,7 +372,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Lever session context set successfully", {
+      this.log("✅ Lever session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -389,19 +389,19 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting application process");
+      this.log("📝 Starting application process");
       this.statusOverlay.addInfo("Starting application process");
 
       // Validate user profile (inherited validation logic)
       if (!this.userProfile) {
-        console.log("⚠️ No user profile available, attempting to fetch...");
+        this.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchSendCvTaskData();
       }
 
       // Check if we're on a job listing page and need to click Apply
       const currentUrl = window.location.href;
       if (this.isLeverJobListingPage(currentUrl)) {
-        console.log("📋 On job listing page, need to click Apply button");
+        this.log("📋 On job listing page, need to click Apply button");
         await this.handleJobListingPage();
       }
 
@@ -434,7 +434,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
       throw new Error("Cannot find Apply button on job listing page");
     }
 
-    console.log("🖱️ Clicking Apply button");
+    this.log("🖱️ Clicking Apply button");
     applyButton.click();
 
     // Wait for the application page to load
@@ -628,7 +628,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
   async extractJobDescription() {
     try {
-      console.log("🔍 Extracting job details...");
+      this.log("🔍 Extracting job details...");
       this.statusOverlay.addInfo("Extracting job details...");
 
       let jobDescription = {
@@ -670,7 +670,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
           fullDescriptionElement.textContent.trim();
       }
 
-      console.log("✅ Job details extracted successfully:", {
+      this.log("✅ Job details extracted successfully:", {
         title: jobDescription.title,
         company: jobDescription.company,
         location: jobDescription.location,
@@ -759,14 +759,14 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
   processSendCvTaskData(data) {
     try {
-      console.log("📊 Processing send CV task data:", {
+      this.log("📊 Processing send CV task data:", {
         hasData: !!data,
         hasProfile: !!data?.profile,
       });
 
       if (data?.profile && !this.userProfile) {
         this.userProfile = data.profile;
-        console.log("👤 User profile set from background response");
+        this.log("👤 User profile set from background response");
       }
 
       // Update form handler

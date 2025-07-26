@@ -28,8 +28,10 @@ export default class BasePlatform {
     this.onApplicationSubmitted = null;
     this.onDOMChange = null;
     this.onNavigation = null;
+    this.devMode = config.devMode || config.config?.devMode || false;
 
-    this.logger = new Logger("BasePlatform", false);
+
+    this.logger = new Logger(`${this.platform}`, this.devMode);
   }
 
   // Abstract methods - must be implemented by platform-specific classes
@@ -65,6 +67,12 @@ export default class BasePlatform {
       if (sessionContext.userId) this.userId = sessionContext.userId;
       if (sessionContext.userProfile)
         this.userProfile = sessionContext.userProfile;
+       console.log(sessionContext)
+      if (sessionContext.devMode !== undefined) {
+        this.devMode = sessionContext.devMode;
+        // Update logger with new devMode setting
+        this.logger = new Logger(`BasePlatformAutomation-${this.platform}`, this.devMode);
+      }
 
       this.log("✅ Session context set successfully");
     } catch (error) {

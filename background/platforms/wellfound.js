@@ -3,7 +3,8 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "wellfound");
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "wellfound", devMode);
 
     this.platformConfig = {
       domains: ["https://wellfound.com"],

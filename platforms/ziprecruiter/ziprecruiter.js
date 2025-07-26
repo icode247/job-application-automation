@@ -1193,7 +1193,7 @@ export default class ZipRecruiterPlatform extends BasePlatformAutomation {
     try {
       // Get the latest job description FIRST
       const latestJobDescription = await this.getStoredJobData();
-      console.log(
+      this.log(
         "Latest job description retrieved:",
         latestJobDescription
           ? latestJobDescription.substring(0, 100) + "..."
@@ -1948,7 +1948,7 @@ export default class ZipRecruiterPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ ZipRecruiter session context set successfully", {
+      this.log("✅ ZipRecruiter session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -2610,7 +2610,7 @@ export default class ZipRecruiterPlatform extends BasePlatformAutomation {
       processedCount: this.state.processedCount
     };
 
-    console.log(`🤖 [ZipRecruiter] ${message}`, { ...contextInfo, ...data });
+    this.log(`🤖 [ZipRecruiter] ${message}`, { ...contextInfo, ...data });
   }
 
   // Method to reset all state (for debugging/recovery)

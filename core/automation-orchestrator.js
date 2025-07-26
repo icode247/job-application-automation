@@ -7,9 +7,10 @@ import {
 } from "../shared/utilities/url-resolver.js";
 
 export default class AutomationOrchestrator {
-  constructor(logger) {
+  constructor(logger, devMode = false) {
     this.logger = logger;
-    this.windowManager = new WindowManager(logger);
+    this.devMode = devMode;
+    this.windowManager = new WindowManager(logger, devMode);
     this.activeAutomations = new Map();
     this.windowSessions = new Map();
   }
@@ -23,6 +24,7 @@ export default class AutomationOrchestrator {
       preferences = {},
       apiHost,
       userProfile,
+      devMode = false,
     } = params;
 
     try {
@@ -49,6 +51,7 @@ export default class AutomationOrchestrator {
         ...params,
         preferences: preferences,
         apiHost: apiHost,
+        devMode: devMode,
       };
 
       const automationSession = new AutomationSession({
@@ -58,6 +61,8 @@ export default class AutomationOrchestrator {
         windowId: automationWindow.id,
         params: fullParams,
         orchestrator: this,
+        logger: this.logger,
+        devMode: devMode,
       });
 
       this.activeAutomations.set(sessionId, automationSession);
@@ -911,7 +916,7 @@ export default class AutomationOrchestrator {
 }
 
 class AutomationSession {
-  constructor({ sessionId, platform, userId, windowId, params, orchestrator }) {
+  constructor({ sessionId, platform, userId, windowId, params, orchestrator, logger, devMode = false }) {
     this.sessionId = sessionId;
     this.platform = platform;
     this.userId = userId;
@@ -931,6 +936,9 @@ class AutomationSession {
     };
     this.errors = [];
     this.isPaused = false;
+    this.devMode = devMode;
+    this.logger = logger;
+
   }
 
   getConfig() {
@@ -946,7 +954,7 @@ class AutomationSession {
       userPlan: this.params.userPlan,
       userCredits: this.params.userCredits,
       dailyRemaining: this.params.dailyRemaining,
-      devMode: this.params.devMode || false,
+      devMode: this.devMode,
       country: this.params.country || "US",
       apiHost: this.params.apiHost,
     };

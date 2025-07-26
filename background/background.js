@@ -3,17 +3,17 @@ import WindowManager from "./window-manager.js";
 import MessageHandler from "./message-handler.js";
 import SessionManager from "./session-manager.js";
 import Logger from "../core/logger.js";
-//Background service initialization failed
+
 class BackgroundService {
-  constructor() {
-    this.devMode = false;
+  constructor(devMode = false) {
+    this.devMode = devMode;
 
     this.logger = new Logger("BackgroundService", this.devMode);
 
     // Initialize managers with shared logger context
-    this.windowManager = new WindowManager(this.logger);
-    this.sessionManager = new SessionManager(this.logger);
-    this.messageHandler = new MessageHandler(this.logger, this.sessionManager, this.windowManager);
+    this.windowManager = new WindowManager(this.logger, this.devMode);
+    this.sessionManager = new SessionManager(this.logger, this.devMode);
+    this.messageHandler = new MessageHandler(this.logger, this.sessionManager, this.windowManager, this.devMode);
 
     this.isInitialized = false;
     this.listenersSetup = false;
@@ -185,6 +185,19 @@ async function initializeService() {
   await backgroundService.initialize();
 }
 
+function updateDevMode(newDevMode) {
+  if (backgroundService) {
+    backgroundService.devMode = newDevMode;
+    backgroundService.logger = new Logger("BackgroundService", newDevMode);
+
+    // Update all sub-components
+    backgroundService.windowManager.devMode = newDevMode;
+    backgroundService.sessionManager.devMode = newDevMode;
+    backgroundService.messageHandler.devMode = newDevMode;
+    backgroundService.messageHandler.orchestrator.devMode = newDevMode;
+  }
+}
+
 chrome.runtime.onStartup.addListener(async () => {
   await initializeService();
 });
@@ -205,6 +218,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     } catch (error) {
       console.error("❌ Error opening website on install:", error);
     }
+  }
+});
+
+chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
+  if (request.devMode !== undefined && backgroundService) {
+    updateDevMode(request.devMode);
   }
 });
 

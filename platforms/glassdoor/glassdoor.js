@@ -770,7 +770,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     try {
       // Get the latest job description FIRST
       const latestJobDescription = await this.getStoredJobData();
-      console.log(
+      this.log(
         "Latest job description retrieved:",
         latestJobDescription
           ? latestJobDescription.substring(0, 100) + "..."
@@ -1599,7 +1599,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Glassdoor session context set successfully", {
+      this.log("✅ Glassdoor session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,

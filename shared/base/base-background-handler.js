@@ -2,7 +2,7 @@
 import Logger from "../../core/logger.js";
 
 export default class BaseBackgroundHandler {
-  constructor(messageHandler, platformName) {
+  constructor(messageHandler, platformName, devMode = false) {
     this.messageHandler = messageHandler;
     this.platformName = platformName;
     this.portConnections = new Map();
@@ -13,10 +13,10 @@ export default class BaseBackgroundHandler {
     this.maxErrors = 5;
     this.processingMessages = new Set();
     this.processedCompletions = new Set();
-    this.devMode = false;
+    this.devMode = devMode;
     // Start cleanup process
     this.startPeriodicCleanup();
-    this.logger = new Logger(this.platformName, this.devMode);
+    this.logger = new Logger(`${this.platformName}Handler`, this.devMode);
   }
 
   /**

@@ -4,7 +4,8 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class BreezyAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "breezy"); 
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "breezy", devMode);
   }
 
   /**
@@ -105,7 +106,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString = "";
         }
       } catch (error) {
-        this.log.error(
+        this.log(
           "❌ Error converting searchLinkPattern to string:",
           error
         );
@@ -139,7 +140,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      this.log.error(
+      this.log(
         `❌ Failed to send Breezy search task data to port ${port.name}`
       );
     } else {
@@ -195,7 +196,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
           automation.userProfile = userProfile;
           this.log(`✅ User profile fetched and cached for Breezy`);
         } catch (error) {
-          this.log.error(`❌ Failed to fetch user profile for Breezy:`, error);
+          this.log(`❌ Failed to fetch user profile for Breezy:`, error);
         }
       }
 
@@ -233,7 +234,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      this.log.error(
+      this.log(
         `❌ Failed to send Breezy CV task data to port ${port.name}`
       );
     } else {
@@ -319,7 +320,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
 
       this.log(`✅ Breezy job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      this.log.error("❌ Error handling Breezy SEND_CV_TASK:", error);
+      this.log("❌ Error handling Breezy SEND_CV_TASK:", error);
       this.safePortSend(port, {
         type: "ERROR",
         message: error.message,
@@ -436,7 +437,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Breezy-specific delay logic
-    const errorCount = this.log.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.logCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {

@@ -3,7 +3,8 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class IndeedAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "indeed"); // Pass platform name to base class
+    const devMode = messageHandler.devMode;
+    super(messageHandler, "indeed", devMode);
   }
 
   /**

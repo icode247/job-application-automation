@@ -71,23 +71,23 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
       // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 Fetching user profile from user service...");
+          this.log("📡 Fetching user profile from user service...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
+          this.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
           this.statusOverlay?.addError(
@@ -117,7 +117,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Breezy session context set successfully", {
+      this.log("✅ Breezy session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -146,9 +146,9 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
-          console.log("🔄 Attempting to fetch user profile during start...");
+          this.log("🔄 Attempting to fetch user profile during start...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched during start");
+          this.log("✅ User profile fetched during start");
         } catch (error) {
           console.error("❌ Failed to fetch user profile during start:", error);
         }
@@ -286,7 +286,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   // ✅ FIX: Handle SUCCESS messages from background script
   handleSuccessMessage(data) {
-    console.log("📊 Processing SUCCESS message:", data);
+    this.log("📊 Processing SUCCESS message:", data);
 
     // Determine message type based on data content
     if (data && data.submittedLinks !== undefined) {
@@ -492,13 +492,13 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting Breezy application process");
+      this.log("📝 Starting Breezy application process");
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
       // Validate user profile - follow Recruitee pattern
       if (!this.userProfile) {
-        console.log("⚠️ No user profile available, attempting to fetch...");
+        this.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchApplicationTaskData();
       }
 
@@ -509,7 +509,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
         console.error("❌ Failed to obtain user profile");
       } else {
         this.statusOverlay.addSuccess("User profile loaded successfully");
-        console.log("✅ User profile available for Breezy");
+        this.log("✅ User profile available for Breezy");
       }
 
       // Wait for page to fully load
@@ -567,7 +567,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       // Extract job ID from URL (Breezy-specific)
       const jobId = UrlUtils.extractJobId(window.location.href, "breezy");
-      console.log("Extracted Breezy job ID:", jobId);
+      this.log("Extracted Breezy job ID:", jobId);
 
       // Wait for page to fully load
       await this.wait(3000);
@@ -592,14 +592,14 @@ export default class BreezyPlatform extends BasePlatformAutomation {
 
       // Find application form
       const form = this.findApplicationForm();
-      console.log("Found form:", form);
+      this.log("Found form:", form);
       if (!form) {
         throw new SkipApplicationError("Cannot find Breezy application form");
       }
 
       // Extract job description
       const jobDescription = this.extractJobDescription();
-      console.log("Job description:", jobDescription);
+      this.log("Job description:", jobDescription);
 
       // Process the form
       const result = await this.processApplicationForm(

@@ -64,23 +64,23 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
-          console.log("👤 User profile loaded from session context");
+          this.log("👤 User profile loaded from session context");
         } else {
           // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
           };
-          console.log("👤 User profile merged with session context");
+          this.log("👤 User profile merged with session context");
         }
       }
 
       // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
-          console.log("📡 Fetching user profile from user service...");
+          this.log("📡 Fetching user profile from user service...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched successfully");
+          this.log("✅ User profile fetched successfully");
         } catch (error) {
           console.error("❌ Failed to fetch user profile:", error);
         }
@@ -104,7 +104,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         this.formHandler.userData = this.userProfile;
       }
 
-      console.log("✅ Wellfound session context set successfully", {
+      this.log("✅ Wellfound session context set successfully", {
         hasUserProfile: !!this.userProfile,
         userId: this.userId,
         sessionId: this.sessionId,
@@ -130,9 +130,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
-          console.log("🔄 Attempting to fetch user profile during start...");
+          this.log("🔄 Attempting to fetch user profile during start...");
           this.userProfile = await this.userService.getUserDetails();
-          console.log("✅ User profile fetched during start");
+          this.log("✅ User profile fetched during start");
         } catch (error) {
           console.error("❌ Failed to fetch user profile during start:", error);
         }
@@ -639,7 +639,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   handleSuccessMessage(data) {
     // Legacy handler for backward compatibility
-    console.log("🔄 Handling legacy SUCCESS message with data:", data);
+    this.log("🔄 Handling legacy SUCCESS message with data:", data);
 
     if (data && Object.keys(data).length === 0) {
       this.log(
@@ -1053,17 +1053,17 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async startApplicationProcess() {
     try {
-      console.log("📝 Starting Wellfound application process");
+      this.log("📝 Starting Wellfound application process");
       // Validate user profile
       if (!this.userProfile) {
-        console.log("⚠️ No user profile available, attempting to fetch...");
+        this.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchApplicationTaskData();
       }
 
       if (!this.userProfile) {
         console.error("❌ Failed to obtain user profile");
       } else {
-        console.log("✅ User profile available for Wellfound");
+        this.log("✅ User profile available for Wellfound");
       }
 
       // Wait for page to fully load
@@ -1252,7 +1252,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
 
-    console.log("Wellfound application completed successfully");
+    this.log("Wellfound application completed successfully");
   }
 
   // ========================================
@@ -1283,7 +1283,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       }
     }
 
-    console.log(
+    this.log(
       `📋 Extracted job description (${description.length} characters)`
     );
     return description || "No description available";
