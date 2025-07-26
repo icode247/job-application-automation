@@ -92,8 +92,12 @@
         "platforms/wellfound/wellfound.js",
         "platforms/wellfound/wellfound-form-handler.js",
         "platforms/wellfound/wellfound-filter-handler.js",
+        "platforms/ziprecruiter/ziprecruiter.js",
+        "platforms/ziprecruiter/ziprecruiter-form-handler.js",
         "utils/utils.js",
-        "services/constants.js"
+        "services/constants.js",
+        "core/logger.js"
+        
       ],
       "matches": [
         "<all_urls>"

@@ -2,12 +2,19 @@
 import WindowManager from "./window-manager.js";
 import MessageHandler from "./message-handler.js";
 import SessionManager from "./session-manager.js";
-
+import Logger from "../core/logger.js";
+//Background service initialization failed
 class BackgroundService {
   constructor() {
-    this.windowManager = new WindowManager();
-    this.messageHandler = new MessageHandler();
-    this.sessionManager = new SessionManager();
+    this.devMode = false;
+
+    this.logger = new Logger("BackgroundService", this.devMode);
+
+    // Initialize managers with shared logger context
+    this.windowManager = new WindowManager(this.logger);
+    this.sessionManager = new SessionManager(this.logger);
+    this.messageHandler = new MessageHandler(this.logger, this.sessionManager, this.windowManager);
+
     this.isInitialized = false;
     this.listenersSetup = false;
     this.windowListenersSetup = false;
@@ -15,7 +22,7 @@ class BackgroundService {
 
   async initialize() {
     if (this.isInitialized) {
-      console.log("⚠️ Background service already initialized");
+      this.logger.warn("⚠️ Background service already initialized");
       return;
     }
 
@@ -34,15 +41,15 @@ class BackgroundService {
       this.setupExtensionActionListener();
 
       this.isInitialized = true;
-      console.log("✅ Background service initialized");
+      this.logger.log("✅ Background service initialized");
     } catch (error) {
-      console.error("❌ Background service initialization failed:", error);
+      this.logger.error("❌ Background service initialization failed:", error);
     }
   }
 
   setupMessageHandling() {
     if (this.listenersSetup) {
-      console.log("⚠️ Message listeners already set up, skipping");
+      this.logger.warn("⚠️ Message listeners already set up, skipping");
       return;
     }
 
@@ -67,18 +74,18 @@ class BackgroundService {
     });
 
     this.listenersSetup = true;
-    console.log("✅ Message listeners set up");
+    this.logger.log("✅ Message listeners set up");
   }
 
   setupWindowEvents() {
     if (this.windowListenersSetup) {
-      console.log("⚠️ Window listeners already set up, skipping");
+      this.logger.warn("⚠️ Window listeners already set up, skipping");
       return;
     }
 
     chrome.windows.onRemoved.addListener(async (windowId) => {
       try {
-        console.log(
+        this.logger.log(
           `🪟 Window ${windowId} removed - starting comprehensive cleanup`
         );
 
@@ -92,9 +99,9 @@ class BackgroundService {
         // Wait for all cleanup to complete
         await Promise.allSettled(cleanupPromises);
 
-        console.log(`✅ All cleanup completed for window ${windowId}`);
+        this.logger.log(`✅ All cleanup completed for window ${windowId}`);
       } catch (error) {
-        console.error(
+        this.logger.error(
           `❌ Error in window close cleanup for ${windowId}:`,
           error
         );
@@ -103,14 +110,14 @@ class BackgroundService {
         try {
           await this.messageHandler.handleWindowClosed(windowId);
         } catch (fallbackError) {
-          console.error(`❌ Fallback cleanup also failed:`, fallbackError);
+          this.logger.error(`❌ Fallback cleanup also failed:`, fallbackError);
         }
       }
     });
 
     chrome.windows.onFocusChanged.addListener(async (windowId) => {
       if (windowId === chrome.windows.WINDOW_ID_NONE) {
-        console.log("👁️ User switched away from Chrome");
+        this.logger.log("👁️ User switched away from Chrome");
       }
     });
 
@@ -122,25 +129,24 @@ class BackgroundService {
     });
 
     this.windowListenersSetup = true;
-    console.log("✅ Enhanced window listeners set up");
+    this.logger.log("✅ Enhanced window listeners set up");
   }
 
   setupExtensionActionListener() {
     chrome.action.onClicked.addListener(async (tab) => {
       try {
-        console.log("🔗 Extension icon clicked - opening FastApply website");
+        this.logger.log("🔗 Extension icon clicked - opening FastApply website");
         await this.openFastApplyWebsite();
       } catch (error) {
-        console.error(
+        this.logger.error(
           "❌ Error opening FastApply website on icon click:",
           error
         );
       }
     });
-    console.log("✅ Extension action listener set up");
+    this.logger.log("✅ Extension action listener set up");
   }
 
-  // ✅ NEW: Open FastApply website
   async openFastApplyWebsite() {
     try {
       const url = "https://fastapply.co";
@@ -153,17 +159,17 @@ class BackgroundService {
         const existingTab = tabs[0];
         await chrome.tabs.update(existingTab.id, { active: true });
         await chrome.windows.update(existingTab.windowId, { focused: true });
-        console.log(`✅ Focused existing FastApply tab: ${existingTab.id}`);
+        this.logger.log(`✅ Focused existing FastApply tab: ${existingTab.id}`);
       } else {
         // If not open, create a new tab
         const newTab = await chrome.tabs.create({
           url: url,
           active: true,
         });
-        console.log(`✅ Created new FastApply tab: ${newTab.id}`);
+        this.logger.log(`✅ Created new FastApply tab: ${newTab.id}`);
       }
     } catch (error) {
-      console.error("❌ Error opening FastApply website:", error);
+      this.logger.error("❌ Error opening FastApply website:", error);
     }
   }
 }
@@ -180,18 +186,15 @@ async function initializeService() {
 }
 
 chrome.runtime.onStartup.addListener(async () => {
-  console.log("🚀 Extension startup detected");
   await initializeService();
 });
 
 chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log("📦 Extension installed/updated:", details.reason);
 
   await initializeService();
 
   // Open FastApply website on fresh install or extension update
   if (details.reason === "install") {
-    console.log("🎉 Fresh installation - opening FastApply website");
     try {
       // Wait a moment for the service to fully initialize
       setTimeout(async () => {
@@ -202,8 +205,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     } catch (error) {
       console.error("❌ Error opening website on install:", error);
     }
-  } else if (details.reason === "update") {
-    console.log("🔄 Extension updated - optionally open FastApply website");
   }
 });
 

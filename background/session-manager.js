@@ -1,14 +1,16 @@
 // background/session-manager.js
 
 export default class SessionManager {
-  constructor() {
+  constructor(logger) {
     this.sessions = new Map();
     this.storageKey = "automationSessions";
+    this.logger = logger;
+    
   }
 
   async initialize() {
     await this.loadSessions();
-    console.log("📊 Session manager initialized");
+    this.logger.log("📊 Session manager initialized");
   }
 
   async loadSessions() {
@@ -21,7 +23,7 @@ export default class SessionManager {
         }
       }
     } catch (error) {
-      console.error("Error loading sessions:", error);
+      this.logger.error("Error loading sessions:", error);
     }
   }
 
@@ -32,7 +34,7 @@ export default class SessionManager {
         [this.storageKey]: sessionsArray,
       });
     } catch (error) {
-      console.error("Error saving sessions:", error);
+      this.logger.error("Error saving sessions:", error);
     }
   }
 
@@ -57,7 +59,7 @@ export default class SessionManager {
     this.sessions.set(sessionId, session);
     await this.saveSessions();
 
-    console.log(`📝 Created session ${sessionId}`, session);
+    this.logger.log(`📝 Created session ${sessionId}`, session);
     return sessionId;
   }
 
@@ -94,7 +96,7 @@ export default class SessionManager {
   async addNotification(sessionId, notificationData) {
     if (!sessionId) {
       // Handle cases where sessionId might be null
-      console.warn("Cannot add notification: sessionId is null");
+      this.logger.warn("Cannot add notification: sessionId is null");
       return false;
     }
 
@@ -129,7 +131,7 @@ export default class SessionManager {
         session.windowId === windowId &&
         ["running", "starting", "paused"].includes(session.status)
       ) {
-        console.log(
+        this.logger.log(
           `🛑 Force stopping session ${sessionId} due to window close`
         );
         await this.forceStopSession(sessionId, "Window closed by user");
@@ -190,7 +192,7 @@ export default class SessionManager {
 
     if (cleaned > 0) {
       await this.saveSessions();
-      console.log(`🧹 Cleaned up ${cleaned} old sessions`);
+      this.logger.log(`🧹 Cleaned up ${cleaned} old sessions`);
     }
   }
 
@@ -198,7 +200,7 @@ export default class SessionManager {
     try {
       const session = this.sessions.get(sessionId);
       if (!session) {
-        console.log(`⚠️ Session ${sessionId} not found for force stop`);
+        this.logger.warn(`⚠️ Session ${sessionId} not found for force stop`);
         return false;
       }
 
@@ -219,11 +221,18 @@ export default class SessionManager {
         message: `Automation was forcefully stopped: ${reason}`,
       });
 
-      console.log(`✅ Session ${sessionId} force stopped successfully`);
+      this.logger.log(`✅ Session ${sessionId} force stopped successfully`);
       return true;
     } catch (error) {
-      console.error(`❌ Error force stopping session ${sessionId}:`, error);
+      this.logger.error(`❌ Error force stopping session ${sessionId}:`, error);
       return false;
     }
+  }
+
+  /**
+ * Logging with platform context
+ */
+  log(message, data = {}) {
+    console.log(`🚀 [SessionManager] ${message}`, data);
   }
 }

@@ -22,7 +22,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    */
   initializeServicesForSession(automation) {
     if (!automation.userId) {
-      console.warn("No userId available for service initialization");
+      this.log("No userId available for service initialization");
       return;
     }
 
@@ -93,7 +93,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.log(`❓ Unhandled Workable port message type: ${type}`);
+        this.log(`❓ Unhandled Workable port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -140,7 +140,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_APPLICATION_TASK request from Workable tab ${tabId}, window ${windowId}`
     );
 
@@ -162,16 +162,16 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       let userProfile = automation.userProfile;
       if (!userProfile && automation.userId && this.userService) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile using UserService for user ${automation.userId}`
           );
           userProfile = await this.userService.getUserDetails();
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached via UserService`);
+          this.log(`✅ User profile fetched and cached via UserService`);
         } catch (error) {
-          console.error(
+          this.log(
             `❌ Failed to fetch user profile via UserService:`,
             error
           );
@@ -187,14 +187,14 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Workable session data prepared:`, {
+      this.log(`📊 Workable session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Workable automation found for window ${windowId}`);
+      this.log(`⚠️ No Workable automation found for window ${windowId}`);
     }
 
     const sent = this.safePortSend(port, {
@@ -203,11 +203,11 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log(
         `❌ Failed to send Workable application task data to port ${port.name}`
       );
     } else {
-      console.log(
+      this.log(
         `✅ Workable application task data sent successfully to tab ${tabId}`
       );
     }
@@ -222,7 +222,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       const windowId = port.sender?.tab?.windowId;
       const searchTabId = port.sender?.tab?.id;
 
-      console.log(
+      this.log(
         `🎯 START_APPLICATION request: ${url} (requestId: ${requestId})`
       );
 
@@ -240,7 +240,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         const state = await this.stateManager.getState();
         if (state?.isProcessing) {
           const errorMsg = "Already processing another job";
-          console.log(
+          this.log(
             `⚠️ ${errorMsg} - current: ${automation.platformState.currentJobUrl}`
           );
           return this.sendErrorResponse(port, searchTabId, requestId, errorMsg);
@@ -254,7 +254,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       );
 
       if (isDuplicate) {
-        console.log(`🔄 Duplicate job detected: ${url}`);
+        this.log(`🔄 Duplicate job detected: ${url}`);
         return this.sendDuplicateResponse(port, searchTabId, requestId, url);
       }
 
@@ -283,7 +283,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       // Create application tab
       await this.createApplicationTab(automation, url, windowId);
     } catch (error) {
-      console.error("❌ Error in handleStartApplication:", error);
+      this.log("❌ Error in handleStartApplication:", error);
       const errorMsg = "Error starting application: " + error.message;
       this.sendErrorResponse(
         port,
@@ -302,11 +302,11 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       const windowId = port.sender?.tab?.windowId;
       const tabId = port.sender?.tab?.id;
 
-      console.log(`🎯 Handling ${status} completion for window ${windowId}`);
+      this.log(`🎯 Handling ${status} completion for window ${windowId}`);
 
       const automation = this.findAutomationByWindow(windowId);
       if (!automation) {
-        console.warn(`⚠️ No automation found for window ${windowId}`);
+        this.log(`⚠️ No automation found for window ${windowId}`);
         return this.safePortSend(port, {
           type: "ERROR",
           message: "No automation session found",
@@ -343,15 +343,15 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         try {
           await this.continueOrComplete(automation, windowId, status, data);
         } catch (error) {
-          console.error("❌ Error in delayed continuation:", error);
+          this.log("❌ Error in delayed continuation:", error);
         }
       }, 0);
 
-      console.log(
+      this.log(
         `✅ ${status} completion handled successfully - continuing automation`
       );
     } catch (error) {
-      console.error(`❌ Error handling ${status} completion:`, error);
+      this.log(`❌ Error handling ${status} completion:`, error);
       this.safePortSend(port, {
         type: "ERROR",
         message: `Error processing ${status}: ${error.message}`,
@@ -372,7 +372,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
             );
           }
         } catch (continuationError) {
-          console.error(
+          this.log(
             "❌ Error in error recovery continuation:",
             continuationError
           );
@@ -389,7 +389,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       // Update application count using ApplicationTrackerService
       if (this.applicationTracker) {
         await this.applicationTracker.updateApplicationCount();
-        console.log(
+        this.log(
           "✅ Application count updated via ApplicationTrackerService"
         );
       }
@@ -405,7 +405,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         };
 
         await this.applicationTracker.saveAppliedJob(applicationData);
-        console.log("✅ Job details saved via ApplicationTrackerService");
+        this.log("✅ Job details saved via ApplicationTrackerService");
       }
 
       // Update state using StateManager
@@ -413,7 +413,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         await this.stateManager.incrementApplicationsUsed();
       }
     } catch (error) {
-      console.error("❌ Error handling successful application:", error);
+      this.log("❌ Error handling successful application:", error);
       // Don't fail the entire process for API errors
     }
   }
@@ -439,7 +439,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchCompleted(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Workable search completed for window ${windowId}`);
+    this.log(`🏁 Workable search completed for window ${windowId}`);
 
     try {
       await this.showNotification(
@@ -447,7 +447,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         "All job applications have been processed."
       );
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -464,7 +464,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const requestId = data?.requestId;
 
-    console.log(
+    this.log(
       `🔍 Verifying application status for window ${windowId}, tab ${tabId}`
     );
 
@@ -500,14 +500,14 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       response.requestId = requestId;
     }
 
-    console.log(`📊 Sending application status:`, statusData);
+    this.log(`📊 Sending application status:`, statusData);
     this.safePortSend(port, response);
 
     if (tabId) {
       try {
         chrome.tabs.sendMessage(tabId, response);
       } catch (error) {
-        console.warn("⚠️ Error sending redundant status message:", error);
+        this.log("⚠️ Error sending redundant status message:", error);
       }
     }
   }
@@ -516,7 +516,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, data) {
-    console.log("🔄 Workable search ready for next job");
+    this.log("🔄 Workable search ready for next job");
 
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
@@ -529,12 +529,12 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
    */
   async continueOrComplete(automation, windowId, status, data) {
     try {
-      console.log(`🔄 Starting continuation process - Status: ${status}`);
+      this.log(`🔄 Starting continuation process - Status: ${status}`);
 
       // Update counters based on status
       if (status === "SUCCESS") {
         automation.platformState.searchData.current++;
-        console.log(
+        this.log(
           `✅ Incremented counter to ${automation.platformState.searchData.current}`
         );
       }
@@ -546,7 +546,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         automation.platformState.searchData.current >=
         automation.platformState.searchData.limit
       ) {
-        console.log(
+        this.log(
           `🏁 Reached application limit (${automation.platformState.searchData.limit})`
         );
 
@@ -570,7 +570,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         delay = 1500; // 1.5 seconds for success
       }
 
-      console.log(
+      this.log(
         `⏱️ Continuing automation after ${delay}ms delay (status: ${status}, errors: ${errorCount})`
       );
 
@@ -585,18 +585,18 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
               typeof data === "string"
                 ? data
                 : status === "ERROR"
-                ? "Application error - continuing to next job"
-                : status === "SKIPPED"
-                ? "Application skipped - continuing to next job"
-                : "Application completed - continuing to next job",
+                  ? "Application error - continuing to next job"
+                  : status === "SKIPPED"
+                    ? "Application skipped - continuing to next job"
+                    : "Application completed - continuing to next job",
           });
-          console.log(`✅ SEARCH_NEXT message sent successfully`);
+          this.log(`✅ SEARCH_NEXT message sent successfully`);
         } catch (error) {
-          console.error(`❌ Error sending SEARCH_NEXT message:`, error);
+          this.log(`❌ Error sending SEARCH_NEXT message:`, error);
         }
       }, delay);
     } catch (error) {
-      console.error("❌ Error in continueOrComplete:", error);
+      this.log("❌ Error in continueOrComplete:", error);
 
       // Fallback: try to continue anyway after a longer delay
       setTimeout(async () => {
@@ -607,7 +607,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
             message: "Error in continuation - attempting recovery",
           });
         } catch (fallbackError) {
-          console.error("❌ Fallback continuation also failed:", fallbackError);
+          this.log("❌ Fallback continuation also failed:", fallbackError);
         }
       }, 5000);
     }
@@ -626,16 +626,16 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       );
 
       if (searchTab) {
-        console.log(`🔄 Sending SEARCH_NEXT to tab ${searchTab.id}`);
+        this.log(`🔄 Sending SEARCH_NEXT to tab ${searchTab.id}`);
         await chrome.tabs.sendMessage(searchTab.id, {
           type: "SEARCH_NEXT",
           data: data,
         });
       } else {
-        console.warn(`⚠️ No search tab found for window ${windowId}`);
+        this.log(`⚠️ No search tab found for window ${windowId}`);
       }
     } catch (error) {
-      console.error("❌ Error sending SEARCH_NEXT message:", error);
+      this.log("❌ Error sending SEARCH_NEXT message:", error);
     }
   }
 
@@ -710,9 +710,9 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
       });
 
       automation.platformState.currentJobTabId = tab.id;
-      console.log(`✅ Application tab created: ${tab.id} for ${url}`);
+      this.log(`✅ Application tab created: ${tab.id} for ${url}`);
     } catch (tabError) {
-      console.error("❌ Error creating application tab:", tabError);
+      this.log("❌ Error creating application tab:", tabError);
 
       // Reset state on error
       await this.resetApplicationState(automation);
@@ -740,12 +740,12 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
     try {
       if (automation.platformState.currentJobTabId) {
         await chrome.tabs.remove(automation.platformState.currentJobTabId);
-        console.log(
+        this.log(
           `🗑️ Closed application tab ${automation.platformState.currentJobTabId}`
         );
       }
     } catch (tabError) {
-      console.warn("⚠️ Error closing application tab:", tabError);
+      this.log("⚠️ Error closing application tab:", tabError);
     }
   }
 
@@ -761,7 +761,7 @@ export default class WorkableAutomationHandler extends BaseBackgroundHandler {
         message: message,
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
   }
 

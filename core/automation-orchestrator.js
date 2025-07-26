@@ -1,6 +1,5 @@
 // core/automation-orchestrator.js
 import WindowManager from "../background/window-manager.js";
-import Logger from "./logger.js";
 import {
   getGlassdoorJobURL,
   getIndeedJobURL,
@@ -8,9 +7,9 @@ import {
 } from "../shared/utilities/url-resolver.js";
 
 export default class AutomationOrchestrator {
-  constructor() {
-    this.windowManager = new WindowManager();
-    this.logger = new Logger();
+  constructor(logger) {
+    this.logger = logger;
+    this.windowManager = new WindowManager(logger);
     this.activeAutomations = new Map();
     this.windowSessions = new Map();
   }
@@ -51,8 +50,6 @@ export default class AutomationOrchestrator {
         preferences: preferences,
         apiHost: apiHost,
       };
-
-      console.log("FULL PARAMS", fullParams)
 
       const automationSession = new AutomationSession({
         sessionId,
@@ -147,14 +144,12 @@ export default class AutomationOrchestrator {
   ) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        // Wait longer for tab to be ready
         await this.delay(1000 + attempt * 500);
 
         if (window.tabs && window.tabs[0]) {
           await chrome.scripting.executeScript({
             target: { tabId: window.tabs[0].id },
             func: (sessionId, platform, userId, preferences) => {
-              // Set window properties
               window.automationSessionId = sessionId;
               window.automationPlatform = platform;
               window.automationUserId = userId;
@@ -162,7 +157,6 @@ export default class AutomationOrchestrator {
               window.isAutomationWindow = true;
               window.isAutomationTab = true;
 
-              // Set session storage
               sessionStorage.setItem("automationSessionId", sessionId);
               sessionStorage.setItem("automationPlatform", platform);
               sessionStorage.setItem("automationUserId", userId);
@@ -174,35 +168,25 @@ export default class AutomationOrchestrator {
               sessionStorage.setItem("isAutomationWindow", "true");
               sessionStorage.setItem("isAutomationTab", "true");
 
-              console.log("🚀 Automation context injected successfully", {
-                sessionId,
-                platform,
-                userId,
-                preferences,
-                attempt: window.injectionAttempt || "unknown",
-              });
-
-              // Signal successful injection
               window.automationContextInjected = true;
             },
             args: [sessionId, platform, userId, preferences],
           });
 
-          // Verify injection worked
           const verification = await chrome.scripting.executeScript({
             target: { tabId: window.tabs[0].id },
             func: () => window.automationContextInjected === true,
           });
 
           if (verification[0]?.result) {
-            console.log(
+            this.logger.log(
               `✅ Context injection verified on attempt ${attempt + 1}`
             );
             return;
           }
         }
       } catch (error) {
-        console.warn(
+        this.logger.warn(
           `⚠️ Context injection attempt ${attempt + 1} failed:`,
           error
         );
@@ -220,7 +204,7 @@ export default class AutomationOrchestrator {
     const sessionId = this.windowSessions.get(windowId);
 
     if (sessionId) {
-      console.log(
+      this.logger.log(
         `🆕 New tab ${tabId} created in automation window ${windowId}`
       );
 
@@ -240,7 +224,7 @@ export default class AutomationOrchestrator {
             });
           }
         } catch (error) {
-          console.error(
+          this.logger.error(
             `❌ Failed to inject context into new tab ${tabId}:`,
             error
           );
@@ -298,20 +282,15 @@ export default class AutomationOrchestrator {
           if (context.apiHost) {
             sessionStorage.setItem("automationApiHost", context.apiHost);
           }
-
-          console.log(
-            "✅ Automation context injected into tab",
-            context.sessionId
-          );
         },
         args: [context],
       });
 
-      console.log(
+      this.logger.log(
         `✅ Context injected into tab ${tabId} for session ${context.sessionId}`
       );
     } catch (error) {
-      console.error(`❌ Failed to inject context into tab ${tabId}:`, error);
+      this.logger.error(`❌ Failed to inject context into tab ${tabId}:`, error);
     }
   }
 
@@ -327,14 +306,14 @@ export default class AutomationOrchestrator {
   }
 
   async handleWindowClosed(windowId) {
-    console.log(`🪟 Orchestrator handling window ${windowId} closure`);
+    this.logger.log(`🪟 Orchestrator handling window ${windowId} closure`);
 
     const sessionId = this.windowSessions.get(windowId);
 
     if (sessionId) {
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        console.log(
+        this.logger.log(
           `🛑 Orchestrator stopping automation ${sessionId} for closed window ${windowId}`
         );
 
@@ -353,7 +332,7 @@ export default class AutomationOrchestrator {
             await automation.cleanup();
           }
         } catch (error) {
-          console.error(
+          this.logger.error(
             `❌ Error in orchestrator window close cleanup:`,
             error
           );
@@ -365,7 +344,7 @@ export default class AutomationOrchestrator {
       // Clean up tracking
       this.windowSessions.delete(windowId);
 
-      console.log(
+      this.logger.log(
         `✅ Orchestrator cleanup completed for window ${windowId}, session ${sessionId}`
       );
     }
@@ -896,7 +875,7 @@ export default class AutomationOrchestrator {
       try {
         await chrome.windows.remove(automation.windowId);
       } catch (error) {
-        console.error("Error closing automation window:", error);
+        this.logger.error("Error closing automation window:", error);
       }
 
       this.logger.info(`🛑 Automation stopped`, { sessionId });
@@ -1009,7 +988,7 @@ class AutomationSession {
         });
       }
     } catch (error) {
-      console.error("Error sending message to content script:", error);
+      this.logger.error("Error sending message to content script:", error);
     }
   }
 

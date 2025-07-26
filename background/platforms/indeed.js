@@ -57,7 +57,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.log(`❓ Unhandled Indeed port message type: ${type}`);
+        this.log(`❓ Unhandled Indeed port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -67,7 +67,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
 
   async handleSearchCompleted(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Indeed search completed for window ${windowId}`);
+    this.log(`🏁 Indeed search completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -77,7 +77,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log.warn("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -129,7 +129,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEND_CV_TASK request from Indeed tab ${tabId}, window ${windowId}`
     );
 
@@ -143,7 +143,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Indeed automation session: ${sessionId}`);
+        this.log(`✅ Found Indeed automation session: ${sessionId}`);
         break;
       }
     }
@@ -155,7 +155,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Indeed user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -166,9 +166,9 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Indeed`);
+          this.log(`✅ User profile fetched and cached for Indeed`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile for Indeed:`, error);
+          this.log(`❌ Failed to fetch user profile for Indeed:`, error);
         }
       }
 
@@ -181,14 +181,14 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Indeed session data prepared:`, {
+      this.log(`📊 Indeed session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Indeed automation found for window ${windowId}`);
+      this.log.warn(`⚠️ No Indeed automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -206,11 +206,11 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log(
         `❌ Failed to send Indeed CV task data to port ${port.name}`
       );
     } else {
-      console.log(`✅ Indeed CV task data sent successfully to tab ${tabId}`);
+      this.log(`✅ Indeed CV task data sent successfully to tab ${tabId}`);
     }
   }
 
@@ -222,7 +222,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
       const { url, title } = data;
       const windowId = port.sender?.tab?.windowId;
 
-      console.log(`🎯 Opening Indeed job in new tab: ${url}`);
+      this.log(`🎯 Opening Indeed job in new tab: ${url}`);
 
       let automation = null;
       for (const [
@@ -290,9 +290,9 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         message: "Indeed apply tab will be created",
       });
 
-      console.log(`✅ Indeed job tab created: ${tab.id} for URL: ${url}`);
+      this.log(`✅ Indeed job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      console.error("❌ Error handling Indeed SEND_CV_TASK:", error);
+      this.log("❌ Error handling Indeed SEND_CV_TASK:", error);
       this.safePortSend(port, {
         type: "ERROR",
         message: error.message,
@@ -305,7 +305,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchTaskDone(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Indeed search task completed for window ${windowId}`);
+    this.log(`🏁 Indeed search task completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -315,7 +315,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log.warn("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -390,7 +390,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, data) {
-    console.log("🔄 Indeed search ready for next job");
+    this.log("🔄 Indeed search ready for next job");
 
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
@@ -409,7 +409,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Indeed-specific delay logic
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.logCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
@@ -421,8 +421,8 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
           typeof data === "string"
             ? data
             : status === "ERROR"
-            ? "Application error"
-            : undefined,
+              ? "Application error"
+              : undefined,
       });
     }, delay);
   }

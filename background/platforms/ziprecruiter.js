@@ -1,5 +1,4 @@
 // background/platforms/ziprecruiter.js
-
 export default class ZipRecruiterAutomationHandler {
   constructor(messageHandler) {
     this.messageHandler = messageHandler;
@@ -632,10 +631,6 @@ export default class ZipRecruiterAutomationHandler {
     } catch (error) {
       this.log("Failed to send port response:", error);
     }
-  }
-
-  log(message, data = {}) {
-    console.log(`🎯 [ZipRecruiter Handler] ${message}`, data);
   }
 
   // Cleanup method

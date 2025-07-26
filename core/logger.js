@@ -1,7 +1,8 @@
 // core/logger.js
 export default class Logger {
-  constructor(context = "Automation") {
+  constructor(context = "Automation", devMode = false) {
     this.context = context;
+    this.devMode = devMode;
     this.logs = [];
     this.maxLogs = 1000;
   }
@@ -39,16 +40,18 @@ export default class Logger {
       this.logs = this.logs.slice(-this.maxLogs);
     }
 
-    // Console output with formatting
-    const emoji = this.getEmojiForLevel(level);
-    const prefix = `${emoji} [${this.context}]`;
+    // Only show console output in dev mode
+    if (this.devMode) {
+      const emoji = this.getEmojiForLevel(level);
+      const prefix = `${emoji} [${this.context}]`;
 
-    if (level === "ERROR") {
-      console.error(prefix, message, data);
-    } else if (level === "WARN") {
-      console.warn(prefix, message, data);
-    } else {
-      console.log(prefix, message, data);
+      if (level === "ERROR") {
+        console.error(prefix, message, data);
+      } else if (level === "WARN") {
+        console.warn(prefix, message, data);
+      } else {
+        console.log(prefix, message, data);
+      }
     }
 
     // Store in chrome.storage for persistence if needed

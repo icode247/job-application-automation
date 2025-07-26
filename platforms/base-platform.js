@@ -1,4 +1,6 @@
 // platforms/base-platform.js
+import Logger from "../../core/logger.js";
+
 export default class BasePlatform {
   constructor(config) {
     this.sessionId = config.sessionId;
@@ -26,6 +28,8 @@ export default class BasePlatform {
     this.onApplicationSubmitted = null;
     this.onDOMChange = null;
     this.onNavigation = null;
+
+    this.logger = new Logger("BasePlatform", false);
   }
 
   // Abstract methods - must be implemented by platform-specific classes
@@ -213,7 +217,7 @@ export default class BasePlatform {
     const logEntry = `🤖 [${this.platform}-${this.sessionId?.slice(
       -6
     )}] ${message}`;
-    console.log(logEntry, data);
+    this.logger.info(logEntry, data);
   }
 
   getRandomDelay(min, max) {

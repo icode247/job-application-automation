@@ -28,7 +28,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     const windowId = port.sender?.tab?.windowId;
     const tabId = port.sender?.tab?.id;
 
-    console.log(
+    this.log(
       `📨 Handling Glassdoor message: ${type} for session ${sessionId}, tab ${tabId}`
     );
 
@@ -77,7 +77,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.warn(`❓ Unknown Glassdoor message type: ${type}`);
+        this.log.warn(`❓ Unknown Glassdoor message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -92,7 +92,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEARCH_TASK request from Glassdoor tab ${tabId}, window ${windowId}`
     );
 
@@ -106,7 +106,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Glassdoor automation session: ${sessionId}`);
+        this.log(`✅ Found Glassdoor automation session: ${sessionId}`);
         break;
       }
     }
@@ -121,12 +121,12 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString =
             platformState.searchData.searchLinkPattern.toString();
         } else {
-          console.warn("⚠️ searchLinkPattern is null, using default pattern");
+          this.log.warn("⚠️ searchLinkPattern is null, using default pattern");
           searchLinkPatternString =
             this.platformConfig.searchLinkPattern.toString();
         }
       } catch (error) {
-        console.error(
+        this.log.error(
           "❌ Error converting searchLinkPattern to string:",
           error
         );
@@ -147,9 +147,9 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       platformState.searchTabId = tabId;
       automation.searchTabId = tabId;
 
-      console.log(`📊 Glassdoor session data prepared:`, sessionData);
+      this.log(`📊 Glassdoor session data prepared:`, sessionData);
     } else {
-      console.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
+      this.log.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
 
       // Provide default data structure to prevent errors
       sessionData = {
@@ -169,11 +169,11 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log.error(
         `❌ Failed to send Glassdoor search task data to port ${port.name}`
       );
     } else {
-      console.log(
+      this.log(
         `✅ Glassdoor search task data sent successfully to tab ${tabId}`
       );
     }
@@ -186,7 +186,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEND_CV_TASK request from Glassdoor tab ${tabId}, window ${windowId}`
     );
 
@@ -200,7 +200,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Glassdoor automation session: ${sessionId}`);
+        this.log(`✅ Found Glassdoor automation session: ${sessionId}`);
         break;
       }
     }
@@ -212,7 +212,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Glassdoor user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -223,9 +223,9 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Glassdoor`);
+          this.log(`✅ User profile fetched and cached for Glassdoor`);
         } catch (error) {
-          console.error(
+          this.log.error(
             `❌ Failed to fetch user profile for Glassdoor:`,
             error
           );
@@ -241,14 +241,14 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Glassdoor application session data prepared:`, {
+      this.log(`📊 Glassdoor application session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
+      this.log.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
 
       // Provide default data structure
       sessionData = {
@@ -268,11 +268,11 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log.error(
         `❌ Failed to send Glassdoor CV task data to port ${port.name}`
       );
     } else {
-      console.log(
+      this.log(
         `✅ Glassdoor CV task data sent successfully to tab ${tabId}`
       );
     }
@@ -285,7 +285,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     try {
       const { url, title, company, location, salary } = data;
 
-      console.log(
+      this.log(
         `🎯 Starting Glassdoor application for: ${title} (${url}) in tab ${tabId}`
       );
 
@@ -307,7 +307,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
 
       // Check if already processing
       if (automation.platformState.isProcessingJob) {
-        console.log(
+        this.log(
           `⚠️ Glassdoor automation already processing job, ignoring duplicate request`
         );
         this.safePortSend(port, {
@@ -329,7 +329,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       );
 
       if (alreadyApplied) {
-        console.log(`🔄 Job already applied: ${url}`);
+        this.log(`🔄 Job already applied: ${url}`);
         this.safePortSend(port, {
           type: "DUPLICATE",
           data: { url, message: "Already applied to this job" },
@@ -344,7 +344,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
 
       // Set application timeout (5 minutes)
       const timeoutId = setTimeout(() => {
-        console.log(`⏰ Glassdoor application timeout for ${url}`);
+        this.log(`⏰ Glassdoor application timeout for ${url}`);
         this.handleApplicationTimeout(automation, url, null);
       }, 300000);
 
@@ -359,7 +359,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
 
       automation.platformState.currentJobTabId = jobTab.id;
 
-      console.log(
+      this.log(
         `✅ Created Glassdoor job tab ${jobTab.id} for ${url} in window ${windowId}`
       );
 
@@ -378,7 +378,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         tabId: jobTab.id,
       });
     } catch (error) {
-      console.error(`❌ Error starting Glassdoor application:`, error);
+      this.log.error(`❌ Error starting Glassdoor application:`, error);
 
       this.safePortSend(port, {
         type: "ERROR",
@@ -401,7 +401,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
    */
   async handleApplicationTimeout(automation, url, tabId) {
     try {
-      console.log(
+      this.log(
         `⏰ Glassdoor application timeout for ${url} in tab ${tabId}`
       );
 
@@ -416,7 +416,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         try {
           await chrome.tabs.remove(tabId);
         } catch (error) {
-          console.warn(`⚠️ Error closing timeout tab ${tabId}:`, error);
+          this.log.warn(`⚠️ Error closing timeout tab ${tabId}:`, error);
         }
       }
 
@@ -441,7 +441,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         message: "Application timed out",
       });
     } catch (error) {
-      console.error(`❌ Error handling Glassdoor application timeout:`, error);
+      this.log.error(`❌ Error handling Glassdoor application timeout:`, error);
     }
   }
 
@@ -471,7 +471,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         data: status,
       });
     } catch (error) {
-      console.error(`❌ Error checking Glassdoor application status:`, error);
+      this.log.error(`❌ Error checking Glassdoor application status:`, error);
       this.safePortSend(port, {
         type: "ERROR",
         message: "Failed to check application status",
@@ -483,7 +483,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, sessionId) {
-    console.log(`📋 Glassdoor search ready for session ${sessionId}`);
+    this.log(`📋 Glassdoor search ready for session ${sessionId}`);
     this.safePortSend(port, {
       type: "SUCCESS",
       message: "Search next ready acknowledged",
@@ -495,7 +495,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchCompleted(port, sessionId, windowId) {
     try {
-      console.log(`🏁 Glassdoor search completed for session ${sessionId}`);
+      this.log(`🏁 Glassdoor search completed for session ${sessionId}`);
 
       const automation = this.findAutomationBySession(sessionId);
       if (automation) {
@@ -526,7 +526,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
           message: "All job applications have been processed.",
         });
       } catch (error) {
-        console.warn("⚠️ Error showing notification:", error);
+        this.log.warn("⚠️ Error showing notification:", error);
       }
 
       this.safePortSend(port, {
@@ -534,7 +534,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         message: "Search completion acknowledged",
       });
     } catch (error) {
-      console.error(`❌ Error handling Glassdoor search completion:`, error);
+      this.log.error(`❌ Error handling Glassdoor search completion:`, error);
       this.safePortSend(port, {
         type: "ERROR",
         message: "Failed to handle search completion",
@@ -558,16 +558,16 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
       if (tabId) {
         try {
           await chrome.tabs.remove(tabId);
-          console.log(`✅ Closed Glassdoor application tab ${tabId}`);
+          this.log(`✅ Closed Glassdoor application tab ${tabId}`);
         } catch (error) {
-          console.warn(`⚠️ Error closing application tab ${tabId}:`, error);
+          this.log.warn(`⚠️ Error closing application tab ${tabId}:`, error);
         }
       }
 
       // Call parent method for common completion logic
       await super.handleTaskCompletion(port, data, status);
     } catch (error) {
-      console.error(`❌ Error handling Glassdoor task completion:`, error);
+      this.log.error(`❌ Error handling Glassdoor task completion:`, error);
     }
   }
 
@@ -592,7 +592,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         this.platformConfig.smartApplyPattern.test(url)
       );
     } catch (error) {
-      console.error("Error validating Glassdoor URL:", error);
+      this.log.error("Error validating Glassdoor URL:", error);
       return false;
     }
   }
@@ -625,7 +625,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     }
 
     const oldUrl = automation.platformState.currentJobUrl;
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.log.errorCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
@@ -651,17 +651,17 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
               current: automation.platformState.searchData.current || 0,
             },
           });
-          console.log(
+          this.log(
             `✅ Sent SEARCH_NEXT with updated data to Glassdoor search tab ${searchTabId}`
           );
         } catch (error) {
-          console.error(
+          this.log.error(
             `❌ Failed to send SEARCH_NEXT to tab ${searchTabId}:`,
             error
           );
         }
       } else {
-        console.error("❌ No search tab ID available for Glassdoor");
+        this.log.error("❌ No search tab ID available for Glassdoor");
       }
     }, delay);
   }
@@ -670,7 +670,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
    * Enhanced cleanup for Glassdoor-specific resources
    */
   cleanup() {
-    console.log("🧹 Starting GlassdoorAutomationHandler cleanup");
+    this.log("🧹 Starting GlassdoorAutomationHandler cleanup");
 
     // Clear all application timeouts
     for (const timeoutId of this.applicationTimeouts.values()) {
@@ -684,13 +684,6 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
     // Call parent cleanup
     super.cleanup();
 
-    console.log("✅ GlassdoorAutomationHandler cleanup completed");
-  }
-
-  /**
-   * Logging with platform context
-   */
-  log(message, data = {}) {
-    console.log(`🔷 [GlassdoorHandler] ${message}`, data);
+    this.log("✅ GlassdoorAutomationHandler cleanup completed");
   }
 }

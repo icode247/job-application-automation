@@ -1,13 +1,15 @@
 // background/window-manager.js
+
 export default class WindowManager {
-  constructor() {
+  constructor(logger) {
     this.automationWindows = new Map();
     this.storageKey = "automationWindows";
+    this.logger = logger;
   }
 
   async initialize() {
     await this.loadAutomationWindows();
-    console.log("🪟 Window manager initialized");
+    this.logger.log("🪟 Window manager initialized");
   }
 
   async loadAutomationWindows() {
@@ -20,7 +22,7 @@ export default class WindowManager {
         }
       }
     } catch (error) {
-      console.error("Error loading automation windows:", error);
+      this.logger.error("Error loading automation windows:", error);
     }
   }
 
@@ -31,7 +33,7 @@ export default class WindowManager {
         [this.storageKey]: windowsArray,
       });
     } catch (error) {
-      console.error("Error saving automation windows:", error);
+      this.logger.error("Error saving automation windows:", error);
     }
   }
 
@@ -45,7 +47,7 @@ export default class WindowManager {
     this.automationWindows.set(windowId, windowData);
     await this.saveAutomationWindows();
 
-    console.log(`🪟 Registered automation window ${windowId}`, windowData);
+    this.logger.log(`🪟 Registered automation window ${windowId}`, windowData);
   }
 
   async checkIfAutomationWindow(sender, sendResponse) {
@@ -61,7 +63,7 @@ export default class WindowManager {
     if (this.automationWindows.has(windowId)) {
       this.automationWindows.delete(windowId);
       await this.saveAutomationWindows();
-      console.log(`🪟 Cleaned up automation window ${windowId}`);
+      this.logger.log(`🪟 Cleaned up automation window ${windowId}`);
     }
   }
 
@@ -88,10 +90,10 @@ export default class WindowManager {
 
       if (hasChanges) {
         await this.saveAutomationWindows();
-        console.log("🧹 Cleaned up invalid automation windows");
+        this.logger.log("🧹 Cleaned up invalid automation windows");
       }
     } catch (error) {
-      console.error("Error cleaning up windows:", error);
+      this.logger.error("Error cleaning up windows:", error);
     }
   }
 }

@@ -1,4 +1,6 @@
 // shared/base/base-background-handler.js
+import Logger from "../../core/logger.js";
+
 export default class BaseBackgroundHandler {
   constructor(messageHandler, platformName) {
     this.messageHandler = messageHandler;
@@ -11,9 +13,10 @@ export default class BaseBackgroundHandler {
     this.maxErrors = 5;
     this.processingMessages = new Set();
     this.processedCompletions = new Set();
-
+    this.devMode = false;
     // Start cleanup process
     this.startPeriodicCleanup();
+    this.logger = new Logger(this.platformName, this.devMode);
   }
 
   /**
@@ -29,7 +32,7 @@ export default class BaseBackgroundHandler {
 
     // Validate platform matches
     if (platform !== this.platformName) {
-      console.warn(
+      (this.log.warn
         `Platform mismatch: expected ${this.platformName}, got ${platform}`
       );
       this.safePortDisconnect(port);
@@ -38,14 +41,14 @@ export default class BaseBackgroundHandler {
 
     // Prevent duplicate connections
     if (this.activeConnections.has(port.name)) {
-      console.log(
+      this.log(
         `⚠️ Duplicate ${this.platformName} port connection attempt: ${port.name}`
       );
       this.safePortDisconnect(port);
       return;
     }
 
-    console.log(
+    this.log(
       `📝 Registering ${this.platformName} ${portType} port for tab ${tabId}, session ${sessionId}`
     );
 
@@ -79,7 +82,7 @@ export default class BaseBackgroundHandler {
 
     // Handle disconnection
     port.onDisconnect.addListener(() => {
-      console.log(`📪 ${this.platformName} port disconnected: ${port.name}`);
+      this.log(`📪 ${this.platformName} port disconnected: ${port.name}`);
       this.cleanupPort(port, tabId, sessionId);
     });
 
@@ -101,7 +104,7 @@ export default class BaseBackgroundHandler {
     const messageId = `${port.name}-${message.type}-${Date.now()}`;
 
     if (this.processingMessages.has(messageId)) {
-      console.log(
+      this.log(
         `⚠️ Duplicate message ignored: ${message.type} from ${port.name}`
       );
       return;
@@ -112,7 +115,7 @@ export default class BaseBackgroundHandler {
     try {
       this.handlePortMessage(message, port);
     } catch (error) {
-      console.error(
+      this.log(
         `❌ Error handling ${this.platformName} message ${message.type}:`,
         error
       );
@@ -163,14 +166,14 @@ export default class BaseBackgroundHandler {
   safePortSend(port, message) {
     try {
       if (!port || !port.name || !this.activeConnections.has(port.name)) {
-        console.warn(
+        this.log.warn(
           `⚠️ Cannot send message to disconnected/invalid ${this.platformName} port: ${message.type}`
         );
         return false;
       }
 
       if (!port.sender || !port.sender.tab) {
-        console.warn(
+        this.log.warn(
           `⚠️ ${this.platformName} port sender no longer exists: ${message.type}`
         );
         this.activeConnections.delete(port.name);
@@ -181,7 +184,7 @@ export default class BaseBackgroundHandler {
       this.lastKeepalive.set(port.name, Date.now());
       return true;
     } catch (error) {
-      console.warn(
+      this.log.warn(
         `⚠️ Failed to send ${this.platformName} port message (${message.type}):`,
         error.message
       );
@@ -253,7 +256,7 @@ export default class BaseBackgroundHandler {
       // Clean up stale ports
       for (const [portName, lastSeen] of this.lastKeepalive.entries()) {
         if (now - lastSeen > staleThreshold) {
-          console.log(
+          this.log(
             `🧹 Cleaning up stale ${this.platformName} port: ${portName}`
           );
           this.activeConnections.delete(portName);
@@ -285,7 +288,7 @@ export default class BaseBackgroundHandler {
     const maxRetries = 1;
 
     try {
-      console.log(
+      this.log(
         `📤 Sending SEARCH_NEXT message to ${this.platformName} window ${windowId}:`,
         data
       );
@@ -302,12 +305,12 @@ export default class BaseBackgroundHandler {
                 type: "SEARCH_NEXT",
                 data: data,
               });
-              console.log(
+              this.log(
                 `✅ Sent SEARCH_NEXT via port to ${this.platformName} tab ${tab.id}`
               );
               return true;
             } catch (error) {
-              console.warn("⚠️ Port message failed, trying tabs API:", error);
+              this.log.warn("⚠️ Port message failed, trying tabs API:", error);
             }
           }
 
@@ -317,12 +320,12 @@ export default class BaseBackgroundHandler {
               type: "SEARCH_NEXT",
               data: data,
             });
-            console.log(
+            this.log(
               `✅ Sent SEARCH_NEXT via tabs API to ${this.platformName} tab ${tab.id}`
             );
             return true;
           } catch (error) {
-            console.warn("⚠️ Tabs API message failed:", error);
+            this.log.warn("⚠️ Tabs API message failed:", error);
             if (retryCount < maxRetries) {
               setTimeout(() => {
                 this.sendSearchNextMessage(windowId, data, retryCount + 1);
@@ -333,12 +336,12 @@ export default class BaseBackgroundHandler {
         }
       }
 
-      console.warn(
+      this.log.warn(
         `⚠️ Could not find ${this.platformName} search tab to send SEARCH_NEXT message`
       );
       return false;
     } catch (error) {
-      console.error(
+      this.log(
         `❌ Error sending ${this.platformName} SEARCH_NEXT message:`,
         error
       );
@@ -366,7 +369,7 @@ export default class BaseBackgroundHandler {
    * Complete cleanup of all resources
    */
   cleanup() {
-    console.log(`🧹 Starting ${this.platformName}AutomationHandler cleanup`);
+    this.log(`🧹 Starting ${this.platformName}AutomationHandler cleanup`);
 
     // Clear all port connections
     for (const port of this.portConnections.values()) {
@@ -389,7 +392,7 @@ export default class BaseBackgroundHandler {
       this.processedCompletions.clear();
     }
 
-    console.log(`✅ ${this.platformName}AutomationHandler cleanup completed`);
+    this.log(`✅ ${this.platformName}AutomationHandler cleanup completed`);
   }
 
   /**
@@ -401,9 +404,8 @@ export default class BaseBackgroundHandler {
       const tabId = port.sender?.tab?.id;
       const sessionId = this.getSessionIdFromPort(port);
 
-      console.log(
-        `${status === "SUCCESS" ? "✅" : "❌"} ${
-          this.platformName
+      this.log(
+        `${status === "SUCCESS" ? "✅" : "❌"} ${this.platformName
         } job application ${status.toLowerCase()} in tab ${tabId}`
       );
 
@@ -413,7 +415,7 @@ export default class BaseBackgroundHandler {
         this.errorCounts.set(sessionId, errorCount);
 
         if (errorCount >= this.maxErrors) {
-          console.error(
+          this.log(
             `🚨 Too many errors (${errorCount}) for ${this.platformName} session ${sessionId}, stopping automation`
           );
           this.safePortSend(port, {
@@ -451,7 +453,7 @@ export default class BaseBackgroundHandler {
         message: `${status} acknowledged`,
       });
     } catch (error) {
-      console.error(
+      this.logger.error(
         `❌ Error handling ${this.platformName} task completion:`,
         error
       );
@@ -488,7 +490,7 @@ export default class BaseBackgroundHandler {
       try {
         await chrome.tabs.remove(automation.platformState.currentJobTabId);
       } catch (error) {
-        console.warn(`⚠️ Error closing ${this.platformName} job tab:`, error);
+        this.logger.warn(`⚠️ Error closing ${this.platformName} job tab:`, error);
       }
     }
   }
@@ -517,9 +519,9 @@ export default class BaseBackgroundHandler {
     const delay =
       status === "ERROR"
         ? Math.min(
-            3000 * (this.errorCounts.get(automation.sessionId) || 1),
-            15000
-          )
+          3000 * (this.errorCounts.get(automation.sessionId) || 1),
+          15000
+        )
         : 0;
 
     setTimeout(async () => {
@@ -531,9 +533,27 @@ export default class BaseBackgroundHandler {
           typeof data === "string"
             ? data
             : status === "ERROR"
-            ? "Application error"
-            : undefined,
+              ? "Application error"
+              : undefined,
       });
     }, delay);
+  }
+
+  /**
+ * Logging with platform context
+ */
+  log(message, data = {}) {
+    const sessionInfo = this.sessionId
+      ? `[Session: ${this.sessionId.slice(-6)}]`
+      : "[No Session]";
+    const contextInfo = this.hasSessionContext
+      ? "[Context: ✓]"
+      : "[Context: ✗]";
+    const profileInfo = this.userProfile ? "[Profile: ✓]" : "[Profile: ✗]";
+
+    this.logger.log(
+      `🤖 [${this.platform}${sessionInfo}${contextInfo}${profileInfo}] ${message}`,
+      data
+    );
   }
 }

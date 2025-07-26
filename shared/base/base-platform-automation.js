@@ -1,10 +1,13 @@
 // shared/base/base-platform-automation.js - COMPLETE VERSION WITH ENHANCED CHATBOT
 import BasePlatform from "../../platforms/base-platform.js";
 import ChatbotStatusOverlay from "../../services/status-notification-service.js";
+import Logger from "../../core/logger.js";
 
 export default class BasePlatformAutomation extends BasePlatform {
   constructor(config) {
     super(config);
+
+    this.logger = new Logger("BasePlatformAutomation", false);
 
     // Initialize user profile from multiple sources
     this.userProfile =
@@ -530,16 +533,16 @@ export default class BasePlatformAutomation extends BasePlatform {
           this.markLinkAsColor(links[i], "red", "Error");
           this.statusOverlay.addError(
             "I encountered an issue with this job application" +
-              (data.message ? ` - ${data.message}` : "") +
-              ". Don't worry, I'll continue with the next one!"
+            (data.message ? ` - ${data.message}` : "") +
+            ". Don't worry, I'll continue with the next one!"
           );
           this.statusOverlay.updateStatus("error", "Resolving issue...");
         } else {
           this.markLinkAsColor(links[i], "orange", "Skipped");
           this.statusOverlay.addWarning(
             "I skipped this job" +
-              (data.message ? ` because ${data.message.toLowerCase()}` : "") +
-              ". Moving on to the next one!"
+            (data.message ? ` because ${data.message.toLowerCase()}` : "") +
+            ". Moving on to the next one!"
           );
           this.statusOverlay.updateStatus("warning", "Job skipped");
         }
@@ -735,8 +738,8 @@ export default class BasePlatformAutomation extends BasePlatform {
     const pattern =
       typeof this.searchData.searchLinkPattern === "string"
         ? new RegExp(
-            this.searchData.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, "")
-          )
+          this.searchData.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, "")
+        )
         : this.searchData.searchLinkPattern;
 
     return pattern.test(url);
@@ -1145,7 +1148,7 @@ export default class BasePlatformAutomation extends BasePlatform {
       : "[Context: ✗]";
     const profileInfo = this.userProfile ? "[Profile: ✓]" : "[Profile: ✗]";
 
-    console.log(
+    this.logger.log(
       `🤖 [${this.platform}${sessionInfo}${contextInfo}${profileInfo}] ${message}`,
       data
     );

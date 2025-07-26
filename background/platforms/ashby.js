@@ -3,7 +3,7 @@ import BaseBackgroundHandler from "../../shared/base/base-background-handler.js"
 
 export default class AshbyAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "ashby"); // Pass platform name to base class
+    super(messageHandler, "ashby");
   }
 
   /**
@@ -59,7 +59,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.log(`❓ Unhandled Ashby port message type: ${type}`);
+        this.log(`❓ Unhandled Ashby port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -71,7 +71,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEARCH_TASK request from Ashby tab ${tabId}, window ${windowId}`
     );
 
@@ -85,7 +85,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Ashby automation session: ${sessionId}`);
+        this.log(`✅ Found Ashby automation session: ${sessionId}`);
         break;
       }
     }
@@ -100,11 +100,11 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString =
             platformState.searchData.searchLinkPattern.toString();
         } else {
-          console.warn("⚠️ searchLinkPattern is null, using empty string");
+          this.log("⚠️ searchLinkPattern is null, using empty string");
           searchLinkPatternString = "";
         }
       } catch (error) {
-        console.error(
+        this.log.error(
           "❌ Error converting searchLinkPattern to string:",
           error
         );
@@ -122,10 +122,10 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
 
       // Update search tab ID
       platformState.searchTabId = tabId;
-      console.log(`📊 Ashby session data prepared:`, sessionData);
+      this.log(`📊 Ashby session data prepared:`, sessionData);
     } else {
-      console.warn(`⚠️ No Ashby automation found for window ${windowId}`);
-      console.log(
+      this.log(`⚠️ No Ashby automation found for window ${windowId}`);
+      this.log(
         `Active automations:`,
         Array.from(this.messageHandler.activeAutomations.keys())
       );
@@ -138,11 +138,11 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log(
         `❌ Failed to send Ashby search task data to port ${port.name}`
       );
     } else {
-      console.log(
+      this.log(
         `✅ Ashby search task data sent successfully to tab ${tabId}`
       );
     }
@@ -155,7 +155,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEND_CV_TASK request from Ashby tab ${tabId}, window ${windowId}`
     );
 
@@ -169,7 +169,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Ashby automation session: ${sessionId}`);
+        this.log(`✅ Found Ashby automation session: ${sessionId}`);
         break;
       }
     }
@@ -181,7 +181,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Ashby user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -192,9 +192,9 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Ashby`);
+          this.log(`✅ User profile fetched and cached for Ashby`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile for Ashby:`, error);
+          this.log(`❌ Failed to fetch user profile for Ashby:`, error);
         }
       }
 
@@ -207,14 +207,14 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Ashby session data prepared:`, {
+      this.log(`📊 Ashby session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Ashby automation found for window ${windowId}`);
+      this.log(`⚠️ No Ashby automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -232,11 +232,11 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log(
         `❌ Failed to send Ashby CV task data to port ${port.name}`
       );
     } else {
-      console.log(`✅ Ashby CV task data sent successfully to tab ${tabId}`);
+      this.log(`✅ Ashby CV task data sent successfully to tab ${tabId}`);
     }
   }
 
@@ -248,7 +248,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
       const { url, title } = data;
       const windowId = port.sender?.tab?.windowId;
 
-      console.log(`🎯 Opening Ashby job in new tab: ${url}`);
+      this.log(`🎯 Opening Ashby job in new tab: ${url}`);
 
       let automation = null;
       for (const [
@@ -316,9 +316,9 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
         message: "Ashby apply tab will be created",
       });
 
-      console.log(`✅ Ashby job tab created: ${tab.id} for URL: ${url}`);
+      this.log(`✅ Ashby job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      console.error("❌ Error handling Ashby SEND_CV_TASK:", error);
+      this.log("❌ Error handling Ashby SEND_CV_TASK:", error);
       this.safePortSend(port, {
         type: "ERROR",
         message: error.message,
@@ -331,7 +331,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchTaskDone(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Ashby search task completed for window ${windowId}`);
+    this.log(`🏁 Ashby search task completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -341,7 +341,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -416,7 +416,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, data) {
-    console.log("🔄 Ashby search ready for next job");
+    this.log("🔄 Ashby search ready for next job");
 
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
@@ -435,7 +435,7 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Ashby-specific delay logic
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.logCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
@@ -447,8 +447,8 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
           typeof data === "string"
             ? data
             : status === "ERROR"
-            ? "Application error"
-            : undefined,
+              ? "Application error"
+              : undefined,
       });
     }, delay);
   }

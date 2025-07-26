@@ -35,6 +35,9 @@ Description: [Detailed description with features and benefits]
 Category: Productivity
 Language: English
 ```
+### ZIP
+  
+   zip -r fastapply.zip .
 
 ### 4. Privacy and Permissions
 

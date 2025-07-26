@@ -6,7 +6,7 @@ import {
   UserService,
 } from "../../services/index.js";
 import FormHandler from "../../shared/indeed_glassdoors/form-handler.js";
-// 
+//startApplicationProcess()
 
 const INDEED_SELECTORS = {
   JOB_CARDS: [
@@ -262,10 +262,316 @@ export default class IndeedPlatform extends BasePlatformAutomation {
     }
   }
 
+  /**
+ * Check for Cloudflare verification/captcha blocks and pause automation until resolved
+ */
+  async checkCloudflareStatus() {
+    try {
+      this.log("🔍 Checking for Cloudflare verification blocks");
+
+      // Check for the specific Cloudflare verification page elements
+      const cloudflareSelectors = [
+        'main.error h1#heading',
+        'p#paragraph[id*="Ray ID"]',
+        'div.main-wrapper[role="main"]',
+        'div#RInW4[style*="display: grid"]',
+        'input[name="cf-turnstile-response"]',
+        'div.core-msg.spacer',
+        'noscript div.h2 span#challenge-error-text'
+      ];
+
+      // Check for Cloudflare verification page
+      const isCloudflareVerification = this.checkCloudflareElements(cloudflareSelectors);
+
+      if (isCloudflareVerification) {
+        this.log("🚫 Cloudflare verification detected, pausing automation");
+        this.statusOverlay.addWarning("Cloudflare verification required - please complete the challenge");
+
+        // Pause automation and wait for user to solve verification
+        await this.waitForCloudflareResolution();
+      } else {
+        this.log("✅ No Cloudflare verification detected, continuing");
+      }
+    } catch (error) {
+      this.log("❌ Error checking Cloudflare status:", error);
+    }
+  }
+
+  /**
+   * Check if Cloudflare verification elements are present
+   */
+  checkCloudflareElements(selectors) {
+    // Check for main error heading
+    const errorHeading = document.querySelector('main.error h1#heading');
+    if (errorHeading && errorHeading.textContent.includes('Additional Verification Required')) {
+      return true;
+    }
+
+    // Check for Ray ID paragraph
+    const rayIdParagraph = document.querySelector('p#paragraph');
+    if (rayIdParagraph && rayIdParagraph.textContent.includes('Ray ID for this request')) {
+      return true;
+    }
+
+    // Check for Cloudflare challenge elements
+    const challengeElements = [
+      'input[name="cf-turnstile-response"]',
+      'div[id*="cf-chl"]',
+      'script[src*="challenge-platform"]'
+    ];
+
+    const hasCloudflareElements = challengeElements.some(selector => {
+      const element = document.querySelector(selector);
+      return element !== null;
+    });
+
+    if (hasCloudflareElements) {
+      return true;
+    }
+
+    // Check for waiting message
+    const waitingMessage = document.querySelector('div.core-msg.spacer');
+    if (waitingMessage && waitingMessage.textContent.includes('Waiting for ng.indeed.com to respond')) {
+      return true;
+    }
+
+    // Check for JavaScript disabled message
+    const jsDisabledMessage = document.querySelector('noscript div.h2 span#challenge-error-text');
+    if (jsDisabledMessage && jsDisabledMessage.textContent.includes('Enable JavaScript and cookies to continue')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Wait for Cloudflare verification to be resolved by user
+   */
+  async waitForCloudflareResolution() {
+    const maxWaitTime = 10 * 60 * 1000; // 10 minutes max wait
+    const checkInterval = 5000; // Check every 5 seconds
+    let waitTime = 0;
+
+    this.statusOverlay.addInfo("Waiting for Cloudflare verification to be completed...");
+
+    while (waitTime < maxWaitTime) {
+      await this.wait(checkInterval);
+      waitTime += checkInterval;
+
+      // Check if we're still on the Cloudflare verification page
+      const stillOnCloudflare = this.checkCloudflareElements();
+
+      if (!stillOnCloudflare) {
+        this.log("✅ Cloudflare verification resolved, continuing automation");
+        this.statusOverlay.addSuccess("Cloudflare verification completed!");
+
+        // After Cloudflare is resolved, check if user is logged in
+        await this.checkLoginStatus();
+        return;
+      }
+
+      // Check if page has changed to a normal Indeed page
+      const currentUrl = window.location.href;
+      if (currentUrl.includes('indeed.com') && !currentUrl.includes('cf_chl_tk')) {
+        this.log("✅ Redirected to Indeed page, Cloudflare verification likely completed");
+        this.statusOverlay.addSuccess("Successfully redirected to Indeed!");
+
+        // Check login status after successful redirect
+        await this.checkLoginStatus();
+        return;
+      }
+
+      this.log(`⏳ Waiting for Cloudflare verification... (${Math.floor(waitTime / 1000)}s)`);
+      this.statusOverlay.addInfo(`Waiting for verification completion... (${Math.floor(waitTime / 1000)}s)`);
+    }
+
+    throw new Error("Cloudflare verification timeout - please refresh and try again");
+  }
+
+  /**
+   * Check if user is logged in by looking for login/signin elements
+   */
+  async checkLoginStatus() {
+    try {
+      this.log("🔍 Checking user login status");
+      this.statusOverlay.addInfo("Checking if you're signed in to Indeed...");
+
+      // Wait a moment for page to fully load
+      await this.wait(2000);
+
+      // Check for sign-in elements that indicate user is NOT logged in
+      const loginIndicators = [
+        // Mobile sign in span
+        'span#signInMobile',
+        // Desktop sign in link
+        'li.link-signin a#signIn[href*="account/login"]',
+        // General sign in links
+        'a[href*="account/login"]',
+        'a[href*="secure.indeed.com/account/login"]',
+        // Sign in buttons
+        'button[data-testid="signin-button"]',
+        'button:contains("Sign in")',
+        // Join now links (also indicate not logged in)
+        'a[href*="account/register"]',
+        'a:contains("Join now")'
+      ];
+
+      const isLoggedOut = this.checkForLoginElements(loginIndicators);
+
+      if (isLoggedOut) {
+        this.log("🚫 User not logged in to Indeed");
+        this.statusOverlay.addWarning("Please sign in to Indeed to continue automation");
+
+        // Wait for user to log in
+        await this.waitForUserLogin();
+      } else {
+        this.log("✅ User appears to be logged in to Indeed");
+        this.statusOverlay.addSuccess("Indeed login confirmed!");
+      }
+    } catch (error) {
+      this.log("❌ Error checking login status:", error);
+      this.statusOverlay.addError("Error checking login status: " + error.message);
+    }
+  }
+
+  /**
+   * Check for login elements that indicate user is not logged in
+   */
+  checkForLoginElements(selectors) {
+    for (const selector of selectors) {
+      // Handle special case for :contains() pseudo-selector
+      if (selector.includes(':contains(')) {
+        const match = selector.match(/^([^:]+):contains\("([^"]+)"\)$/);
+        if (match) {
+          const [, baseSelector, text] = match;
+          const elements = document.querySelectorAll(baseSelector);
+
+          for (const element of elements) {
+            if (element.textContent && element.textContent.trim().includes(text)) {
+              this.log(`Found login indicator: ${selector}`);
+              return true;
+            }
+          }
+        }
+        continue;
+      }
+
+      const element = document.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        this.log(`Found login indicator: ${selector}`);
+
+        // Additional validation for sign-in links
+        if (selector.includes('signIn') || selector.includes('signin')) {
+          const href = element.getAttribute('href');
+          const text = element.textContent.trim().toLowerCase();
+
+          if ((href && href.includes('login')) || text.includes('sign in')) {
+            return true;
+          }
+        } else {
+          return true;
+        }
+      }
+    }
+
+    // Also check for common "Account" or "Profile" elements that indicate logged-in state
+    const loggedInIndicators = [
+      'a[href*="/account/"]',
+      'button[data-testid="profile-menu"]',
+      'div[data-testid="user-menu"]',
+      'a:contains("My account")',
+      'a:contains("Profile")',
+      'button:contains("Account")'
+    ];
+
+    for (const selector of loggedInIndicators) {
+      if (selector.includes(':contains(')) {
+        const match = selector.match(/^([^:]+):contains\("([^"]+)"\)$/);
+        if (match) {
+          const [, baseSelector, text] = match;
+          const elements = document.querySelectorAll(baseSelector);
+
+          for (const element of elements) {
+            if (element.textContent && element.textContent.trim().includes(text)) {
+              this.log(`Found logged-in indicator: ${selector}`);
+              return false; // User IS logged in
+            }
+          }
+        }
+        continue;
+      }
+
+      const element = document.querySelector(selector);
+      if (element && this.isElementVisible(element)) {
+        this.log(`Found logged-in indicator: ${selector}`);
+        return false; // User IS logged in
+      }
+    }
+
+    return false; // No clear login indicators found, assume logged in
+  }
+
+  /**
+   * Wait for user to log in to Indeed
+   */
+  async waitForUserLogin() {
+    const maxWaitTime = 15 * 60 * 1000; // 15 minutes max wait
+    const checkInterval = 10000; // Check every 10 seconds
+    let waitTime = 0;
+
+    this.statusOverlay.addInfo("Please sign in to Indeed to continue automation");
+
+    while (waitTime < maxWaitTime) {
+      await this.wait(checkInterval);
+      waitTime += checkInterval;
+
+      // Check if login indicators are gone (user has logged in)
+      const loginIndicators = [
+        'span#signInMobile',
+        'li.link-signin a#signIn[href*="account/login"]',
+        'a[href*="account/login"]',
+        'button[data-testid="signin-button"]'
+      ];
+
+      const stillLoggedOut = this.checkForLoginElements(loginIndicators);
+
+      if (!stillLoggedOut) {
+        this.log("✅ User logged in to Indeed, continuing automation");
+        this.statusOverlay.addSuccess("Indeed login successful!");
+        return;
+      }
+
+      // Check if we're on a page that clearly indicates login success
+      const currentUrl = window.location.href;
+      if (currentUrl.includes('indeed.com') &&
+        (currentUrl.includes('/account/') ||
+          currentUrl.includes('/dashboard') ||
+          currentUrl.includes('/jobs'))) {
+
+        // Double-check by looking for login elements again
+        const doubleCheck = this.checkForLoginElements(loginIndicators);
+        if (!doubleCheck) {
+          this.log("✅ Login confirmed by URL and element check");
+          this.statusOverlay.addSuccess("Indeed login confirmed!");
+          return;
+        }
+      }
+
+      this.log(`⏳ Waiting for user login... (${Math.floor(waitTime / 1000)}s)`);
+      this.statusOverlay.addInfo(`Waiting for Indeed login... (${Math.floor(waitTime / 1000)}s)`);
+    }
+
+    throw new Error("Login timeout - please refresh and try again");
+  }
+
   async detectPageTypeAndStart() {
     const url = window.location.href;
     this.log(`🔍 Detecting page type for: ${url}`);
 
+    // FIRST: Check for Cloudflare verification
+    await this.checkCloudflareStatus();
+
+    // SECOND: Detect page type and proceed
     if (url.includes("google.com/search")) {
       this.statusOverlay.addInfo("Google search page detected");
       await this.startSearchProcess();
@@ -537,17 +843,44 @@ export default class IndeedPlatform extends BasePlatformAutomation {
 
   async startSearchProcess() {
     try {
-      this.statusOverlay.addInfo("Starting job search process");
+      // Prevent duplicate search process starts
+      if (this.searchProcessStarted) {
+        this.log("⚠️ Search process already started, ignoring duplicate");
+        return;
+      }
+
+      this.statusOverlay.addInfo("Starting Indeed job search process");
+
+      // Check for Cloudflare verification first
+      await this.checkCloudflareStatus();
+
+      // Check if user is logged in
+      await this.checkLoginStatus();
+
+      this.searchProcessStarted = true;
+
+      this.statusOverlay.addInfo("All verifications passed, proceeding with search");
       this.statusOverlay.updateStatus("searching");
+
+      // Continue with existing search logic
       await this.fetchSearchTaskData();
     } catch (error) {
+      this.searchProcessStarted = false; // Reset on error
       this.reportError(error, { phase: "search" });
     }
   }
 
+
   async startJobSearchProcess() {
     try {
       this.statusOverlay.addInfo("Starting job search on Indeed results page");
+
+      // Check for Cloudflare verification
+      await this.checkCloudflareStatus();
+
+      // Check login status
+      await this.checkLoginStatus();
+
       this.statusOverlay.updateStatus("searching");
 
       await this.fetchSearchTaskData();
@@ -832,6 +1165,12 @@ export default class IndeedPlatform extends BasePlatformAutomation {
     try {
       this.log("📝 Starting Indeed application process");
       this.statusOverlay.addInfo("Starting application process");
+
+      // Check for Cloudflare verification
+      await this.checkCloudflareStatus();
+
+      // Check login status
+      await this.checkLoginStatus();
 
       if (!this.userProfile) {
         this.log("⚠️ No user profile available, attempting to fetch...");

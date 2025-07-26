@@ -53,7 +53,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.log(`❓ Unhandled Recruitee port message type: ${type}`);
+        this.log(`❓ Unhandled Recruitee port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -89,7 +89,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Recruitee user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -100,9 +100,9 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Recruitee`);
+          this.log(`✅ User profile fetched and cached for Recruitee`);
         } catch (error) {
-          console.error(
+          this.log(
             `❌ Failed to fetch user profile for Recruitee:`,
             error
           );
@@ -142,7 +142,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_APPLICATION_TASK request from Recruitee tab ${tabId}, window ${windowId}`
     );
 
@@ -156,7 +156,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Recruitee automation session: ${sessionId}`);
+        this.log(`✅ Found Recruitee automation session: ${sessionId}`);
         break;
       }
     }
@@ -168,7 +168,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Recruitee user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -179,9 +179,9 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Recruitee`);
+          this.log(`✅ User profile fetched and cached for Recruitee`);
         } catch (error) {
-          console.error(
+          this.log(
             `❌ Failed to fetch user profile for Recruitee:`,
             error
           );
@@ -197,14 +197,14 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Recruitee session data prepared:`, {
+      this.log(`📊 Recruitee session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Recruitee automation found for window ${windowId}`);
+      this.log(`⚠️ No Recruitee automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -222,11 +222,11 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log(
         `❌ Failed to send Recruitee application task data to port ${port.name}`
       );
     } else {
-      console.log(
+      this.log(
         `✅ Recruitee application task data sent successfully to tab ${tabId}`
       );
     }
@@ -239,7 +239,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
     try {
       const { url, title } = data;
       const windowId = port.sender?.tab?.windowId;
-      console.log(`🎯 Opening Recruitee job in new tab: ${url}`);
+      this.log(`🎯 Opening Recruitee job in new tab: ${url}`);
 
       let automation = null;
       for (const [
@@ -307,9 +307,9 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
         data: { url },
       });
 
-      console.log(`✅ Recruitee job tab created: ${tab.id} for URL: ${url}`);
+      this.log(`✅ Recruitee job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      console.error("❌ Error handling Recruitee START_APPLICATION:", error);
+      this.log("❌ Error handling Recruitee START_APPLICATION:", error);
       this.safePortSend(port, {
         type: "ERROR",
         message: error.message,
@@ -322,7 +322,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchCompleted(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Recruitee search task completed for window ${windowId}`);
+    this.log(`🏁 Recruitee search task completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -332,7 +332,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -376,7 +376,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, data) {
-    console.log("🔄 Recruitee search ready for next job");
+    this.log("🔄 Recruitee search ready for next job");
 
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
@@ -425,7 +425,7 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Recruitee-specific delay logic (shorter delays than Lever)
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.logounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(2000 * errorCount, 10000) : 0;
 
     setTimeout(async () => {
@@ -437,8 +437,8 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
           typeof data === "string"
             ? data
             : status === "ERROR"
-            ? "Application error"
-            : undefined,
+              ? "Application error"
+              : undefined,
       });
     }, delay);
   }

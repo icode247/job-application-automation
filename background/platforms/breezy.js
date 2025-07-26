@@ -1,11 +1,10 @@
 // background/platforms/breezy.js
 
-//handleSuccessMessage
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
 
 export default class BreezyAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
-    super(messageHandler, "breezy"); // Pass platform name to base class
+    super(messageHandler, "breezy"); 
   }
 
   /**
@@ -61,7 +60,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.log(`❓ Unhandled Breezy port message type: ${type}`);
+        this.log(`❓ Unhandled Breezy port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -73,7 +72,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEARCH_TASK request from Breezy tab ${tabId}, window ${windowId}`
     );
 
@@ -87,7 +86,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Breezy automation session: ${sessionId}`);
+        this.log(`✅ Found Breezy automation session: ${sessionId}`);
         break;
       }
     }
@@ -102,11 +101,11 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString =
             platformState.searchData.searchLinkPattern.toString();
         } else {
-          console.warn("⚠️ searchLinkPattern is null, using empty string");
+          this.log.warn("⚠️ searchLinkPattern is null, using empty string");
           searchLinkPatternString = "";
         }
       } catch (error) {
-        console.error(
+        this.log.error(
           "❌ Error converting searchLinkPattern to string:",
           error
         );
@@ -124,10 +123,10 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
 
       // Update search tab ID
       platformState.searchTabId = tabId;
-      console.log(`📊 Breezy session data prepared:`, sessionData);
+      this.log(`📊 Breezy session data prepared:`, sessionData);
     } else {
-      console.warn(`⚠️ No Breezy automation found for window ${windowId}`);
-      console.log(
+      this.log.warn(`⚠️ No Breezy automation found for window ${windowId}`);
+      this.log(
         `Active automations:`,
         Array.from(this.messageHandler.activeAutomations.keys())
       );
@@ -140,11 +139,11 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log.error(
         `❌ Failed to send Breezy search task data to port ${port.name}`
       );
     } else {
-      console.log(
+      this.log(
         `✅ Breezy search task data sent successfully to tab ${tabId}`
       );
     }
@@ -157,7 +156,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEND_CV_TASK request from Breezy tab ${tabId}, window ${windowId}`
     );
 
@@ -171,7 +170,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Breezy automation session: ${sessionId}`);
+        this.log(`✅ Found Breezy automation session: ${sessionId}`);
         break;
       }
     }
@@ -183,7 +182,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Breezy user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -194,9 +193,9 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Breezy`);
+          this.log(`✅ User profile fetched and cached for Breezy`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile for Breezy:`, error);
+          this.log.error(`❌ Failed to fetch user profile for Breezy:`, error);
         }
       }
 
@@ -209,14 +208,14 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Breezy session data prepared:`, {
+      this.log(`📊 Breezy session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Breezy automation found for window ${windowId}`);
+      this.log.warn(`⚠️ No Breezy automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -234,11 +233,11 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log.error(
         `❌ Failed to send Breezy CV task data to port ${port.name}`
       );
     } else {
-      console.log(`✅ Breezy CV task data sent successfully to tab ${tabId}`);
+      this.log(`✅ Breezy CV task data sent successfully to tab ${tabId}`);
     }
   }
 
@@ -250,7 +249,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
       const { url, title } = data;
       const windowId = port.sender?.tab?.windowId;
 
-      console.log(`🎯 Opening Breezy job in new tab: ${url}`);
+      this.log(`🎯 Opening Breezy job in new tab: ${url}`);
 
       let automation = null;
       for (const [
@@ -318,9 +317,9 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
         message: "Breezy apply tab will be created",
       });
 
-      console.log(`✅ Breezy job tab created: ${tab.id} for URL: ${url}`);
+      this.log(`✅ Breezy job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      console.error("❌ Error handling Breezy SEND_CV_TASK:", error);
+      this.log.error("❌ Error handling Breezy SEND_CV_TASK:", error);
       this.safePortSend(port, {
         type: "ERROR",
         message: error.message,
@@ -333,7 +332,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchTaskDone(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Breezy search task completed for window ${windowId}`);
+    this.log(`🏁 Breezy search task completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -343,7 +342,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log.warn("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -418,7 +417,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, data) {
-    console.log("🔄 Breezy search ready for next job");
+    this.log("🔄 Breezy search ready for next job");
 
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
@@ -437,7 +436,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Breezy-specific delay logic
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.log.errorCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
@@ -449,8 +448,8 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
           typeof data === "string"
             ? data
             : status === "ERROR"
-            ? "Application error"
-            : undefined,
+              ? "Application error"
+              : undefined,
       });
     }, delay);
   }

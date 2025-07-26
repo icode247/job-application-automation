@@ -1,7 +1,5 @@
 // background/message-handler.js
 import AutomationOrchestrator from "../core/automation-orchestrator.js";
-import SessionManager from "./session-manager.js";
-import WindowManager from "./window-manager.js";
 import LeverAutomationHandler from "./platforms/lever.js";
 import RecruiteeAutomationHandler from "./platforms/recruitee.js";
 import LinkedInAutomationHandler from "./platforms/linkedin.js";
@@ -14,11 +12,12 @@ import WorkableAutomationHandler from "./platforms/workable.js";
 import WellfoundAutomationHandler from "./platforms/wellfound.js";
 
 export default class MessageHandler {
-  constructor() {
-    this.orchestrator = new AutomationOrchestrator();
-    this.sessionManager = new SessionManager();
-    this.windowManager = new WindowManager();
+  constructor(logger, sessionManager, windowManager) {
+    this.logger = logger;
+    this.sessionManager = sessionManager;
+    this.windowManager = windowManager;
 
+    this.orchestrator = new AutomationOrchestrator(this.logger);
     this.activeAutomations = new Map();
     this.portConnections = new Map();
     this.platformHandlers = new Map();
@@ -53,7 +52,7 @@ export default class MessageHandler {
     const sessionId = this.orchestrator.getSessionForWindow(tab.windowId);
 
     if (sessionId) {
-      console.log(
+      this.logger.log(
         `🆕 New tab ${tab.id} created in automation window ${tab.windowId}`
       );
 
@@ -65,7 +64,7 @@ export default class MessageHandler {
           automation.userId
         ) {
           automation.userProfile.userId = automation.userId;
-          console.log(
+          this.logger.log(
             `🔧 Added missing userId to automation profile: ${automation.userId}`
           );
         }
@@ -92,7 +91,7 @@ export default class MessageHandler {
           lastAttempt: 0,
         });
 
-        console.log(`✅ Session context stored for tab ${tab.id}:`, {
+        this.logger.log(`✅ Session context stored for tab ${tab.id}:`, {
           sessionId,
           platform: automation.platform,
           hasUserProfile: !!sessionContext.userProfile,
@@ -132,7 +131,7 @@ export default class MessageHandler {
               automation.userId
             ) {
               automation.userProfile.userId = automation.userId;
-              console.log(
+              this.logger.log(
                 `🔧 Added missing userId to automation profile: ${automation.userId}`
               );
             }
@@ -172,18 +171,18 @@ export default class MessageHandler {
             Date.now() - injectionStatus.lastAttempt > 10000;
 
           if (shouldInject) {
-            console.log(
+            this.logger.log(
               `🔄 Tab ${tab.id} updated, scheduling profile injection`
             );
             this.scheduleProfileInjection(tab.id, contextToInject, 1000);
           } else {
-            console.log(
+            this.logger.log(
               `⏭️ Skipping profile injection for tab ${tab.id} - already injected`
             );
           }
         }
       } catch (error) {
-        console.error(`❌ Error in handleTabUpdated for tab ${tab.id}:`, error);
+        this.logger.error(`❌ Error in handleTabUpdated for tab ${tab.id}:`, error);
       }
     }
   }
@@ -201,20 +200,20 @@ export default class MessageHandler {
           injectionStatus.injected &&
           Date.now() - injectionStatus.lastAttempt < 5000
         ) {
-          console.log(
+          this.logger.log(
             `⏭️ Skipping profile injection for tab ${tabId} - recently injected`
           );
           return;
         }
 
         if (injectionStatus.attempts >= 5) {
-          console.log(
+          this.logger.log(
             `⏭️ Skipping profile injection for tab ${tabId} - max attempts reached`
           );
           return;
         }
 
-        console.log(
+        this.logger.log(
           `💉 Attempting profile injection for tab ${tabId} (attempt ${injectionStatus.attempts + 1
           })`
         );
@@ -232,7 +231,7 @@ export default class MessageHandler {
         });
 
         if (success) {
-          console.log(`✅ Profile injection successful for tab ${tabId}`);
+          this.logger.log(`✅ Profile injection successful for tab ${tabId}`);
         } else {
 
           // Retry with exponential backoff
@@ -246,7 +245,7 @@ export default class MessageHandler {
           }
         }
       } catch (error) {
-        console.error(
+        this.logger.error(
           `❌ Error in scheduled profile injection for tab ${tabId}:`,
           error
         );
@@ -257,7 +256,7 @@ export default class MessageHandler {
   async injectEnhancedSessionContext(tabId, sessionData) {
     try {
       if (!sessionData || !sessionData.sessionId || !sessionData.platform) {
-        console.warn(
+        this.logger.warn(
           `⚠️ Invalid session data for tab ${tabId}, skipping injection`
         );
         return false;
@@ -289,7 +288,7 @@ export default class MessageHandler {
               window.automationUserProfile = sessionData.userProfile;
 
             } else {
-              console.warn(
+              this.logger.warn(
                 "⚠️ User profile validation failed during injection"
               );
             }
@@ -343,7 +342,7 @@ export default class MessageHandler {
                 );
               }
             } catch (storageError) {
-              console.warn(
+              this.logger.warn(
                 "⚠️ Failed to store in sessionStorage:",
                 storageError
               );
@@ -356,7 +355,7 @@ export default class MessageHandler {
 
             return true;
           } catch (error) {
-            console.error("❌ Error during context injection:", error);
+            this.logger.error("❌ Error during context injection:", error);
             return false;
           }
         },
@@ -365,7 +364,7 @@ export default class MessageHandler {
 
       return true;
     } catch (error) {
-      console.error(
+      this.logger.error(
         `❌ Failed to inject session context into tab ${tabId}:`,
         error
       );
@@ -375,7 +374,7 @@ export default class MessageHandler {
 
   isUserProfileComplete(profile) {
     if (!profile || typeof profile !== "object") {
-      console.warn("⚠️ Profile validation failed: No profile object provided");
+      this.logger.warn("⚠️ Profile validation failed: No profile object provided");
       return false;
     }
 
@@ -394,11 +393,11 @@ export default class MessageHandler {
     }
 
     if (missingFields.length > 0) {
-      console.warn(
+      this.logger.warn(
         "⚠️ Profile validation failed - missing fields:",
         missingFields
       );
-      console.warn("⚠️ Available profile fields:", Object.keys(profile));
+      this.logger.warn("⚠️ Available profile fields:", Object.keys(profile));
       return false;
     }
 
@@ -430,14 +429,14 @@ export default class MessageHandler {
         const response = await fetch(`${apiHost}/api/user/${userId}`);
         if (response.ok) {
           userProfile = await response.json();
-          console.log("Fetched User Profile", userProfile)
+          this.logger.log("Fetched User Profile", userProfile)
 
           if (userProfile && !userProfile.userId) {
             userProfile.userId = userId;
           }
         }
       } catch (error) {
-        console.error(`❌ Error fetching user profile:`, error);
+        this.logger.error(`❌ Error fetching user profile:`, error);
       }
 
       if (!this.isUserProfileComplete(userProfile)) {
@@ -452,12 +451,12 @@ export default class MessageHandler {
           missingFields.push("name");
 
         const errorMessage = `Network Error, Please check your internet and try again....`;
-        console.error("❌ " + errorMessage);
+        this.logger.error("❌ " + errorMessage);
         sendResponse({ status: "error", message: errorMessage });
         return;
       }
 
-      console.log("User Profile", userProfile.jobPreferences)
+      this.logger.log("User Profile", userProfile.jobPreferences)
 
       // Create automation session
       const sessionId = await this.sessionManager.createSession({
@@ -557,7 +556,7 @@ export default class MessageHandler {
         });
       }
     } catch (error) {
-      console.error("Error in handleStartApplying:", error);
+      this.logger.error("Error in handleStartApplying:", error);
       sendResponse({
         status: "error",
         message: "An unexpected error occurred while starting automation",
@@ -571,7 +570,7 @@ export default class MessageHandler {
 
       for (const tab of tabs) {
         if (tab.url && !tab.url.startsWith("chrome://")) {
-          console.log(`💉 Injecting profile into existing tab ${tab.id}`);
+          this.logger.log(`💉 Injecting profile into existing tab ${tab.id}`);
 
           // Store tab session
           this.tabSessions.set(tab.id, {
@@ -593,7 +592,7 @@ export default class MessageHandler {
         }
       }
     } catch (error) {
-      console.error("❌ Error injecting profile into window tabs:", error);
+      this.logger.error("❌ Error injecting profile into window tabs:", error);
     }
   }
 
@@ -645,7 +644,7 @@ export default class MessageHandler {
         isAutomationWindow =
           windowManagerCheck || orchestratorCheck || hasTabSession;
 
-        console.log(
+        this.logger.log(
           `🔍 Automation window check for window ${sender.tab.windowId}, tab ${sender.tab.id}:`,
           {
             windowManagerCheck,
@@ -667,7 +666,7 @@ export default class MessageHandler {
             ) {
               if (!automation.userProfile.userId && automation.userId) {
                 automation.userProfile.userId = automation.userId;
-                console.log(
+                this.logger.log(
                   `🔧 Added missing userId to automation profile: ${automation.userId}`
                 );
               }
@@ -685,7 +684,7 @@ export default class MessageHandler {
               };
 
               this.tabSessions.set(sender.tab.id, sessionContext);
-              console.log(
+              this.logger.log(
                 `✅ Created missing tab session for tab ${sender.tab.id}`
               );
 
@@ -702,7 +701,7 @@ export default class MessageHandler {
       });
       return true;
     } catch (error) {
-      console.error("Error checking automation window:", error);
+      this.logger.error("Error checking automation window:", error);
       sendResponse({ isAutomationWindow: false, error: error.message });
       return true;
     }
@@ -741,7 +740,7 @@ export default class MessageHandler {
             };
 
             this.tabSessions.set(tabId, sessionContext);
-            console.log(`✅ Created session context for tab ${tabId}`);
+            this.logger.log(`✅ Created session context for tab ${tabId}`);
           }
         }
       }
@@ -752,7 +751,7 @@ export default class MessageHandler {
       });
       return true;
     } catch (error) {
-      console.error("Error getting full session context:", error);
+      this.logger.error("Error getting full session context:", error);
       sendResponse({ error: error.message });
       return true;
     }
@@ -760,7 +759,7 @@ export default class MessageHandler {
 
   handleContentScriptReady(request, sender, sendResponse) {
     const { sessionId, platform, url, userId, profileComplete } = request;
-    console.log(
+    this.logger.log(
       `📱 Content script ready: ${platform} session ${sessionId} tab ${sender.tab?.id}`
     );
 
@@ -772,7 +771,7 @@ export default class MessageHandler {
       if (automation && this.isUserProfileComplete(automation.userProfile)) {
         if (!automation.userProfile.userId && automation.userId) {
           automation.userProfile.userId = automation.userId;
-          console.log(
+          this.logger.log(
             `🔧 Added missing userId to automation profile: ${automation.userId}`
           );
         }
@@ -791,7 +790,7 @@ export default class MessageHandler {
         };
 
         this.tabSessions.set(sender.tab.id, sessionContext);
-        console.log(`📊 Session context stored for ready tab ${sender.tab.id}`);
+        this.logger.log(`📊 Session context stored for ready tab ${sender.tab.id}`);
       }
     }
 
@@ -823,11 +822,11 @@ export default class MessageHandler {
             sessionContext: sessionContext,
           });
 
-          console.log(
+          this.logger.log(
             `📤 Sent start message with full context to content script for session ${sessionContext.sessionId}`
           );
         } catch (error) {
-          console.error(
+          this.logger.error(
             `❌ Failed to send start message to content script:`,
             error
           );
@@ -868,14 +867,14 @@ export default class MessageHandler {
   }
 
   async handleWindowClosed(windowId) {
-    console.log(`🪟 Window ${windowId} closed, performing thorough cleanup...`);
+    this.logger.log(`🪟 Window ${windowId} closed, performing thorough cleanup...`);
 
     const sessionId = this.orchestrator.getSessionForWindow(windowId);
 
     if (sessionId) {
       const automation = this.activeAutomations.get(sessionId);
       if (automation) {
-        console.log(
+        this.logger.log(
           `🛑 Properly stopping automation ${sessionId} for closed window ${windowId}`
         );
 
@@ -901,11 +900,11 @@ export default class MessageHandler {
             timestamp: Date.now(),
           });
 
-          console.log(
+          this.logger.log(
             `✅ Automation ${sessionId} properly stopped and cleaned up`
           );
         } catch (error) {
-          console.error(`❌ Error stopping automation ${sessionId}:`, error);
+          this.logger.error(`❌ Error stopping automation ${sessionId}:`, error);
 
           // Force cleanup even if stop() fails
           await this.sessionManager.updateSession(sessionId, {
@@ -926,7 +925,7 @@ export default class MessageHandler {
 
         if (this.pendingRequests.has(requestKey)) {
           this.pendingRequests.delete(requestKey);
-          console.log(`🧹 Cleaned up pending request: ${requestKey}`);
+          this.logger.log(`🧹 Cleaned up pending request: ${requestKey}`);
         }
       }
     }
@@ -942,14 +941,14 @@ export default class MessageHandler {
     for (const tabId of tabsToRemove) {
       this.tabSessions.delete(tabId);
       this.profileInjectionStatus.delete(tabId);
-      console.log(`🧹 Cleaned up tab ${tabId} session and injection tracking`);
+      this.logger.log(`🧹 Cleaned up tab ${tabId} session and injection tracking`);
     }
 
     // Clean up orchestrator and window manager
     await this.orchestrator.handleWindowClosed(windowId);
     await this.windowManager.handleWindowClosed(windowId);
 
-    console.log(`✅ Complete cleanup finished for window ${windowId}`);
+    this.logger.log(`✅ Complete cleanup finished for window ${windowId}`);
   }
 
   initializePlatformHandler(platform) {
@@ -957,7 +956,7 @@ export default class MessageHandler {
       return this.platformHandlers.get(platform);
     }
 
-    console.log(`🔧 Initializing platform handler for: ${platform}`);
+    this.logger.log(`🔧 Initializing platform handler for: ${platform}`);
 
     let handler = null;
 
@@ -993,13 +992,13 @@ export default class MessageHandler {
         handler = new WellfoundAutomationHandler(this);
         break;
       default:
-        console.error(`❌ Unsupported platform: ${platform}`);
+        this.logger.error(`❌ Unsupported platform: ${platform}`);
         return null;
     }
 
     if (handler) {
       this.platformHandlers.set(platform, handler);
-      console.log(`✅ Platform handler initialized for: ${platform}`);
+      this.logger.log(`✅ Platform handler initialized for: ${platform}`);
     }
 
     return handler;
@@ -1053,7 +1052,7 @@ export default class MessageHandler {
 
   setupPortHandlers() {
     chrome.runtime.onConnect.addListener((port) => {
-      console.log("📨 New port connection established:", port.name);
+      this.logger.log("📨 New port connection established:", port.name);
 
       const portParts = port.name.split("-");
       if (portParts.length >= 3) {
@@ -1063,7 +1062,7 @@ export default class MessageHandler {
         if (handler) {
           handler.handlePortConnection(port);
         } else {
-          console.warn(`No handler found for platform: ${platform}`);
+          this.logger.warn(`No handler found for platform: ${platform}`);
         }
       }
     });
@@ -1071,20 +1070,20 @@ export default class MessageHandler {
 
   async handlePlatformPortMessage(message, port, platform) {
     try {
-      console.log(`📨 ${platform} port message received:`, message);
+      this.logger.log(`📨 ${platform} port message received:`, message);
 
       const handler = this.getPlatformHandler(platform);
       if (handler) {
         await handler.handlePortMessage(message, port);
       } else {
-        console.error(`No handler for platform: ${platform}`);
+        this.logger.error(`No handler for platform: ${platform}`);
         this.sendPortResponse(port, {
           type: "ERROR",
           message: `Unsupported platform: ${platform}`,
         });
       }
     } catch (error) {
-      console.error(`❌ Error handling ${platform} port message:`, error);
+      this.logger.error(`❌ Error handling ${platform} port message:`, error);
       this.sendPortResponse(port, {
         type: "ERROR",
         message: error.message,
@@ -1098,7 +1097,7 @@ export default class MessageHandler {
         port.postMessage(message);
       }
     } catch (error) {
-      console.warn("⚠️ Failed to send port response:", error);
+      this.logger.warn("⚠️ Failed to send port response:", error);
     }
   }
 
@@ -1118,18 +1117,18 @@ export default class MessageHandler {
         .trim()
         .replace(/\/+$/, "");
     } catch (e) {
-      console.warn("⚠️ Error normalizing URL:", e);
+      this.logger.warn("⚠️ Error normalizing URL:", e);
       return url.toLowerCase().trim();
     }
   }
 
   // Handle messages from your frontend web application
   handleExternalMessage(request, sender, sendResponse) {
-    console.log("📨 External message received:", request);
+    this.logger.log("📨 External message received:", request);
 
     const requestKey = `${request.action}_${request.userId}_${request.platform}`;
     if (this.pendingRequests.has(requestKey)) {
-      console.log("🔄 Duplicate request detected, ignoring");
+      this.logger.log("🔄 Duplicate request detected, ignoring");
       sendResponse({
         status: "error",
         message: "Duplicate request already in progress",
@@ -1253,7 +1252,7 @@ export default class MessageHandler {
   handleErrorReport(request, sender, sendResponse) {
     const { sessionId, error, context } = request;
 
-    console.error(`Automation error in session ${sessionId}:`, error);
+    this.logger.error(`Automation error in session ${sessionId}:`, error);
 
     this.sessionManager.updateSession(sessionId, {
       status: "error",
@@ -1341,7 +1340,7 @@ export default class MessageHandler {
 
   // Notify frontend
   notifyFrontend(data) {
-    console.log("📤 Notifying frontend:", data);
+    this.logger.log("📤 Notifying frontend:", data);
     // Implementation depends on your frontend communication method
   }
 }

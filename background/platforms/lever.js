@@ -59,7 +59,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        console.log(`❓ Unhandled Lever port message type: ${type}`);
+        this.log(`❓ Unhandled Lever port message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -69,7 +69,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
 
   async handleSearchCompleted(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Lever search completed for window ${windowId}`);
+    this.log(`🏁 Lever search completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -79,7 +79,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -131,7 +131,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    console.log(
+    this.log(
       `🔍 GET_SEND_CV_TASK request from Lever tab ${tabId}, window ${windowId}`
     );
 
@@ -145,7 +145,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     ] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
-        console.log(`✅ Found Lever automation session: ${sessionId}`);
+        this.log(`✅ Found Lever automation session: ${sessionId}`);
         break;
       }
     }
@@ -157,7 +157,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
       // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          console.log(
+          this.log(
             `📡 Fetching user profile for Lever user ${automation.userId}`
           );
           const { default: UserService } = await import(
@@ -168,9 +168,9 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
 
           // Cache it in automation for future use
           automation.userProfile = userProfile;
-          console.log(`✅ User profile fetched and cached for Lever`);
+          this.log(`✅ User profile fetched and cached for Lever`);
         } catch (error) {
-          console.error(`❌ Failed to fetch user profile for Lever:`, error);
+          this.log(`❌ Failed to fetch user profile for Lever:`, error);
         }
       }
 
@@ -183,14 +183,14 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         sessionId: automation.sessionId || null,
       };
 
-      console.log(`📊 Lever session data prepared:`, {
+      this.log(`📊 Lever session data prepared:`, {
         hasProfile: !!sessionData.profile,
         hasSession: !!sessionData.session,
         userId: sessionData.userId,
         devMode: sessionData.devMode,
       });
     } else {
-      console.warn(`⚠️ No Lever automation found for window ${windowId}`);
+      this.log(`⚠️ No Lever automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -208,11 +208,11 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     });
 
     if (!sent) {
-      console.error(
+      this.log(
         `❌ Failed to send Lever CV task data to port ${port.name}`
       );
     } else {
-      console.log(`✅ Lever CV task data sent successfully to tab ${tabId}`);
+      this.log(`✅ Lever CV task data sent successfully to tab ${tabId}`);
     }
   }
 
@@ -224,7 +224,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
       const { url, title } = data;
       const windowId = port.sender?.tab?.windowId;
 
-      console.log(`🎯 Opening Lever job in new tab: ${url}`);
+      this.log(`🎯 Opening Lever job in new tab: ${url}`);
 
       let automation = null;
       for (const [
@@ -293,9 +293,9 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         message: "Lever apply tab will be created",
       });
 
-      console.log(`✅ Lever job tab created: ${tab.id} for URL: ${url}`);
+      this.log(`✅ Lever job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      console.error("❌ Error handling Lever SEND_CV_TASK:", error);
+      this.log("❌ Error handling Lever SEND_CV_TASK:", error);
       this.safePortSend(port, {
         type: "ERROR",
         message: error.message,
@@ -308,7 +308,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
    */
   async handleSearchTaskDone(port, data) {
     const windowId = port.sender?.tab?.windowId;
-    console.log(`🏁 Lever search task completed for window ${windowId}`);
+    this.log(`🏁 Lever search task completed for window ${windowId}`);
 
     try {
       chrome.notifications.create({
@@ -318,7 +318,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      console.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -393,7 +393,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
    * Handle search next ready notification
    */
   async handleSearchNextReady(port, data) {
-    console.log("🔄 Lever search ready for next job");
+    this.log("🔄 Lever search ready for next job");
 
     this.safePortSend(port, {
       type: "NEXT_READY_ACKNOWLEDGED",
@@ -412,7 +412,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Lever-specific delay logic
-    const errorCount = this.errorCounts.get(automation.sessionId) || 0;
+    const errorCount = this.logCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
@@ -424,8 +424,8 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
           typeof data === "string"
             ? data
             : status === "ERROR"
-            ? "Application error"
-            : undefined,
+              ? "Application error"
+              : undefined,
       });
     }, delay);
   }

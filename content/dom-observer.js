@@ -30,7 +30,7 @@ export default class DOMObserver {
     this.observers.set(sessionId, observer);
     this.isObserving = true;
 
-    console.log(`👁️ DOM Observer started for session ${sessionId}`);
+    this.log(`👁️ DOM Observer started for session ${sessionId}`);
   }
 
   stopObserving(sessionId) {
@@ -52,7 +52,7 @@ export default class DOMObserver {
       this.isObserving = false;
     }
 
-    console.log(`👁️ DOM Observer stopped for session ${sessionId}`);
+    this.log(`👁️ DOM Observer stopped for session ${sessionId}`);
   }
 
   handleMutations(mutations, sessionId) {
@@ -245,7 +245,7 @@ export default class DOMObserver {
         timestamp: Date.now(),
       });
     } catch (error) {
-      console.error(
+      this.log(
         "Failed to notify background script of DOM changes:",
         error
       );
@@ -376,6 +376,10 @@ export default class DOMObserver {
     this.debounceTimers.clear();
     this.isObserving = false;
 
-    console.log("👁️ DOM Observer cleanup completed");
+    this.log("👁️ DOM Observer cleanup completed");
+  }
+
+  log(message, data = {}) {
+    console.log(`🤖 [DOMObserver] ${message}`, data);
   }
 }

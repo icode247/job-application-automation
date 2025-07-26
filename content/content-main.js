@@ -1,5 +1,4 @@
-//content/content-main.js - COMPLETE FIXED VERSION
-//New page detected, scheduling initialization...
+//content/content-main.js
 class ContentScriptManager {
   constructor() {
     this.isInitialized = false;
@@ -208,7 +207,7 @@ class ContentScriptManager {
             });
 
             if (response && response.sessionContext) {
-              console.log("📊 Session assigned by background script");
+              this.log("📊 Session assigned by background script");
               this.storeSessionContextInStorage(response.sessionContext);
 
               if (
@@ -455,7 +454,6 @@ class ContentScriptManager {
   }
 
   async enrichSessionContext(basicContext) {
-    // Try to get additional context data from background script
     try {
       const response = await this.sendMessageToBackground({
         action: "getFullSessionContext",
@@ -601,15 +599,14 @@ class ContentScriptManager {
   async setupAutomation() {
     try {
       const PlatformClass = await this.loadPlatformModule(this.platform);
-      console.log("PlatformClass loaded:", PlatformClass?.name);
+      this.log("PlatformClass loaded:", PlatformClass?.name);
 
       if (!PlatformClass) {
         throw new Error(`Platform ${this.platform} not supported`);
       }
 
-      // ✅ FIXED: Ensure user profile is available before creating automation
       if (!this.userProfile && this.profileLoaded) {
-        console.warn("⚠️ Profile marked as loaded but userProfile is null");
+        this.log("⚠️ Profile marked as loaded but userProfile is null");
       }
 
       const automationConfig = {
@@ -622,7 +619,7 @@ class ContentScriptManager {
         userProfile: this.userProfile, // Should be populated by now
       };
 
-      console.log("Creating platform automation with config:", {
+      this.log("Creating platform automation with config:", {
         sessionId: automationConfig.sessionId,
         platform: automationConfig.platform,
         userId: automationConfig.userId,
@@ -635,8 +632,6 @@ class ContentScriptManager {
 
       this.platformAutomation = new PlatformClass(automationConfig);
 
-      // Set up automation UI
-      // this.addAutomationIndicator();
       this.setupMessageListeners();
       this.setupDOMObserver();
       this.setupNavigationListeners();
@@ -651,7 +646,7 @@ class ContentScriptManager {
         await this.platformAutomation.setSessionContext(this.sessionContext);
       }
     } catch (error) {
-      console.error(
+      this.log(
         `❌ Failed to setup automation for ${this.platform}:`,
         error
       );
@@ -748,11 +743,11 @@ class ContentScriptManager {
           return WellfoundPlatform;
 
         default:
-          console.warn(`Platform ${platform} not supported`);
+          this.log(`Platform ${platform} not supported`);
           return null;
       }
     } catch (error) {
-      console.error(`Failed to load platform module for ${platform}:`, error);
+      this.log(`Failed to load platform module for ${platform}:`, error);
       return null;
     }
   }
@@ -933,7 +928,7 @@ class ContentScriptManager {
       sessionContext: this.sessionContext,
       hasUserProfile: !!this.userProfile,
       profileComplete: this.isUserProfileComplete(this.userProfile),
-    }).catch(console.error);
+    }).catch(this.log);
   }
 
   async handlePauseAutomation(request, sendResponse) {
@@ -1278,7 +1273,7 @@ class ContentScriptManager {
       userId: this.userId,
       error: error.message,
       url: window.location.href,
-    }).catch(console.error);
+    }).catch(this.log);
   }
 
   notifyDOMChange() {
@@ -1287,7 +1282,7 @@ class ContentScriptManager {
       sessionId: this.sessionId,
       url: window.location.href,
       timestamp: Date.now(),
-    }).catch(console.error);
+    }).catch(this.log);
   }
 
   notifyNavigation(oldUrl, newUrl) {
@@ -1297,7 +1292,7 @@ class ContentScriptManager {
       oldUrl,
       newUrl,
       timestamp: Date.now(),
-    }).catch(console.error);
+    }).catch(this.log);
   }
 
   showAutomationStatus() {
@@ -1314,37 +1309,28 @@ class ContentScriptManager {
         <p><strong>Platform:</strong> ${this.platform}</p>
         <p><strong>Session ID:</strong> ${this.sessionId}</p>
         <p><strong>User ID:</strong> ${this.userId}</p>
-        <p><strong>User Profile:</strong> ${
-          this.userProfile ? "✅ Loaded" : "❌ Missing"
+        <p><strong>User Profile:</strong> ${this.userProfile ? "✅ Loaded" : "❌ Missing"
+      }</p>
+        <p><strong>Profile Complete:</strong> ${this.isUserProfileComplete(this.userProfile) ? "✅ Yes" : "❌ No"
+      }</p>
+        ${this.userProfile
+        ? `
+          <p><strong>Profile Name:</strong> ${this.userProfile.name || this.userProfile.firstName || "N/A"
         }</p>
-        <p><strong>Profile Complete:</strong> ${
-          this.isUserProfileComplete(this.userProfile) ? "✅ Yes" : "❌ No"
+          <p><strong>Profile Email:</strong> ${this.userProfile.email || "N/A"
         }</p>
-        ${
-          this.userProfile
-            ? `
-          <p><strong>Profile Name:</strong> ${
-            this.userProfile.name || this.userProfile.firstName || "N/A"
-          }</p>
-          <p><strong>Profile Email:</strong> ${
-            this.userProfile.email || "N/A"
-          }</p>
-          <p><strong>Resume URL:</strong> ${
-            this.userProfile.resumeUrl ? "✅ Available" : "❌ Missing"
-          }</p>
+          <p><strong>Resume URL:</strong> ${this.userProfile.resumeUrl ? "✅ Available" : "❌ Missing"
+        }</p>
         `
-            : ""
-        }
+        : ""
+      }
         <p><strong>Current URL:</strong> ${window.location.href}</p>
-        <p><strong>Status:</strong> ${
-          this.automationActive ? "Active" : "Inactive"
-        }</p>
-        <p><strong>Context Verified:</strong> ${
-          this.contextVerified ? "✅ Yes" : "⚠️ No"
-        }</p>
-        <p><strong>Profile Loaded:</strong> ${
-          this.profileLoaded ? "✅ Yes" : "⚠️ No"
-        }</p>
+        <p><strong>Status:</strong> ${this.automationActive ? "Active" : "Inactive"
+      }</p>
+        <p><strong>Context Verified:</strong> ${this.contextVerified ? "✅ Yes" : "⚠️ No"
+      }</p>
+        <p><strong>Profile Loaded:</strong> ${this.profileLoaded ? "✅ Yes" : "⚠️ No"
+      }</p>
         <button onclick="this.closest('div').remove()" style="
           background: #4CAF50; color: white; border: none; padding: 8px 16px;
           border-radius: 4px; cursor: pointer; margin-top: 16px;
