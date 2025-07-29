@@ -16,9 +16,10 @@ export default class GreenhousePlatform extends BasePlatformAutomation {
 
         this.aiService = new AIService({ apiHost: this.getApiHost() });
         this.applicationTracker = new ApplicationTrackerService({
-            userId: this.userId,
+            userId: this.userProfile.userId,
+            apiHost: this.getApiHost(),
         });
-        this.userService = new UserService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userProfile.userId });
 
         this.fileHandler = null;
         this.formHandler = null;

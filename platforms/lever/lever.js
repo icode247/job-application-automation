@@ -18,9 +18,10 @@ export default class LeverPlatform extends BasePlatformAutomation {
     // Initialize Lever-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
-      userId: this.userId,
+      userId: this.userProfile.userId,
+      apiHost: this.getApiHost(),
     });
-    this.userService = new UserService({ userId: this.userId });
+    this.userService = new UserService({ userId: this.userProfile.userId });
 
     this.fileHandler = null;
     this.formHandler = null;
@@ -352,13 +353,14 @@ export default class LeverPlatform extends BasePlatformAutomation {
 
       // Update services with user context only if userId changed
       if (
-        this.userId &&
-        (!this.userService || this.userService.userId !== this.userId)
+        this.userProfile.userId &&
+        (!this.userService || this.userService.userId !== this.userProfile.userId)
       ) {
         this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userId,
+          userId: this.userProfile.userId,
+          apiHost: this.getApiHost(),
         });
-        this.userService = new UserService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userProfile.userId });
         this.log("📋 Updated services with new userId:", this.userId);
       }
 

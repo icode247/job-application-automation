@@ -6,7 +6,6 @@ import {
   UserService,
 } from "../../services/index.js";
 import FormHandler from "../../shared/indeed_glassdoors/form-handler.js";
-//startApplicationProcess()
 
 const INDEED_SELECTORS = {
   JOB_CARDS: [
@@ -2544,13 +2543,14 @@ export default class IndeedPlatform extends BasePlatformAutomation {
       }
 
       if (
-        this.userId &&
-        (!this.userService || this.userService.userId !== this.userId)
+        this.userProfile.userId &&
+        (!this.userService || this.userService.userId !== this.userProfile.userId)
       ) {
         this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userId,
+          userId: this.userProfile.userId,
+          apiHost: this.getApiHost(),
         });
-        this.userService = new UserService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userProfile.userId });
         this.log("📋 Updated services with new userId:", this.userId);
       }
 

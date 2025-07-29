@@ -20,9 +20,10 @@ export default class WorkablePlatform extends BasePlatformAutomation {
     // Initialize services using existing service classes
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
-      userId: this.userId,
+      userId: this.userProfile.userId,
+      apiHost: this.getApiHost(),
     });
-    this.userService = new UserService({ userId: this.userId });
+    this.userService = new UserService({ userId: this.userProfile.userId });
     this.stateManager = new StateManagerService({
       sessionId: this.sessionId,
       storageKey: `workable_automation_${this.sessionId || "default"}`,
@@ -1365,7 +1366,8 @@ export default class WorkablePlatform extends BasePlatformAutomation {
           this.applicationTracker.userId !== this.userId
         ) {
           this.applicationTracker = new ApplicationTrackerService({
-            userId: this.userId,
+            userId: this.userProfile.userId,
+            apiHost: this.getApiHost(),
           });
         }
 

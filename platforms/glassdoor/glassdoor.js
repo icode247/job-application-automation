@@ -1131,13 +1131,13 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
 
   async trackApplication(jobDetails) {
     try {
-      if (!this.userId) {
+      if (!this.userProfile.userId) {
         return;
       }
 
       await this.applicationTracker.recordApplication({
         ...jobDetails,
-        userId: this.userId,
+        userId: this.userProfile.userId,
         applicationPlatform: this.platform,
       });
     } catch (error) {
@@ -1584,11 +1584,12 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       }
 
       // Update services with user context
-      if (this.userId) {
+      if (this.userProfile.userId) {
         this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userId,
+          userId: this.userProfile.userId,
+          apiHost: this.getApiHost(),
         });
-        this.userService = new UserService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userProfile.userId });
       }
 
       // Store API host from session context

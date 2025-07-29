@@ -34,9 +34,10 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     // Initialize Ashby-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
-      userId: this.userId,
+      userId: this.userProfile.userId,
+      apiHost: this.getApiHost(),
     });
-    this.userService = new UserService({ userId: this.userId });
+    this.userService = new UserService({ userId: this.userProfile.userId });
 
     this.fileHandler = null;
     this.formHandler = null;
@@ -104,11 +105,12 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       }
 
       // Update services with user context
-      if (this.userId) {
+      if (this.userProfile.userId) {
         this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userId,
+          userId: this.userProfile.userId,
+          apiHost: this.getApiHost(),
         });
-        this.userService = new UserService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userProfile.userId });
       }
 
       // Store API host from session context

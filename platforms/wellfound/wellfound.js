@@ -21,9 +21,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
-      userId: this.userId,
+      userId: this.userProfile.userId,
+      apiHost: this.getApiHost(),
     });
-    this.userService = new UserService({ userId: this.userId });
+    this.userService = new UserService({ userId: this.userProfile.userId });
 
     this.filters = new WellfoundFilters();
     this.formHandler = null;
@@ -91,11 +92,12 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         }
       }
 
-      if (this.userId) {
+      if (this.userProfile.userId) {
         this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userId,
+          userId: this.userProfile.userId,
+          apiHost: this.getApiHost(),
         });
-        this.userService = new UserService({ userId: this.userId });
+        this.userService = new UserService({ userId: this.userProfile.userId });
       }
 
       if (sessionContext.apiHost) {
