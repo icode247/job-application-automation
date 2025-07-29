@@ -568,6 +568,7 @@ class ContentScriptManager {
     if (url.includes("ashbyhq.com")) return "ashby";
     if (url.includes("wellfound.com")) return "wellfound";
     if (url.includes("breezy.hr")) return "breezy";
+    if (url.includes("greenhouse.io")) return "greenhouse";
 
     // Handle Google search for specific platforms
     if (url.includes("google.com/search")) {
@@ -593,6 +594,8 @@ class ContentScriptManager {
         return "ashby";
       if (url.includes("site:breezy.hr") || url.includes("breezy.hr"))
         return "breezy";
+      if (url.includes("site:greenhouse.io") || url.includes("greenhouse.io"))
+        return "greenhouse";
     }
 
     return "unknown";
@@ -678,6 +681,11 @@ class ContentScriptManager {
   async loadPlatformModule(platform) {
     try {
       switch (platform) {
+        case "greenhouse":
+          const { default: GreenhousePlatform } = await import(
+            "../platforms/greenhouse/greenhouse.js"
+          );
+          return GreenhousePlatform;
         case "linkedin":
           const { default: LinkedInPlatform } = await import(
             "../platforms/linkedin/linkedin.js"

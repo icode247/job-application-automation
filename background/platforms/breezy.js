@@ -6,6 +6,9 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     const devMode = messageHandler.devMode;
     super(messageHandler, "breezy", devMode);
+
+    // Initialize logCounts Map to track error counts per session
+    this.logCounts = new Map();
   }
 
   /**
@@ -102,7 +105,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString =
             platformState.searchData.searchLinkPattern.toString();
         } else {
-          this.log.warn("⚠️ searchLinkPattern is null, using empty string");
+          this.log("⚠️ searchLinkPattern is null, using empty string");
           searchLinkPatternString = "";
         }
       } catch (error) {
@@ -126,7 +129,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
       platformState.searchTabId = tabId;
       this.log(`📊 Breezy session data prepared:`, sessionData);
     } else {
-      this.log.warn(`⚠️ No Breezy automation found for window ${windowId}`);
+      this.log(`⚠️ No Breezy automation found for window ${windowId}`);
       this.log(
         `Active automations:`,
         Array.from(this.messageHandler.activeAutomations.keys())
@@ -216,7 +219,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
         devMode: sessionData.devMode,
       });
     } else {
-      this.log.warn(`⚠️ No Breezy automation found for window ${windowId}`);
+      this.log(`⚠️ No Breezy automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -343,7 +346,7 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      this.log.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -427,11 +430,34 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
   }
 
   /**
+   * Initialize or increment error count for a session
+   */
+  incrementErrorCount(sessionId) {
+    if (!this.logCounts.has(sessionId)) {
+      this.logCounts.set(sessionId, 0);
+    }
+    this.logCounts.set(sessionId, this.logCounts.get(sessionId) + 1);
+    return this.logCounts.get(sessionId);
+  }
+
+  /**
+   * Reset error count for a session
+   */
+  resetErrorCount(sessionId) {
+    this.logCounts.set(sessionId, 0);
+  }
+
+  /**
    * Override base class method to provide Breezy-specific continuation logic
    */
   async continueOrComplete(automation, windowId, status, data) {
     if (status === "SUCCESS") {
       automation.platformState.searchData.current++;
+      // Reset error count on success
+      this.resetErrorCount(automation.sessionId);
+    } else if (status === "ERROR") {
+      // Increment error count on error
+      this.incrementErrorCount(automation.sessionId);
     }
 
     const oldUrl = automation.platformState.currentJobUrl;
@@ -439,6 +465,8 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
     // Breezy-specific delay logic
     const errorCount = this.logCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
+
+    this.log(`🕐 Applying delay of ${delay}ms before next job (errors: ${errorCount})`);
 
     setTimeout(async () => {
       await this.sendSearchNextMessage(windowId, {
@@ -453,5 +481,15 @@ export default class BreezyAutomationHandler extends BaseBackgroundHandler {
               : undefined,
       });
     }, delay);
+  }
+
+  /**
+   * Clean up session data when automation ends
+   */
+  cleanupSession(sessionId) {
+    if (this.logCounts.has(sessionId)) {
+      this.logCounts.delete(sessionId);
+      this.log(`🧹 Cleaned up error counts for session: ${sessionId}`);
+    }
   }
 }

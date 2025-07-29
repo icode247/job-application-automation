@@ -4,12 +4,13 @@ import LeverAutomationHandler from "./platforms/lever.js";
 import RecruiteeAutomationHandler from "./platforms/recruitee.js";
 import LinkedInAutomationHandler from "./platforms/linkedin.js";
 import BreezyAutomationHandler from "./platforms/breezy.js";
-// import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
+import ZipRecruiterAutomationHandler from "./platforms/ziprecruiter.js";
 import AshbyAutomationHandler from "./platforms/ashby.js";
 import IndeedAutomationHandler from "./platforms/indeed.js";
 import GlassdoorAutomationHandler from "./platforms/glassdoor.js";
 import WorkableAutomationHandler from "./platforms/workable.js";
 import WellfoundAutomationHandler from "./platforms/wellfound.js";
+import GreenhouseAutomationHandler from "./platforms/greenhouse.js";
 
 export default class MessageHandler {
   constructor(logger, sessionManager, windowManager, devMode = false) {
@@ -965,6 +966,9 @@ export default class MessageHandler {
     let handler = null;
 
     switch (platform) {
+      case "greenhouse":
+        handler = new GreenhouseAutomationHandler(this);
+        break;
       case "lever":
         handler = new LeverAutomationHandler(this);
         break;
@@ -980,9 +984,9 @@ export default class MessageHandler {
       case "breezy":
         handler = new BreezyAutomationHandler(this);
         break;
-      // case "ziprecruiter":
-      //   handler = new ZipRecruiterAutomationHandler(this);
-      //   break;
+      case "ziprecruiter":
+        handler = new ZipRecruiterAutomationHandler(this);
+        break;
       case "ashby":
         handler = new AshbyAutomationHandler(this);
         break;
@@ -1010,6 +1014,7 @@ export default class MessageHandler {
 
   getPlatformDomains(platform) {
     const domainMap = {
+      greenhouse: ["https://job-boards.greenhouse.io", "https://boards.greenhouse.io"],
       lever: ["https://jobs.lever.co"],
       workable: ["https://apply.workable.com", "https://jobs.workable.com"],
       recruitee: ["https://recruitee.com"],
@@ -1027,6 +1032,7 @@ export default class MessageHandler {
 
   getPlatformLinkPattern(platform) {
     const patternMap = {
+      greenhouse: /^https:\/\/(job-boards|boards)\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+/,
       ziprecruiter:
         /^https:\/\/(www\.)?ziprecruiter\.com\/(job|jobs|jz|apply).*$/,
       lever: /^https:\/\/jobs\.lever\.co\/[^\/]+\/[^\/]+\/?.*$/,
@@ -1325,6 +1331,7 @@ export default class MessageHandler {
       "workday",
       "lever",
       "workable",
+      "greenhouse",
       "greenhouse",
       "breezy",
       "ashby",

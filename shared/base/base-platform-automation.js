@@ -35,9 +35,9 @@ export default class BasePlatformAutomation extends BasePlatform {
     this.searchData = {
       limit: 0,
       current: 0,
-      domain: this.getPlatformDomains(), // Abstract method
+      domain: this.getPlatformDomains(),
       submittedLinks: [],
-      searchLinkPattern: this.getSearchLinkPattern(), // Abstract method
+      searchLinkPattern: this.getSearchLinkPattern(),
     };
 
     // Automation control state

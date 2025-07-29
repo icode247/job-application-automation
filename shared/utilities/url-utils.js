@@ -27,6 +27,13 @@ export class UrlUtils {
   static extractJobId(url, platform) {
     try {
       switch (platform) {
+        case "greenhouse":
+          // Greenhouse format: job-boards.greenhouse.io/company/jobs/[JOB_ID]
+          const greenhouseMatches = url.match(/\/jobs\/(\d+)/);
+          return greenhouseMatches && greenhouseMatches[1]
+            ? greenhouseMatches[1]
+            : `job-${Date.now()}`;
+
         case "lever":
           // Lever format: jobs.lever.co/company/[JOB_ID]
           const leverMatches = url.match(/\/([a-f0-9-]{36})\/?$/);
@@ -88,6 +95,16 @@ export class UrlUtils {
   static extractCompanyFromUrl(url, platform) {
     try {
       switch (platform) {
+        case "greenhouse":
+          // Pattern: https://job-boards.greenhouse.io/[COMPANY]/jobs/...
+          const greenhouseMatches = url.match(/\/\/(?:job-boards|boards)\.greenhouse\.io\/([^\/]+)/);
+          if (greenhouseMatches && greenhouseMatches[1]) {
+            return (
+              greenhouseMatches[1].charAt(0).toUpperCase() +
+              greenhouseMatches[1].slice(1).replace(/-/g, " ")
+            );
+          }
+          break;
         case "lever":
           // Pattern: https://jobs.lever.co/[COMPANY]/...
           const leverMatches = url.match(/\/\/jobs\.lever\.co\/([^\/]+)/);
@@ -172,6 +189,8 @@ export class UrlUtils {
    */
   static matchesPlatformPattern(url, platform) {
     switch (platform) {
+      case "greenhouse":
+        return /^https:\/\/(job-boards|boards)\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+/.test(url);
       case "lever":
         return /^https:\/\/jobs\.(eu\.)?lever\.co\/[^\/]+\/[^\/]+/.test(url);
       case "recruitee":
@@ -203,6 +222,8 @@ export class UrlUtils {
    */
   static getSearchLinkPattern(platform) {
     switch (platform) {
+      case "greenhouse":
+        return /^https:\/\/(job-boards|boards)\.greenhouse\.io\/[^\/]+\/jobs\/[^\/]+/;
       case "lever":
         return /^https:\/\/jobs\.(eu\.)?lever\.co\/([^\/]*)\/([^\/]*)\/?(.*)?$/;
       case "recruitee":
@@ -227,6 +248,8 @@ export class UrlUtils {
    */
   static getPlatformDomains(platform) {
     switch (platform) {
+      case "greenhouse":
+        return ["https://job-boards.greenhouse.io", "https://boards.greenhouse.io"];
       case "lever":
         return ["https://jobs.lever.co"];
       case "recruitee":

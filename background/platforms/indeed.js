@@ -78,7 +78,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      this.log.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {
@@ -189,7 +189,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         devMode: sessionData.devMode,
       });
     } else {
-      this.log.warn(`⚠️ No Indeed automation found for window ${windowId}`);
+      this.log(`⚠️ No Indeed automation found for window ${windowId}`);
       sessionData = {
         devMode: false,
         profile: null,
@@ -316,7 +316,7 @@ export default class IndeedAutomationHandler extends BaseBackgroundHandler {
         message: "All job applications have been processed.",
       });
     } catch (error) {
-      this.log.warn("⚠️ Error showing notification:", error);
+      this.log("⚠️ Error showing notification:", error);
     }
 
     this.safePortSend(port, {

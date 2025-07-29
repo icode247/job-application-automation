@@ -177,7 +177,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     } catch (error) {
       const errorMessage =
         "❌ Error checking authentication status - please refresh and try again";
-      this.showUserMessage(errorMessage, "error");
       return { canProceed: false, reason: "error", message: errorMessage };
     }
   }
@@ -368,8 +367,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       this.isRunning = true;
       this.state.isRunning = true;
 
-      this.showUserMessage("Starting Glassdoor automation...", "info");
-
       if (!this.userProfile && this.userId) {
         try {
           this.showUserMessage(
@@ -438,7 +435,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
     const url = window.location.href;
 
     if (this.isGlassdoorJobListingPage(url)) {
-      this.showUserMessage("Found job listings, starting search...", "info");
       await this.startJobListingProcess();
     } else if (this.isSmartApplyPage(url)) {
       await this.startApplicationProcess();
@@ -481,8 +477,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       }
 
       this.searchProcessStarted = true;
-      this.showUserMessage("Searching for Easy Apply jobs...", "searching");
-
       // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
@@ -542,9 +536,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
 
   async startJobProcessing() {
     try {
-      this.showUserMessage("Analyzing available jobs...", "searching");
-
-      const { jobsFound, jobCount, searchQuery } = this.checkIfJobsFound();
+      const { jobsFound, jobCount } = this.checkIfJobsFound();
 
       if (!jobsFound) {
         this.showUserMessage("No jobs found matching your criteria", "warning");
@@ -1323,6 +1315,17 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       }
 
       await this.delay(1000);
+
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: {
+          reason: "Invalid page - no search, job page, or application elements found",
+          url: window.location.href
+        }
+      });
+
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
     }
 
     throw new Error("Timeout waiting for valid page");
@@ -1416,7 +1419,6 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
       if (isSearchPage) {
         const { jobsFound } = this.checkIfJobsFound();
         if (!jobsFound) {
-          this.showUserMessage("No jobs found for your search", "warning");
           this.state.ready = true;
           this.state.initialized = true;
           return;
@@ -1506,7 +1508,7 @@ export default class GlassdoorPlatform extends BasePlatformAutomation {
   }
 
   handleErrorMessage(data) {
-    this.showUserMessage(`Error: ${data?.message || "Unknown error"}`, "error");
+    this.log(`Error: ${data?.message || "Unknown error"}`, "error");
   }
 
   // ========================================

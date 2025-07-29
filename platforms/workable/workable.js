@@ -1305,7 +1305,18 @@ export default class WorkablePlatform extends BasePlatformAutomation {
         return;
       }
 
-      await Utils.delay(1000);
+      await this.delay(1000);
+
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: {
+          reason: "Invalid page - no search, job page, or application elements found",
+          url: window.location.href
+        }
+      });
+
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
     }
 
     throw Utils.createError("Timeout waiting for valid page", "PAGE_TIMEOUT");

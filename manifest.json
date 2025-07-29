@@ -8,10 +8,6 @@
     "storage",
     "scripting",
     "tabs",
-    "alarms",
-    "power",
-    "webNavigation",
-    "declarativeNetRequest",
     "background"
   ],
   "externally_connectable": {
@@ -96,8 +92,10 @@
         "platforms/ziprecruiter/ziprecruiter-form-handler.js",
         "utils/utils.js",
         "services/constants.js",
-        "core/logger.js"
-        
+        "core/logger.js",
+        "platforms/greenhouse/greenhouse.js",
+        "platforms/greenhouse/greenhouse-form-handler.js",
+        "platforms/greenhouse/greenhouse-file-handler.js"
       ],
       "matches": [
         "<all_urls>"

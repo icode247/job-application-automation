@@ -32,7 +32,7 @@ export default class BaseBackgroundHandler {
 
     // Validate platform matches
     if (platform !== this.platformName) {
-      (this.log.warn
+      (this.log
         `Platform mismatch: expected ${this.platformName}, got ${platform}`
       );
       this.safePortDisconnect(port);
@@ -166,14 +166,14 @@ export default class BaseBackgroundHandler {
   safePortSend(port, message) {
     try {
       if (!port || !port.name || !this.activeConnections.has(port.name)) {
-        this.log.warn(
+        this.log(
           `⚠️ Cannot send message to disconnected/invalid ${this.platformName} port: ${message.type}`
         );
         return false;
       }
 
       if (!port.sender || !port.sender.tab) {
-        this.log.warn(
+        this.log(
           `⚠️ ${this.platformName} port sender no longer exists: ${message.type}`
         );
         this.activeConnections.delete(port.name);
@@ -184,7 +184,7 @@ export default class BaseBackgroundHandler {
       this.lastKeepalive.set(port.name, Date.now());
       return true;
     } catch (error) {
-      this.log.warn(
+      this.log(
         `⚠️ Failed to send ${this.platformName} port message (${message.type}):`,
         error.message
       );
@@ -310,7 +310,7 @@ export default class BaseBackgroundHandler {
               );
               return true;
             } catch (error) {
-              this.log.warn("⚠️ Port message failed, trying tabs API:", error);
+              this.log("⚠️ Port message failed, trying tabs API:", error);
             }
           }
 
@@ -325,7 +325,7 @@ export default class BaseBackgroundHandler {
             );
             return true;
           } catch (error) {
-            this.log.warn("⚠️ Tabs API message failed:", error);
+            this.log("⚠️ Tabs API message failed:", error);
             if (retryCount < maxRetries) {
               setTimeout(() => {
                 this.sendSearchNextMessage(windowId, data, retryCount + 1);
@@ -336,7 +336,7 @@ export default class BaseBackgroundHandler {
         }
       }
 
-      this.log.warn(
+      this.log(
         `⚠️ Could not find ${this.platformName} search tab to send SEARCH_NEXT message`
       );
       return false;

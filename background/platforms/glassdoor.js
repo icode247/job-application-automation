@@ -78,7 +78,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         break;
 
       default:
-        this.log.warn(`❓ Unknown Glassdoor message type: ${type}`);
+        this.log(`❓ Unknown Glassdoor message type: ${type}`);
         this.safePortSend(port, {
           type: "ERROR",
           message: `Unknown message type: ${type}`,
@@ -122,7 +122,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
           searchLinkPatternString =
             platformState.searchData.searchLinkPattern.toString();
         } else {
-          this.log.warn("⚠️ searchLinkPattern is null, using default pattern");
+          this.log("⚠️ searchLinkPattern is null, using default pattern");
           searchLinkPatternString =
             this.platformConfig.searchLinkPattern.toString();
         }
@@ -150,7 +150,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
 
       this.log(`📊 Glassdoor session data prepared:`, sessionData);
     } else {
-      this.log.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
+      this.log(`⚠️ No Glassdoor automation found for window ${windowId}`);
 
       // Provide default data structure to prevent errors
       sessionData = {
@@ -249,7 +249,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         devMode: sessionData.devMode,
       });
     } else {
-      this.log.warn(`⚠️ No Glassdoor automation found for window ${windowId}`);
+      this.log(`⚠️ No Glassdoor automation found for window ${windowId}`);
 
       // Provide default data structure
       sessionData = {
@@ -417,7 +417,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
         try {
           await chrome.tabs.remove(tabId);
         } catch (error) {
-          this.log.warn(`⚠️ Error closing timeout tab ${tabId}:`, error);
+          this.log(`⚠️ Error closing timeout tab ${tabId}:`, error);
         }
       }
 
@@ -527,7 +527,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
           message: "All job applications have been processed.",
         });
       } catch (error) {
-        this.log.warn("⚠️ Error showing notification:", error);
+        this.log("⚠️ Error showing notification:", error);
       }
 
       this.safePortSend(port, {
@@ -561,7 +561,7 @@ export default class GlassdoorAutomationHandler extends BaseBackgroundHandler {
           await chrome.tabs.remove(tabId);
           this.log(`✅ Closed Glassdoor application tab ${tabId}`);
         } catch (error) {
-          this.log.warn(`⚠️ Error closing application tab ${tabId}:`, error);
+          this.log(`⚠️ Error closing application tab ${tabId}:`, error);
         }
       }
 

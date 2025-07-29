@@ -249,7 +249,7 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
 
   async initialize() {
     await super.initialize(); // Handles all common initialization
-  
+
     // Initialize Recruitee-specific handlers
     this.fileHandler = new RecruiteeFileHandler({
       statusService: this.statusOverlay,
@@ -807,6 +807,17 @@ export default class RecruiteePlatform extends BasePlatformAutomation {
       }
 
       await this.delay(1000);
+
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: {
+          reason: "Invalid page - no search, job page, or application elements found",
+          url: window.location.href
+        }
+      });
+
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
     }
 
     throw new Error("Timeout waiting for valid Recruitee page");

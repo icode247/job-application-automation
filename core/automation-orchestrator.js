@@ -213,7 +213,6 @@ export default class AutomationOrchestrator {
         `🆕 New tab ${tabId} created in automation window ${windowId}`
       );
 
-      // Wait for tab to load before injecting context
       setTimeout(async () => {
         try {
           const automation = this.activeAutomations.get(sessionId);
@@ -243,7 +242,6 @@ export default class AutomationOrchestrator {
       await chrome.scripting.executeScript({
         target: { tabId },
         func: (context) => {
-          // Set all automation flags
           window.automationSessionId = context.sessionId;
           window.automationPlatform = context.platform;
           window.automationUserId = context.userId;
@@ -261,7 +259,6 @@ export default class AutomationOrchestrator {
             window.automationApiHost = context.apiHost;
           }
 
-          // Set session storage
           sessionStorage.setItem("automationSessionId", context.sessionId);
           sessionStorage.setItem("automationPlatform", context.platform);
           sessionStorage.setItem("automationUserId", context.userId);
@@ -306,6 +303,7 @@ export default class AutomationOrchestrator {
   getSessionForWindow(windowId) {
     return this.windowSessions.get(windowId);
   }
+
   isAutomationWindow(windowId) {
     return this.windowSessions.has(windowId);
   }
@@ -323,7 +321,6 @@ export default class AutomationOrchestrator {
         );
 
         try {
-          // Properly stop the automation session
           automation.status = "stopped";
           automation.endTime = Date.now();
 
@@ -332,7 +329,6 @@ export default class AutomationOrchestrator {
             reason: "Window closed",
           });
 
-          // Call cleanup if available
           if (typeof automation.cleanup === "function") {
             await automation.cleanup();
           }
@@ -346,7 +342,6 @@ export default class AutomationOrchestrator {
         this.activeAutomations.delete(sessionId);
       }
 
-      // Clean up tracking
       this.windowSessions.delete(windowId);
 
       this.logger.log(
@@ -357,6 +352,8 @@ export default class AutomationOrchestrator {
 
   buildStartingUrl(platform, preferences, country) {
     switch (platform) {
+      case "greenhouse":
+        return this.buildGreenhouseUrl(preferences);
       case "linkedin":
         return this.buildLinkedInUrl(preferences, country);
       case "indeed":
@@ -391,6 +388,19 @@ export default class AutomationOrchestrator {
     return value || null;
   };
 
+  buildGreenhouseUrl(preferences) {
+    const keywords = this.getFirstOrString(preferences.positions);
+    const location = this.getFirstOrString(preferences.location);
+    const remoteKeyword =
+      preferences.remoteOnly || this.getFirstOrString(preferences.workMode) === "Remote"
+        ? " remote"
+        : "";
+
+    return `https://www.google.com/search?q=site:job-boards.greenhouse.io+"${encodeURIComponent(
+      keywords || "software engineer"
+    )}"${location || ""}${remoteKeyword}`;
+  }
+
   buildGlassdoorUrl(preferences, country) {
     const params = new URLSearchParams();
 
@@ -399,11 +409,7 @@ export default class AutomationOrchestrator {
       params.set("remoteWorkType", "1");
     }
 
-    if (
-      preferences.salary &&
-      Array.isArray(preferences.salary) &&
-      preferences.salary.length === 2
-    ) {
+    if (preferences.salary && Array.isArray(preferences.salary) && preferences.salary.length === 2) {
       const [minSalary, maxSalary] = preferences.salary;
       if (minSalary) {
         params.set("minSalary", minSalary.toString());
@@ -413,11 +419,9 @@ export default class AutomationOrchestrator {
       }
     }
 
-    if (
-      preferences.companyRating &&
-      preferences.companyRating !== "Any rating"
-    ) {
-      const ratingMatch = preferences.companyRating.match(/(\d+(?:\.\d+)?)/);
+    const companyRating = this.getFirstOrString(preferences.companyRating);
+    if (companyRating && companyRating !== "Any rating") {
+      const ratingMatch = companyRating.match(/(\d+(?:\.\d+)?)/);
       if (ratingMatch) {
         const rating = parseFloat(ratingMatch[1]);
         params.set("minRating", rating.toFixed(1));
@@ -432,44 +436,34 @@ export default class AutomationOrchestrator {
       "Past month": "30",
     };
 
-    if (
-      preferences.datePosted &&
-      preferences.datePosted !== "Any time" &&
-      datePostedMap[preferences.datePosted]
-    ) {
-      params.set("fromAge", datePostedMap[preferences.datePosted]);
+    const datePosted = this.getFirstOrString(preferences.datePosted);
+    const datePostedValue = datePosted?.label || datePosted;
+
+    if (datePostedValue && datePostedValue !== "Any time" && datePostedMap[datePostedValue]) {
+      params.set("fromAge", datePostedMap[datePostedValue]);
     }
 
     const jobTypeMap = {
       "Full-time": "fulltime",
       "Part-time": "parttime",
-      Contract: "contract",
-      Internship: "internship",
+      "Contract": "contract",
+      "Internship": "internship",
     };
 
-    if (
-      preferences.jobType &&
-      Array.isArray(preferences.jobType) &&
-      preferences.jobType.length > 0
-    ) {
-      const glassdoorJobTypes = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean);
-
-      if (glassdoorJobTypes.length > 0) {
-        params.set("jobType", glassdoorJobTypes.join(","));
-      }
+    const jobType = this.getFirstOrString(preferences.jobType);
+    if (jobType && jobTypeMap[jobType]) {
+      params.set("jobType", jobTypeMap[jobType]);
     }
 
     const experience = this.getFirstOrString(preferences.experience);
     if (experience) {
       const experienceMap = {
         "Entry level": "entrylevel",
-        Associate: "associate",
-        Internship: "internship",
+        "Associate": "associate",
+        "Internship": "internship",
         "Mid-Senior level": "midseniorlevel",
-        Director: "director",
-        Executive: "executive",
+        "Director": "director",
+        "Executive": "executive",
       };
 
       const glassdoorExperience = experienceMap[experience];
@@ -482,7 +476,6 @@ export default class AutomationOrchestrator {
     const firstPosition = this.getFirstOrString(preferences.positions);
 
     let baseUrl = "https://www.glassdoor.com/Job/jobs.htm";
-    // let baseUrl =  `${getGlassdoorJobURL(country)}/Job/jobs.htm`;
 
     if (firstLocation && firstPosition) {
       const locationSlug = firstLocation
@@ -508,56 +501,51 @@ export default class AutomationOrchestrator {
 
   buildLinkedInUrl(preferences, country) {
     const baseUrl = "https://www.linkedin.com/jobs/search/?";
-    const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
     const params = new URLSearchParams();
 
-    params.append("f_AL", "true"); // Keep the Easy Apply filter
+    params.append("f_AL", "true");
 
-    // Handle positions
-    if (preferences.positions?.length) {
-      params.append("keywords", joinWithOR(preferences.positions));
+    const position = this.getFirstOrString(preferences.positions);
+    if (position) {
+      params.append("keywords", position);
     }
 
-    if (preferences.location) {
-      // GeoId mapping for countries
+    const location = this.getFirstOrString(preferences.location);
+    if (location) {
       const geoIdMap = {
-        Nigeria: "105365761",
-        Netherlands: "102890719",
+        "Nigeria": "105365761",
+        "Netherlands": "102890719",
         "United States": "103644278",
         "United Kingdom": "101165590",
-        Canada: "101174742",
-        Australia: "101452733",
-        Germany: "101282230",
-        France: "105015875",
-        India: "102713980",
-        Singapore: "102454443",
+        "Canada": "101174742",
+        "Australia": "101452733",
+        "Germany": "101282230",
+        "France": "105015875",
+        "India": "102713980",
+        "Singapore": "102454443",
         "South Africa": "104035573",
-        Ireland: "104738515",
+        "Ireland": "104738515",
         "New Zealand": "105490917",
       };
 
-      if (preferences.location === "Remote") {
+      if (location === "Remote") {
         params.append("f_WT", "2");
-      } else if (geoIdMap[preferences.location]) {
-        params.append("geoId", geoIdMap[preferences.location]);
+      } else if (geoIdMap[location]) {
+        params.append("geoId", geoIdMap[location]);
       } else {
-        params.append("location", preferences.location);
+        params.append("location", location);
       }
     }
 
     const workModeMap = {
-      Remote: "2",
-      Hybrid: "3",
+      "Remote": "2",
+      "Hybrid": "3",
       "On-site": "1",
     };
 
-    if (preferences.workMode?.length) {
-      const workModeCodes = preferences.workMode
-        .map((mode) => workModeMap[mode])
-        .filter(Boolean);
-      if (workModeCodes.length) {
-        params.append("f_WT", workModeCodes.join(","));
-      }
+    const workMode = this.getFirstOrString(preferences.workMode);
+    if (workMode && workModeMap[workMode]) {
+      params.append("f_WT", workModeMap[workMode]);
     }
 
     const datePostedMap = {
@@ -568,52 +556,45 @@ export default class AutomationOrchestrator {
       "Few Minutes Ago": "r3600",
     };
 
-    if (preferences.datePosted) {
-      const dateCode = datePostedMap[preferences.datePosted];
+    const datePosted = this.getFirstOrString(preferences.datePosted);
+    const datePostedValue = datePosted?.label || datePosted;
+
+    if (datePostedValue && datePostedMap[datePostedValue]) {
+      const dateCode = datePostedMap[datePostedValue];
       if (dateCode) {
         params.append("f_TPR", dateCode);
       }
     }
 
     const experienceLevelMap = {
-      Internship: "1",
+      "Internship": "1",
       "Entry level": "2",
-      Associate: "3",
+      "Associate": "3",
       "Mid-Senior level": "4",
-      Director: "5",
-      Executive: "6",
+      "Director": "5",
+      "Executive": "6",
     };
 
-    if (preferences.experience?.length) {
-      const experienceCodes = preferences.experience
-        .map((level) => experienceLevelMap[level])
-        .filter(Boolean);
-      if (experienceCodes.length) {
-        params.append("f_E", experienceCodes.join(","));
-      }
+    const experience = this.getFirstOrString(preferences.experience);
+    if (experience && experienceLevelMap[experience]) {
+      params.append("f_E", experienceLevelMap[experience]);
     }
 
-    // Job Type Mapping
     const jobTypeMap = {
       "Full-time": "F",
       "Part-time": "P",
-      Contract: "C",
-      Temporary: "T",
-      Internship: "I",
-      Volunteer: "V",
+      "Contract": "C",
+      "Temporary": "T",
+      "Internship": "I",
+      "Volunteer": "V",
     };
 
-    if (preferences.jobType?.length) {
-      const jobTypeCodes = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean);
-      if (jobTypeCodes.length) {
-        params.append("f_JT", jobTypeCodes.join(","));
-      }
+    const jobType = this.getFirstOrString(preferences.jobType);
+    if (jobType && jobTypeMap[jobType]) {
+      params.append("f_JT", jobTypeMap[jobType]);
     }
 
-    // Salary Range Mapping
-    if (preferences.salary?.length === 2) {
+    if (preferences.salary && Array.isArray(preferences.salary) && preferences.salary.length === 2) {
       const [min] = preferences.salary;
       const salaryBuckets = {
         40000: "1",
@@ -636,7 +617,6 @@ export default class AutomationOrchestrator {
       }
     }
 
-    // Sorting
     params.append("sortBy", "R");
 
     return baseUrl + params.toString();
@@ -645,25 +625,21 @@ export default class AutomationOrchestrator {
   buildIndeedUrl(preferences, country) {
     const params = new URLSearchParams();
 
-    // Keywords from positions
-    if (preferences.positions?.length) {
-      params.set("q", preferences.positions.join(" OR "));
+    const position = this.getFirstOrString(preferences.positions);
+    if (position) {
+      params.set("q", position);
     }
 
-    // Location
-    // if an array, show the first
-    if (Array.isArray(preferences.location)) {
-      params.set("l", preferences.location[0]);
-    } else {
-      params.set("l", preferences.location);
+    const location = this.getFirstOrString(preferences.location);
+    if (location) {
+      params.set("l", location);
     }
 
-    // Remote work
-    if (preferences.remoteOnly || preferences.workMode?.includes("Remote")) {
+    const workMode = this.getFirstOrString(preferences.workMode);
+    if (preferences.remoteOnly || workMode === "Remote") {
       params.set("remotejob", "1");
     }
 
-    // Date posted
     const datePostedMap = {
       "Any time": "",
       "Past month": "14",
@@ -673,37 +649,28 @@ export default class AutomationOrchestrator {
       "Few Minutes Ago": "1",
     };
 
-    if (preferences.datePosted && datePostedMap[preferences.datePosted]) {
-      params.set("fromage", datePostedMap[preferences.datePosted]);
+    const datePosted = this.getFirstOrString(preferences.datePosted);
+    const datePostedValue = datePosted?.label || datePosted;
+
+    if (datePostedValue && datePostedMap[datePostedValue]) {
+      params.set("fromage", datePostedMap[datePostedValue]);
     }
 
-    // Job type using sc parameter
     const jobTypeMap = {
       "Full-time": "CF3CP",
       "Part-time": "75GKK",
-      Contract: "NJXCK",
-      Temporary: "4HKF7",
-      Internship: "internship",
+      "Contract": "NJXCK",
+      "Temporary": "4HKF7",
+      "Internship": "internship",
     };
 
-    if (preferences.jobType?.length) {
-      const jobTypeCodes = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean);
-
-      if (jobTypeCodes.length > 0) {
-        let scValue;
-        if (jobTypeCodes.length === 1) {
-          scValue = `0kf%3Aattr%28${jobTypeCodes[0]}%29%3B`;
-        } else {
-          const joinedCodes = jobTypeCodes.join("%7C");
-          scValue = `0kf%3Aattr%28${joinedCodes}%252COR%29%3B`;
-        }
-        params.set("sc", scValue);
-      }
+    const jobType = this.getFirstOrString(preferences.jobType);
+    if (jobType && jobTypeMap[jobType]) {
+      const scValue = `0kf%3Aattr%28${jobTypeMap[jobType]}%29%3B`;
+      params.set("sc", scValue);
     }
 
-    if (preferences.salary?.length === 2) {
+    if (preferences.salary && Array.isArray(preferences.salary) && preferences.salary.length === 2) {
       const [minSalary] = preferences.salary;
       if (minSalary > 0) {
         params.set("salary", minSalary.toString());
@@ -716,17 +683,13 @@ export default class AutomationOrchestrator {
   }
 
   buildGenericSearchUrl(preferences) {
-    const keywords = preferences.positions?.length
-      ? preferences.positions.join(" OR ") + " jobs"
-      : "software engineer jobs";
-    const location =
-      preferences.location?.length && !preferences.remoteOnly
-        ? ` ${preferences.location[0]}`
-        : "";
+    const position = this.getFirstOrString(preferences.positions);
+    const keywords = position ? position + " jobs" : "software engineer jobs";
 
-    return `https://www.google.com/search?q=${encodeURIComponent(
-      keywords + location
-    )}`;
+    const location = this.getFirstOrString(preferences.location);
+    const locationStr = location && !preferences.remoteOnly ? ` ${location}` : "";
+
+    return `https://www.google.com/search?q=${encodeURIComponent(keywords + locationStr)}`;
   }
 
   buildWellfoundUrl(preferences) {
@@ -736,111 +699,103 @@ export default class AutomationOrchestrator {
   buildZipRecruiterUrl(preferences) {
     const params = new URLSearchParams();
 
-    // Keywords from positions
-    if (preferences.positions?.length) {
-      params.set("search", preferences.positions.join(" OR "));
+    const keywords = this.getFirstOrString(preferences.positions);
+    if (keywords) {
+      params.set("search", keywords);
     }
 
-    // Location
-    if (Array.isArray(preferences.location) && !preferences.remoteOnly) {
-      params.set("location", preferences.location[0]);
+    let location = this.getFirstOrString(preferences.location);
+
+    if (preferences.remoteOnly === true) {
+      if (location) {
+        location = `Remote (${location})`;
+      } else {
+        location = "Remote";
+      }
     }
 
-    // Remote work
-    if (preferences.remoteOnly || preferences.workMode?.includes("Remote")) {
-      params.set("refine_by_location_type", "only_remote");
-    } else {
-      params.set("refine_by_location_type", ""); // For in-person jobs
+    if (location) {
+      params.set("location", location);
     }
 
-    // Date posted
+    const datePosted = this.getFirstOrString(preferences.datePosted);
+    const datePostedValue = datePosted?.value || datePosted;
+    console.log(datePostedValue)
+
     const datePostedMap = {
-      "Any time": "",
+      "": "",
       "Past month": "30",
       "Past week": "7",
       "Past 24 hours": "1",
-      "Few Minutes Ago": "1",
+      "Past 3 days": "3",
     };
 
-    if (preferences.datePosted && datePostedMap[preferences.datePosted]) {
-      params.set("days", datePostedMap[preferences.datePosted]);
+    // if (datePostedValue && datePostedMap.hasOwnProperty(datePostedValue)) {
+    //   const days = datePostedMap[datePostedValue];
+    if (datePostedValue) {
+      params.set("days", datePostedValue);
     }
+    // }
 
-    // Job type
+    const jobType = this.getFirstOrString(preferences.jobType);
     const jobTypeMap = {
       "Full-time": "full_time",
       "Part-time": "part_time",
-      Contract: "contract",
-      Temporary: "temp",
-      Internship: "internship",
+      "Contract": "contract",
+      "Temporary": "temp",
+      "Internship": "internship",
     };
 
-    if (preferences.jobType?.length) {
-      const zipRecruiterJobType = preferences.jobType
-        .map((type) => jobTypeMap[type])
-        .filter(Boolean)[0]; // ZipRecruiter typically takes one job type
-
-      if (zipRecruiterJobType) {
-        params.set(
-          "refine_by_employment",
-          `employment_type:${zipRecruiterJobType}`
-        );
-      }
+    if (jobType && jobTypeMap[jobType]) {
+      params.set("refine_by_employment", `employment_type:${jobTypeMap[jobType]}`);
     }
 
-    // Salary filters
-    if (preferences.salary?.length === 2) {
+    if (preferences.salary && Array.isArray(preferences.salary) && preferences.salary.length >= 1) {
       const [minSalary, maxSalary] = preferences.salary;
-      if (minSalary > 0) {
+
+      if (minSalary && minSalary > 0) {
         params.set("refine_by_salary", minSalary.toString());
       }
-      if (maxSalary > 0) {
+
+      if (maxSalary && maxSalary > 0) {
         params.set("refine_by_salary_ceil", maxSalary.toString());
+      } else {
+        params.set("refine_by_salary_ceil", "");
       }
     }
-
-    // Default search radius
-    params.set("radius", "25");
 
     return `https://www.ziprecruiter.com/jobs-search?${params.toString()}`;
   }
 
   buildWorkableUrl(preferences) {
     const keywords = this.getFirstOrString(preferences.positions);
-
     const location = this.getFirstOrString(preferences.location);
-    const remoteKeyword =
-      preferences.remoteOnly || preferences.workMode?.includes("Remote")
-        ? " remote"
-        : "";
+    const workMode = this.getFirstOrString(preferences.workMode);
+    const remoteKeyword = preferences.remoteOnly || workMode === "Remote" ? " remote" : "";
 
     return `https://www.google.com/search?q=site:workable.com+"${encodeURIComponent(
-      keywords
-    )} "${location}${remoteKeyword}`;
+      keywords || "software engineer"
+    )}" "${location || ""}${remoteKeyword}`;
   }
 
   buildAshbyUrl(preferences) {
     const keywords = this.getFirstOrString(preferences.positions);
     const location = this.getFirstOrString(preferences.location);
-    const remoteKeyword =
-      preferences.remoteOnly || preferences.workMode?.includes("Remote")
-        ? " remote"
-        : "";
+    const workMode = this.getFirstOrString(preferences.workMode);
+    const remoteKeyword = preferences.remoteOnly || workMode === "Remote" ? " remote" : "";
 
     return `https://www.google.com/search?q=site:ashbyhq.com+"${encodeURIComponent(
-      keywords
-    )}"${location}${remoteKeyword}`;
+      keywords || "software engineer"
+    )}"${location || ""}${remoteKeyword}`;
   }
 
   buildBreezyUrl(preferences) {
     const keywords = this.getFirstOrString(preferences.positions);
     const location = this.getFirstOrString(preferences.location);
-    const remoteKeyword =
-      preferences.remoteOnly || preferences.workMode?.includes("Remote")
-        ? " remote"
-        : "";
+    const workMode = this.getFirstOrString(preferences.workMode);
+    const remoteKeyword = preferences.remoteOnly || workMode === "Remote" ? " remote" : "";
 
-    const fullQuery = `site:breezy.hr "${keywords}"${location}${remoteKeyword}`;
+    const fullQuery = `site:breezy.hr "${keywords || "software engineer"}"${location || ""}${remoteKeyword}`;
     return `https://www.google.com/search?q=${encodeURIComponent(fullQuery)}`;
   }
 
@@ -849,8 +804,8 @@ export default class AutomationOrchestrator {
     const location = this.getFirstOrString(preferences.location);
 
     return `https://www.google.com/search?q=site:myworkdayjobs.com+"${encodeURIComponent(
-      keywords
-    )}"${location}`;
+      keywords || "software engineer"
+    )}"${location || ""}`;
   }
 
   buildRecruiteeUrl(preferences) {
@@ -858,8 +813,8 @@ export default class AutomationOrchestrator {
     const location = this.getFirstOrString(preferences.location);
 
     return `https://www.google.com/search?q=site:recruitee.com+"${encodeURIComponent(
-      keywords
-    )}"${location}`;
+      keywords || "software engineer"
+    )}"${location || ""}`;
   }
 
   buildLeverUrl(preferences) {
@@ -867,8 +822,8 @@ export default class AutomationOrchestrator {
     const location = this.getFirstOrString(preferences.location);
 
     return `https://www.google.com/search?q=site:jobs.lever.co+"${encodeURIComponent(
-      keywords
-    )}"${location}`;
+      keywords || "software engineer"
+    )}"${location || ""}`;
   }
 
   async stopAutomation(sessionId) {

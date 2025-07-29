@@ -37,8 +37,11 @@ Language: English
 ```
 ### ZIP
   
-   zip -r fastapply.zip .
-
+zip -r fastapply.zip . -x \
+  "*.git*" \
+  "DEPLOYMENT.md" \
+  "INTEGRATION.md" \
+  "README.md"
 ### 4. Privacy and Permissions
 
 - Add privacy policy URL

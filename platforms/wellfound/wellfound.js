@@ -1,4 +1,3 @@
-// platforms/wellfound/wellfound.js
 import BasePlatformAutomation from "../../shared/base/base-platform-automation.js";
 import WellfoundFormHandler from "./wellfound-form-handler.js";
 import {
@@ -18,8 +17,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.currentJobIndex = 0;
     this.isLoadingMore = false;
     this.queueInitialized = false;
+    this.searchProcessStarted = false;
 
-    // Initialize Wellfound-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
       userId: this.userId,
@@ -27,16 +26,21 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.userService = new UserService({ userId: this.userId });
 
     this.filters = new WellfoundFilters();
-
     this.formHandler = null;
 
-    // Add flags to prevent duplicate starts
-    this.searchProcessStarted = false;
-  }
+    this.searchData = {
+      limit: 10,
+      current: 0,
+      domain: [],
+      submittedLinks: [],
+      searchLinkPattern: null,
+    };
 
-  // ========================================
-  // PLATFORM-SPECIFIC IMPLEMENTATIONS (Required by base class)
-  // ========================================
+    this.applicationState = {
+      isApplicationInProgress: false,
+      applicationStartTime: null,
+    };
+  }
 
   getPlatformDomains() {
     return ["wellfound.com"];
@@ -47,26 +51,28 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   isValidJobPage(url) {
-    return url.includes("wellfound.com/jobs/") && /\/jobs\/\d+/.test(url);
+    return url && url.includes("wellfound.com/jobs/") && /\/jobs\/\d+/.test(url);
   }
 
   async setSessionContext(sessionContext) {
     try {
+      if (!sessionContext) {
+        this.log("⚠️ No session context provided");
+        return;
+      }
+
       this.sessionContext = sessionContext;
       this.hasSessionContext = true;
 
-      // Update basic properties
       if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
       if (sessionContext.platform) this.platform = sessionContext.platform;
       if (sessionContext.userId) this.userId = sessionContext.userId;
 
-      // Set user profile with priority handling
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
           this.log("👤 User profile loaded from session context");
         } else {
-          // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
@@ -75,7 +81,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
           this.log("📡 Fetching user profile from user service...");
@@ -86,7 +91,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Update services with user context
       if (this.userId) {
         this.applicationTracker = new ApplicationTrackerService({
           userId: this.userId,
@@ -94,12 +98,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         this.userService = new UserService({ userId: this.userId });
       }
 
-      // Store API host from session context
       if (sessionContext.apiHost) {
         this.sessionApiHost = sessionContext.apiHost;
       }
 
-      // Update form handler if it exists
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
@@ -118,7 +120,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async start(params = {}) {
     try {
-      // Prevent duplicate starts
       if (this.isRunning) {
         this.log("⚠️ Automation already running, ignoring duplicate start");
         return true;
@@ -127,7 +128,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.isRunning = true;
       this.log("▶️ Starting Wellfound automation");
 
-      // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
           this.log("🔄 Attempting to fetch user profile during start...");
@@ -138,26 +138,23 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Update config with parameters
       this.config = { ...this.config, ...params };
 
-      // Update progress
-      this.updateProgress({
-        total: params.jobsToApply || 0,
-        completed: 0,
-        current: "Starting automation...",
-      });
+      if (this.updateProgress) {
+        this.updateProgress({
+          total: params.jobsToApply || 0,
+          completed: 0,
+          current: "Starting automation...",
+        });
+      }
 
-      // Wait for page to be ready
       await this.waitForPageLoad();
-
-      // Detect page type and start appropriate automation
       await this.detectPageTypeAndStart();
 
       return true;
     } catch (error) {
       this.reportError(error, { action: "start" });
-      this.isRunning = false; // Reset on error
+      this.isRunning = false;
       return false;
     }
   }
@@ -206,7 +203,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
           break;
 
         case "KEEPALIVE_RESPONSE":
-          // Just acknowledge keepalive
           break;
 
         case "SUCCESS":
@@ -222,17 +218,13 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   async findJobs() {
-    // ✅ UPDATED: Return jobs from queue instead of DOM search
     return this.jobQueue.slice(this.currentJobIndex);
   }
 
   getApiHost() {
-    return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
+    return this.sessionApiHost || this.sessionContext?.apiHost || this.config?.apiHost;
   }
 
-  /**
-   * Check if we're on the application page
-   */
   isApplicationPage(url) {
     return this.isValidJobPage(url);
   }
@@ -241,14 +233,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return "START_APPLICATION";
   }
 
-  // ========================================
-  // WELLFOUND-SPECIFIC INITIALIZATION
-  // ========================================
-
   async initialize() {
-    await super.initialize(); // Handles all common initialization
+    await super.initialize();
 
-    // Initialize Wellfound-specific handlers
     this.formHandler = new WellfoundFormHandler(
       this.aiService,
       this.userService,
@@ -256,23 +243,16 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     );
   }
 
-  // ========================================
-  // QUEUE-BASED JOB MANAGEMENT
-  // ========================================
-
   async buildJobQueue() {
     try {
       this.log("🏗️ Building job queue from company cards...");
 
-      // Reset queue
       this.jobQueue = [];
       this.currentJobIndex = 0;
 
-      // Wait for company cards to load
       await this.waitForPageLoad();
-      await this.delay(2000); // Give extra time for dynamic content
+      await this.delay(2000);
 
-      // Get all company cards currently visible
       const companyCards = document.querySelectorAll(
         ".styles_component__uTjje"
       );
@@ -282,7 +262,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         try {
           const jobs = this.extractJobsFromCompanyCard(companyCard);
 
-          // Filter out already processed jobs
           const newJobs = jobs.filter((job) => {
             const normalizedUrl = this.normalizeUrl(job.url);
             return !this.searchData.submittedLinks.some(
@@ -294,8 +273,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
           if (newJobs.length > 0) {
             this.log(
-              `➕ Added ${newJobs.length} jobs from ${
-                newJobs[0]?.company || "company"
+              `➕ Added ${newJobs.length} jobs from ${newJobs[0]?.company || "company"
               }`
             );
           }
@@ -308,11 +286,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.queueInitialized = true;
       this.log(`✅ Job queue built with ${this.jobQueue.length} jobs`);
 
-      // Log some sample jobs for debugging
       this.jobQueue.slice(0, 3).forEach((job, index) => {
         this.log(
-          `📋 Job ${index + 1}: ${job.title} at ${job.company} (${
-            job.location
+          `📋 Job ${index + 1}: ${job.title} at ${job.company} (${job.location
           })`
         );
       });
@@ -328,13 +304,11 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     const jobs = [];
 
     try {
-      // Method 1: Jobs within job listing sections
       const jobListingsSection = companyCard.querySelector(
         ".styles_jobListingList__YGDNO"
       );
 
       if (jobListingsSection) {
-        // Find all job links within this company's listings
         const jobLinksInCompany = jobListingsSection.querySelectorAll(
           "a.styles_component__UCLp3.styles_defaultLink__eZMqw.styles_jobLink__US40J"
         );
@@ -343,7 +317,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
           if (jobLink && jobLink.href) {
             const href = jobLink.href;
 
-            // Validate the URL matches Wellfound job pattern
             if (this.getSearchLinkPattern().test(href)) {
               const jobInfo = this.createJobInfoFromLink(jobLink, companyCard);
               jobs.push(jobInfo);
@@ -356,7 +329,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
           }
         }
       } else {
-        // Method 2: Direct job links in company cards
         const directJobLink = companyCard.querySelector(
           "a.styles_component__UCLp3.styles_defaultLink__eZMqw.styles_jobLink__US40J"
         );
@@ -392,7 +364,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       ".styles_compensation__3JnvU"
     );
 
-    // Also get company info from the parent company card
     const companyNameElement = companyCard.querySelector(
       "h2.inline.text-md.font-semibold"
     );
@@ -406,14 +377,13 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       element: jobLink,
       originalElement: jobContainer,
       companyCard: companyCard,
-      queueIndex: this.jobQueue.length, // For debugging
+      queueIndex: this.jobQueue.length,
       extractedAt: Date.now(),
     };
   }
 
   async processNextJobFromQueue() {
     try {
-      // Check if we need to load more jobs (when only 2-3 jobs left)
       if (
         this.jobQueue.length - this.currentJobIndex <= 3 &&
         !this.isLoadingMore
@@ -422,21 +392,18 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         await this.loadMoreJobsIntoQueue();
       }
 
-      // Check if we've reached the application limit
       if (this.searchData.current >= this.searchData.limit) {
         this.log("🏁 Reached job application limit");
         this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
         return;
       }
 
-      // Check if queue is empty
       if (this.currentJobIndex >= this.jobQueue.length) {
         this.log("📭 Job queue exhausted");
         this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
         return;
       }
 
-      // Get next job from queue
       const nextJob = this.jobQueue[this.currentJobIndex];
       this.currentJobIndex++;
       this.log(
@@ -444,11 +411,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       );
 
       await this.delay(3000);
-      // Send job to background for processing in new tab
+
       const success = await this.processJobLink(nextJob);
 
       if (!success) {
-        // If processing failed, mark as failed and try next
         this.searchData.submittedLinks.push({
           url: nextJob.url,
           status: "FAILED",
@@ -457,12 +423,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         });
 
         this.log(`❌ Failed to process job, moving to next in queue`);
-
-        // Move to next job immediately
         setTimeout(() => this.processNextJobFromQueue(), 1000);
       }
-
-      // If success, the background script will send SEARCH_NEXT when done
     } catch (error) {
       this.log("❌ Error in processNextJobFromQueue:", error);
       this.reportError(error, { action: "processNextJobFromQueue" });
@@ -481,27 +443,21 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       this.log("🔄 Loading more jobs into queue...");
 
       const initialJobCount = this.jobQueue.length;
-
-      // Use existing scroll/pagination logic to load more content
       const loadedMore = await this.loadMoreJobs();
 
       if (loadedMore) {
-        // Wait for new content to load
         await this.delay(3000);
 
-        // Extract jobs from new company cards
         const newCompanyCards = document.querySelectorAll(
           ".styles_component__uTjje"
         );
 
-        // Only process cards we haven't seen before
         const unseenCards = Array.from(newCompanyCards).slice(initialJobCount);
 
         for (const companyCard of unseenCards) {
           try {
             const jobs = this.extractJobsFromCompanyCard(companyCard);
 
-            // Filter out already processed jobs
             const newJobs = jobs.filter((job) => {
               const normalizedUrl = this.normalizeUrl(job.url);
               return !this.searchData.submittedLinks.some(
@@ -513,8 +469,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
             if (newJobs.length > 0) {
               this.log(
-                `➕ Added ${newJobs.length} new jobs from ${
-                  newJobs[0]?.company || "company"
+                `➕ Added ${newJobs.length} new jobs from ${newJobs[0]?.company || "company"
                 }`
               );
             }
@@ -541,43 +496,88 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // WELLFOUND-SPECIFIC MESSAGE HANDLING
-  // ========================================
-
   handlePlatformSpecificMessage(type, data) {
-    switch (type) {
-      case "SEARCH_TASK_DATA":
-        this.handleSearchTaskData(data);
-        break;
+    if (!type) {
+      this.log("⚠️ Received message without type, ignoring");
+      return;
+    }
 
-      case "APPLICATION_TASK_DATA":
-        this.handleApplicationTaskData(data);
-        break;
+    try {
+      switch (type) {
+        case "SEARCH_TASK_DATA":
+          this.handleSearchTaskData(data);
+          break;
 
-      case "APPLICATION_STARTING":
-        this.handleApplicationStarting(data);
-        break;
+        case "APPLICATION_TASK_DATA":
+          this.handleApplicationTaskData(data);
+          break;
 
-      case "APPLICATION_STATUS":
-        this.handleApplicationStatus(data);
-        break;
+        case "APPLICATION_STARTING":
+          this.handleApplicationStarting(data);
+          break;
 
-      case "SUCCESS":
-        // Handle legacy SUCCESS messages
-        this.handleSuccessMessage(data);
-        break;
+        case "APPLICATION_STATUS":
+          this.handleApplicationStatus(data);
+          break;
 
-      case "APPLICATION_STATUS_RESPONSE":
-        this.handleApplicationStatusResponse(data);
-        break;
+        case "SUCCESS":
+          this.handleSuccessMessage(data);
+          break;
 
-      case "JOB_TAB_STATUS":
-        this.handleJobTabStatus(data);
-        break;
+        case "APPLICATION_STATUS_RESPONSE":
+          this.handleApplicationStatusResponse(data);
+          break;
 
-      default:
-        super.handlePlatformSpecificMessage(type, data);
+        case "JOB_TAB_STATUS":
+          this.handleJobTabStatus(data);
+          break;
+
+        default:
+          if (super.handlePlatformSpecificMessage) {
+            super.handlePlatformSpecificMessage(type, data);
+          } else {
+            this.log(`❓ Unhandled message type: ${type}`);
+          }
+      }
+    } catch (error) {
+      this.log(`❌ Error handling platform message ${type}:`, error);
+    }
+  }
+
+  handleApplicationStatusResponse(data) {
+    try {
+      this.log("📊 Received application status response:", data);
+
+      if (!data) {
+        this.log("⚠️ No data in application status response");
+        return;
+      }
+
+      if (data.status) {
+        this.applicationState = {
+          ...this.applicationState,
+          ...data.status
+        };
+      }
+    } catch (error) {
+      this.log("❌ Error handling application status response:", error);
+    }
+  }
+
+  handleJobTabStatus(data) {
+    try {
+      this.log("📊 Received job tab status:", data);
+
+      if (!data) {
+        this.log("⚠️ No data in job tab status");
+        return;
+      }
+
+      if (data.tabId && data.status) {
+        this.log(`Tab ${data.tabId} status: ${data.status}`);
+      }
+    } catch (error) {
+      this.log("❌ Error handling job tab status:", error);
     }
   }
 
@@ -594,7 +594,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         limit: data.limit || 10,
         current: data.current || 0,
         domain: data.domain || this.getPlatformDomains(),
-        submittedLinks: data.submittedLinks
+        submittedLinks: Array.isArray(data.submittedLinks)
           ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
           : [],
         searchLinkPattern: data.searchLinkPattern
@@ -602,7 +602,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
           : this.getSearchLinkPattern(),
       };
 
-      // Include user profile if available
       if (data.profile && !this.userProfile) {
         this.userProfile = data.profile;
         this.log("👤 User profile loaded from search task data");
@@ -610,10 +609,17 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       this.log("✅ Wellfound search data initialized:", this.searchData);
 
-      // ✅ NEW: Start building job queue and processing
       setTimeout(() => this.startQueueBasedSearch(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
+
+      this.searchData = {
+        limit: 10,
+        current: 0,
+        domain: this.getPlatformDomains(),
+        submittedLinks: [],
+        searchLinkPattern: this.getSearchLinkPattern(),
+      };
     }
   }
 
@@ -621,7 +627,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     try {
       this.log("🚀 Starting queue-based job search");
 
-      // Build initial job queue
       const queueBuilt = await this.buildJobQueue();
 
       if (!queueBuilt || this.jobQueue.length === 0) {
@@ -630,7 +635,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         return;
       }
 
-      // Start processing jobs from queue
       await this.processNextJobFromQueue();
     } catch (error) {
       this.log("❌ Error starting queue-based search:", error);
@@ -638,7 +642,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   handleSuccessMessage(data) {
-    // Legacy handler for backward compatibility
     this.log("🔄 Handling legacy SUCCESS message with data:", data);
 
     if (data && Object.keys(data).length === 0) {
@@ -649,10 +652,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
 
     if (data && data.submittedLinks !== undefined) {
-      // This is search task data
       this.handleSearchTaskData(data);
     } else if (data && data.profile !== undefined && !this.userProfile) {
-      // This is application task data
       this.handleApplicationTaskData(data);
     } else {
       this.log("⚠️ SUCCESS message with unrecognized data structure:", data);
@@ -663,17 +664,20 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     try {
       this.log("📊 Processing Wellfound application task data:", data);
 
-      if (data?.profile && !this.userProfile) {
+      if (!data) {
+        this.log("⚠️ No application task data provided");
+        return;
+      }
+
+      if (data.profile && !this.userProfile) {
         this.userProfile = data.profile;
         this.log("👤 User profile loaded from application task data");
       }
 
-      // Update form handler
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
 
-      // Start application process
       setTimeout(() => this.startApplicationProcess(), 1000);
     } catch (error) {
       this.log("❌ Error processing application task data:", error);
@@ -689,11 +693,11 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   handleApplicationStatus(data) {
     this.log("📊 Wellfound application status:", data);
 
-    if (data.inProgress && !this.applicationState.isApplicationInProgress) {
+    if (data && data.inProgress && !this.applicationState.isApplicationInProgress) {
       this.applicationState.isApplicationInProgress = true;
       this.applicationState.applicationStartTime = Date.now();
     } else if (
-      !data.inProgress &&
+      data && !data.inProgress &&
       this.applicationState.isApplicationInProgress
     ) {
       this.applicationState.isApplicationInProgress = false;
@@ -706,7 +710,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     try {
       this.log("🔄 Received search next signal:", data);
 
-      // Update local data with completed job info
       if (data && data.submittedLinks) {
         this.searchData.submittedLinks = data.submittedLinks;
         this.log(
@@ -724,9 +727,28 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // WELLFOUND-SPECIFIC PAGE TYPE DETECTION
-  // ========================================
+  handleDuplicateJob(data) {
+    try {
+      this.log("🔄 Handling duplicate job:", data);
+      if (data && data.url) {
+        this.log(`Skipping duplicate job: ${data.url}`);
+      }
+      setTimeout(() => this.processNextJobFromQueue(), 1000);
+    } catch (error) {
+      this.log("❌ Error handling duplicate job:", error);
+    }
+  }
+
+  handleErrorMessage(data) {
+    try {
+      this.log("❌ Received error message:", data);
+      if (data && data.error) {
+        this.log(`Error details: ${data.error}`);
+      }
+    } catch (error) {
+      this.log("❌ Error handling error message:", error);
+    }
+  }
 
   async detectPageTypeAndStart() {
     const url = window.location.href;
@@ -734,11 +756,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
     if (url.includes("wellfound.com/jobs") && !this.isValidJobPage(url)) {
       this.log("📊 Wellfound jobs search page detected");
-
       await this.startSearchProcess();
     } else if (this.isValidJobPage(url)) {
       this.log("📋 Wellfound job page detected");
-
       await this.startApplicationProcess();
     } else {
       this.log("❓ Unknown page type, waiting for navigation");
@@ -746,13 +766,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // WELLFOUND-SPECIFIC SEARCH LOGIC
-  // ========================================
-
-  /**
-   * Check for captcha/verification blocks and pause automation until resolved
-   */
   async checkCaptchaStatus() {
     try {
       this.log("🔍 Checking for captcha/verification blocks");
@@ -774,8 +787,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (captchaFound) {
         this.log("🚫 Captcha/verification detected, pausing automation");
-
-        // Pause automation and wait for user to solve captcha
         await this.waitForCaptchaResolution();
       } else {
         this.log("✅ No captcha detected, continuing");
@@ -785,12 +796,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Wait for captcha to be resolved by user
-   */
   async waitForCaptchaResolution() {
-    const maxWaitTime = 10 * 60 * 1000; // 10 minutes max wait
-    const checkInterval = 10000; // Check every 10 seconds
+    const maxWaitTime = 10 * 60 * 1000;
+    const checkInterval = 10000;
     let waitTime = 0;
 
     while (waitTime < maxWaitTime) {
@@ -814,7 +822,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (!captchaStillPresent) {
         this.log("✅ Captcha resolved, continuing automation");
-
         return;
       }
 
@@ -828,9 +835,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     );
   }
 
-  /**
-   * Check if user is logged in by looking for login/signup buttons
-   */
   async checkLoginStatus() {
     try {
       this.log("🔍 Checking user login status");
@@ -844,8 +848,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (loginButton || signupButton) {
         this.log("🚫 User not logged in, pausing automation");
-
-        // Wait for user to log in
         await this.waitForUserLogin();
       } else {
         this.log("✅ User is logged in, continuing");
@@ -855,12 +857,9 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Wait for user to log in
-   */
   async waitForUserLogin() {
-    const maxWaitTime = 15 * 60 * 1000; // 15 minutes max wait
-    const checkInterval = 10000; // Check every 10 seconds
+    const maxWaitTime = 15 * 60 * 1000;
+    const checkInterval = 10000;
     let waitTime = 0;
 
     while (waitTime < maxWaitTime) {
@@ -876,7 +875,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
       if (!loginButton && !signupButton) {
         this.log("✅ User logged in, continuing automation");
-
         return;
       }
 
@@ -890,57 +888,57 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async startSearchProcess() {
     try {
-      // Prevent duplicate search process starts
       if (this.searchProcessStarted) {
         this.log("⚠️ Search process already started, ignoring duplicate");
         return;
       }
 
-      this.statusOverlay.addMessage(
-        "Checking if you're signed in to Wellfound in this browser"
-      );
+      if (this.statusOverlay && this.statusOverlay.addMessage) {
+        this.statusOverlay.addMessage(
+          "Checking if you're signed in to Wellfound in this browser"
+        );
+      }
 
       await this.delay(2000);
-      // Check if user is logged in
       await this.checkLoginStatus();
 
-      this.statusOverlay.addMessage(
-        "Login confirmed! Opening the Wellfound job search filter."
-      );
+      if (this.statusOverlay && this.statusOverlay.addMessage) {
+        this.statusOverlay.addMessage(
+          "Login confirmed! Opening the Wellfound job search filter."
+        );
+      }
 
       await this.delay(2000);
-      // Check for captcha/verification blocks
       await this.checkCaptchaStatus();
 
       this.searchProcessStarted = true;
 
-      // Get user preferences
       const preferences =
-        this.sessionContext?.preferences || this.config.preferences || {};
+        this.sessionContext?.preferences || this.config?.preferences || {};
 
-      // Add job titles from user preferences
       const jobTitles = preferences.positions || ["Software Engineer"];
       const locations = preferences.location || ["United States"];
-      this.statusOverlay
-        .addFormattedMessage(`Looking for jobs matching your preferences:
+
+      if (this.statusOverlay && this.statusOverlay.addFormattedMessage) {
+        this.statusOverlay.addFormattedMessage(`Looking for jobs matching your preferences:
         
         Job titles: ${jobTitles.join(", ")}
         Locations: ${locations.join(", ")}`);
-      //wait
+      }
+
       await this.delay(2000);
       await this.filters.addJobTitles(jobTitles);
-
-      // Add locations from user preferences
       await this.filters.addLocations(locations);
 
-      this.statusOverlay.addMessage(
-        "I have applied your job filters... I will now start applying to jobs."
-      );
+      if (this.statusOverlay && this.statusOverlay.addMessage) {
+        this.statusOverlay.addMessage(
+          "I have applied your job filters... I will now start applying to jobs."
+        );
+      }
 
-      // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
-      this.searchProcessStarted = false; // Reset on error
+      this.searchProcessStarted = false;
       this.reportError(error, { phase: "search" });
     }
   }
@@ -954,21 +952,19 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Send job to background for processing in new tab
-   */
   async processJobLink(jobInfo) {
     try {
-      this.statusOverlay.addFormattedMessage(`I'm processing the job: 
+      if (this.statusOverlay && this.statusOverlay.addFormattedMessage) {
+        this.statusOverlay.addFormattedMessage(`I'm processing the job: 
         Title: ${jobInfo.title} 
         Location: ${jobInfo.location}
         Compensation: ${jobInfo.compensation}
         URL: ${jobInfo.url}
         `);
+      }
 
       this.log(`🎯 Processing job: ${jobInfo.title} - ${jobInfo.url}`);
 
-      // Send to background script to open in new tab
       const success = this.safeSendPortMessage({
         type: "START_APPLICATION",
         data: {
@@ -986,17 +982,12 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       return true;
     } catch (error) {
       this.log(`❌ Error processing job link: ${error.message}`);
-
       return false;
     }
   }
 
-  /**
-   * Wait for page elements to load
-   */
   async waitForPageLoad() {
     try {
-      // Wait for initial page load
       if (document.readyState !== "complete") {
         await new Promise((resolve) => {
           if (document.readyState === "complete") {
@@ -1007,18 +998,13 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         });
       }
 
-      // Wait for company cards to appear
       await this.waitForElementWithTimeout(".styles_component__uTjje", 15000);
-
       this.log("✅ Page load completed");
     } catch (error) {
       this.log("⚠️ Page load timeout, continuing anyway");
     }
   }
 
-  /**
-   * Wait for element with timeout (utility method)
-   */
   async waitForElementWithTimeout(selector, timeout = 10000) {
     return new Promise((resolve, reject) => {
       const element = document.querySelector(selector);
@@ -1047,14 +1033,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     });
   }
 
-  // ========================================
-  // WELLFOUND-SPECIFIC APPLICATION LOGIC
-  // ========================================
-
   async startApplicationProcess() {
     try {
       this.log("📝 Starting Wellfound application process");
-      // Validate user profile
+
       if (!this.userProfile) {
         this.log("⚠️ No user profile available, attempting to fetch...");
         await this.fetchApplicationTaskData();
@@ -1066,10 +1048,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         this.log("✅ User profile available for Wellfound");
       }
 
-      // Wait for page to fully load
       await this.delay(3000);
-
-      // Start application
       await this.apply();
     } catch (error) {
       this.reportError(error, { phase: "application" });
@@ -1096,34 +1075,35 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
 
   async apply() {
     try {
-      this.statusOverlay.automationState = "searching";
+      if (this.statusOverlay) {
+        this.statusOverlay.automationState = "searching";
+      }
 
-      // Show what we're about to do
-      this.statusOverlay.addFormattedMessage(
-        "I'm starting the application process"
-      );
-      // Extract job ID from URL
+      if (this.statusOverlay && this.statusOverlay.addFormattedMessage) {
+        this.statusOverlay.addFormattedMessage(
+          "I'm starting the application process"
+        );
+      }
+
       const jobId = this.extractJobIdFromUrl(window.location.href);
-
-      // Wait for page to fully load
       await this.delay(3000);
 
-      // Find and click the apply button
       const applyButton = await this.findApplyButton();
       if (!applyButton) {
         throw new Error("Cannot find Wellfound apply button");
       }
 
       await this.clickApplyButton(applyButton);
-
-      // Wait for application modal/form to appear
       await this.delay(2000);
 
-      this.statusOverlay.addFormattedMessage(
-        "I'm collecting the application fields and questions to answer them."
-      );
+      if (this.statusOverlay && this.statusOverlay.addFormattedMessage) {
+        this.statusOverlay.addFormattedMessage(
+          "I'm collecting the application fields and questions to answer them."
+        );
+      }
+
       await this.delay(2000);
-      // Process the application form using the form handler
+
       const result = await this.formHandler.processApplicationForm();
 
       if (result.success) {
@@ -1138,12 +1118,8 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Find the Wellfound apply button
-   */
   async findApplyButton() {
     try {
-      // Wait for the apply button to appear
       const applyButton = await this.waitForElementWithTimeout(
         'button.styles_applyButton__7gnpI, button[data-test="Button"]:contains("Apply")',
         10000
@@ -1153,7 +1129,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         return applyButton;
       }
 
-      // Fallback: look for any button with "Apply" text
       const allButtons = document.querySelectorAll("button");
       for (const button of allButtons) {
         if (
@@ -1171,20 +1146,15 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Click the apply button with multiple strategies
-   */
   async clickApplyButton(button) {
     try {
       this.scrollToElement(button);
       await this.delay(500);
 
-      // Check if button is clickable
       if (button.disabled || button.classList.contains("disabled")) {
         throw new Error("Apply button is disabled");
       }
 
-      // Try multiple click strategies
       const clickStrategies = [
         () => button.click(),
         () =>
@@ -1203,7 +1173,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
           strategy();
           await this.delay(1000);
 
-          // Check if modal appeared
           const modal = document.querySelector(
             'div[data-test="JobApplication-Modal"]'
           );
@@ -1224,7 +1193,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
   }
 
   async handleSuccessfulApplication(jobId) {
-    // Get job details from page
     const jobTitle =
       this.extractJobTitle() ||
       document.title.split(" - ")[0] ||
@@ -1232,7 +1200,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     const companyName = this.extractCompanyName() || "Company on Wellfound";
     const location = this.extractJobLocation() || "Not specified";
 
-    // Send completion message
     this.safeSendPortMessage({
       type: "APPLICATION_SUCCESS",
       data: {
@@ -1248,20 +1215,12 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
       },
     });
 
-    // Reset application state
     this.applicationState.isApplicationInProgress = false;
     this.applicationState.applicationStartTime = null;
 
     this.log("Wellfound application completed successfully");
   }
 
-  // ========================================
-  // JOB DATA EXTRACTION METHODS
-  // ========================================
-
-  /**
-   * Extract job description from Wellfound job page
-   */
   extractJobDescription() {
     const descriptionSelectors = [
       ".styles_description__xjvTf",
@@ -1274,7 +1233,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     let description = this.extractTextFromSelectors(descriptionSelectors);
 
     if (!description) {
-      // Fallback to main content
       const mainContent = document.querySelector(
         "main, .content, [role='main']"
       );
@@ -1289,9 +1247,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return description || "No description available";
   }
 
-  /**
-   * Extract job title from page
-   */
   extractJobTitle() {
     return this.extractTextFromSelectors([
       "h1.inline.text-xl.font-semibold.text-black",
@@ -1301,9 +1256,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     ]);
   }
 
-  /**
-   * Extract company name from page
-   */
   extractCompanyName() {
     return this.extractTextFromSelectors([
       'a[rel="noopener noreferrer"] span.text-sm.font-semibold.text-black',
@@ -1312,9 +1264,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     ]);
   }
 
-  /**
-   * Extract job location from page
-   */
   extractJobLocation() {
     return this.extractTextFromSelectors([
       ".styles_location__O9Z62",
@@ -1323,9 +1272,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     ]);
   }
 
-  /**
-   * Extract salary information
-   */
   extractSalary() {
     return this.extractTextFromSelectors([
       ".styles_compensation__3JnvU",
@@ -1334,9 +1280,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     ]);
   }
 
-  /**
-   * Utility method to extract text from multiple selectors
-   */
   extractTextFromSelectors(selectors) {
     for (const selector of selectors) {
       const element = document.querySelector(selector);
@@ -1347,9 +1290,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return "";
   }
 
-  /**
-   * Extract job ID from Wellfound URL
-   */
   extractJobIdFromUrl(url) {
     try {
       const match = url.match(/\/jobs\/(\d+)/);
@@ -1359,18 +1299,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // PAGINATION AND LOADING UTILITIES
-  // ========================================
-
-  /**
-   * Try to load more jobs by scrolling or pagination
-   */
   async loadMoreJobs() {
     try {
       this.log("🔄 Attempting to load more jobs");
 
-      // Method 1: Scroll to bottom to trigger infinite scroll
       const initialJobCount = document.querySelectorAll(
         ".styles_component__uTjje"
       ).length;
@@ -1380,7 +1312,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         behavior: "smooth",
       });
 
-      // Wait for potential new jobs to load
       await this.delay(3000);
 
       const newJobCount = document.querySelectorAll(
@@ -1394,7 +1325,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         return true;
       }
 
-      // Method 2: Look for "Load More" or "Show More" buttons
       const loadMoreSelectors = [
         'button[data-test*="load-more"]',
         'button[data-test*="show-more"]',
@@ -1426,7 +1356,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Method 3: Look for pagination
       const nextPageSelectors = [
         'a[aria-label="Next"]',
         'a[data-test*="next"]',
@@ -1444,7 +1373,7 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         ) {
           this.log("🔘 Found next page button, clicking");
           await this.clickElementReliably(nextButton);
-          await this.delay(4000); // Wait longer for page navigation
+          await this.delay(4000);
 
           const pageJobCount = document.querySelectorAll(
             ".styles_component__uTjje"
@@ -1464,9 +1393,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Check if element is visible
-   */
   isElementVisible(element) {
     if (!element) return false;
 
@@ -1487,9 +1413,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Enhanced click element method with multiple strategies
-   */
   async clickElementReliably(element) {
     const strategies = [
       () => element.click(),
@@ -1526,18 +1449,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     throw new Error("All click strategies failed");
   }
 
-  // ========================================
-  // UTILITY METHODS
-  // ========================================
-
-  /**
-   * Normalize URL for comparison
-   */
   normalizeUrl(url) {
     try {
       if (!url) return "";
 
-      // Remove protocol and trailing slashes for comparison
       return url
         .toLowerCase()
         .replace(/^https?:\/\//, "")
@@ -1548,23 +1463,14 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Delay utility method
-   */
   async delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /**
-   * Wait utility method alias
-   */
   async wait(ms) {
     return this.delay(ms);
   }
 
-  /**
-   * Scroll element into view
-   */
   scrollToElement(element) {
     if (!element) return;
 
@@ -1575,7 +1481,6 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
         inline: "nearest",
       });
     } catch (error) {
-      // Fallback for older browsers
       element.scrollIntoView();
     }
   }
@@ -1604,13 +1509,10 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     return String(e);
   }
 
-  // Override URL normalization for Wellfound-specific needs
   platformSpecificUrlNormalization(url) {
-    // Remove any query parameters that aren't essential
     try {
       const urlObj = new URL(url);
-      // Keep only essential parameters
-      const essentialParams = ["utm_source"]; // Add any params you want to keep
+      const essentialParams = ["utm_source"];
       const newSearchParams = new URLSearchParams();
 
       for (const param of essentialParams) {
@@ -1626,15 +1528,47 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // CLEANUP - Inherited from base class with Wellfound-specific additions
-  // ========================================
+  safeSendPortMessage(message) {
+    try {
+      if (this.port && this.port.postMessage) {
+        this.port.postMessage(message);
+        return true;
+      } else {
+        this.log("❌ Port not available for message:", message);
+        return false;
+      }
+    } catch (error) {
+      this.log("❌ Error sending port message:", error);
+      return false;
+    }
+  }
+
+  reportError(error, context = {}) {
+    try {
+      const errorData = {
+        error: this.errorToString(error),
+        context,
+        timestamp: Date.now(),
+        url: window.location.href,
+        platform: this.platform,
+      };
+
+      this.log("❌ Reporting error:", errorData);
+
+      this.safeSendPortMessage({
+        type: "ERROR",
+        data: errorData,
+      });
+    } catch (reportingError) {
+      this.log("❌ Error while reporting error:", reportingError);
+    }
+  }
 
   cleanup() {
-    // Base class handles most cleanup
-    super.cleanup();
+    if (super.cleanup) {
+      super.cleanup();
+    }
 
-    // Wellfound-specific cleanup
     this.jobQueue = [];
     this.currentJobIndex = 0;
     this.isLoadingMore = false;
@@ -1642,5 +1576,16 @@ export default class WellfoundPlatform extends BasePlatformAutomation {
     this.searchProcessStarted = false;
 
     this.log("🧹 Wellfound-specific cleanup completed");
+  }
+
+  log(message, data = null) {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [WellfoundPlatform] ${message}`;
+
+    if (data) {
+      console.log(logMessage, data);
+    } else {
+      console.log(logMessage);
+    }
   }
 }

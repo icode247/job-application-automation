@@ -763,6 +763,7 @@ export default class BreezyPlatform extends BasePlatformAutomation {
   }
 
   async waitForValidPage(timeout = 30000) {
+    console.log("WAS HERE>>>>>>>>>>>>>>>")
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
@@ -774,6 +775,16 @@ export default class BreezyPlatform extends BasePlatformAutomation {
       }
 
       await this.delay(1000);
+      this.safeSendPortMessage({
+        type: "SEND_CV_TASK_SKIP",
+        data: {
+          reason: "Invalid page - no search, job page, or application elements found",
+          url: window.location.href
+        }
+      });
+
+      this.applicationState.isApplicationInProgress = false;
+      this.applicationState.applicationStartTime = null;
     }
 
     throw new Error("Timeout waiting for valid Breezy page");

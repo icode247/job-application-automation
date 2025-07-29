@@ -1,4 +1,3 @@
-// background/platforms/wellfound.js
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
 
 export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
@@ -18,9 +17,6 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     this.log("🚀 WellfoundAutomationHandler initialized");
   }
 
-  /**
-   * Handle platform-specific messages from content scripts
-   */
   async handlePlatformSpecificMessage(type, data, port) {
     const sessionId = this.getSessionIdFromPort(port);
     const windowId = port.sender?.tab?.windowId;
@@ -30,56 +26,64 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
       `📨 Handling Wellfound message: ${type} for session ${sessionId}, tab ${tabId}`
     );
 
-    switch (type) {
-      case "GET_SEARCH_TASK":
-        await this.handleGetSearchTask(port, data);
-        break;
+    try {
+      switch (type) {
+        case "GET_SEARCH_TASK":
+          await this.handleGetSearchTask(port, data);
+          break;
 
-      case "GET_SEND_CV_TASK":
-      case "GET_APPLICATION_TASK":
-        await this.handleGetSendCvTask(port, data);
-        break;
+        case "GET_SEND_CV_TASK":
+        case "GET_APPLICATION_TASK":
+          await this.handleGetSendCvTask(port, data);
+          break;
 
-      case "START_APPLICATION":
-        await this.handleStartApplication(
-          port,
-          data,
-          sessionId,
-          windowId,
-          tabId
-        );
-        break;
+        case "START_APPLICATION":
+          await this.handleStartApplication(
+            port,
+            data,
+            sessionId,
+            windowId,
+            tabId
+          );
+          break;
 
-      case "APPLICATION_SUCCESS":
-        await this.handleTaskCompletion(port, data, "SUCCESS");
-        break;
+        case "APPLICATION_SUCCESS":
+          await this.handleTaskCompletion(port, data, "SUCCESS");
+          break;
 
-      case "APPLICATION_ERROR":
-        await this.handleTaskCompletion(port, data, "ERROR");
-        break;
+        case "APPLICATION_ERROR":
+          await this.handleTaskCompletion(port, data, "ERROR");
+          break;
 
-      case "APPLICATION_SKIPPED":
-        await this.handleTaskCompletion(port, data, "SKIPPED");
-        break;
+        case "APPLICATION_SKIPPED":
+          await this.handleTaskCompletion(port, data, "SKIPPED");
+          break;
 
-      case "CHECK_APPLICATION_STATUS":
-        await this.handleCheckApplicationStatus(port, sessionId);
-        break;
+        case "CHECK_APPLICATION_STATUS":
+          await this.handleCheckApplicationStatus(port, sessionId);
+          break;
 
-      case "SEARCH_NEXT_READY":
-        await this.handleSearchNextReady(port, sessionId);
-        break;
+        case "SEARCH_NEXT_READY":
+          await this.handleSearchNextReady(port, sessionId);
+          break;
 
-      case "SEARCH_COMPLETED":
-        await this.handleSearchCompleted(port, sessionId, windowId);
-        break;
+        case "SEARCH_COMPLETED":
+          await this.handleSearchCompleted(port, sessionId, windowId);
+          break;
 
-      default:
-        this.log(`❓ Unknown Wellfound message type: ${type}`);
-        this.safePortSend(port, {
-          type: "ERROR",
-          message: `Unknown message type: ${type}`,
-        });
+        default:
+          this.log(`❓ Unknown Wellfound message type: ${type}`);
+          this.safePortSend(port, {
+            type: "ERROR",
+            message: `Unknown message type: ${type}`,
+          });
+      }
+    } catch (error) {
+      this.log(`❌ Error handling message ${type}:`, error);
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: `Error handling ${type}: ${error.message}`,
+      });
     }
   }
 
@@ -94,11 +98,7 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     let sessionData = null;
     let automation = null;
 
-    // Find automation by window ID
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
         this.log(`✅ Found Wellfound automation session: ${sessionId}`);
@@ -109,93 +109,69 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     if (automation) {
       const platformState = automation.platformState;
 
-      // Add safety check for searchLinkPattern
       let searchLinkPatternString = "";
       try {
-        if (platformState.searchData.searchLinkPattern) {
-          searchLinkPatternString =
-            platformState.searchData.searchLinkPattern.toString();
+        if (platformState.searchData?.searchLinkPattern) {
+          searchLinkPatternString = platformState.searchData.searchLinkPattern.toString();
         } else {
-          this.log("⚠️ searchLinkPattern is null, using empty string");
-          searchLinkPatternString = "";
+          searchLinkPatternString = this.platformConfig.searchLinkPattern.toString();
         }
       } catch (error) {
-        this.log(
-          "❌ Error converting searchLinkPattern to string:",
-          error
-        );
-        searchLinkPatternString = "";
+        this.log("❌ Error converting searchLinkPattern to string:", error);
+        searchLinkPatternString = this.platformConfig.searchLinkPattern.toString();
       }
 
       sessionData = {
         tabId: tabId,
-        limit: platformState.searchData.limit,
-        current: platformState.searchData.current,
-        domain: platformState.searchData.domain,
+        limit: platformState.searchData?.limit || 10,
+        current: platformState.searchData?.current || 0,
+        domain: platformState.searchData?.domain || this.platformConfig.domains,
         submittedLinks: platformState.submittedLinks || [],
         searchLinkPattern: searchLinkPatternString,
+        profile: automation.userProfile || null,
       };
 
-      // ✅ FIX: Store the search tab ID properly in both places
-      platformState.searchTabId = tabId; // This is the /jobs tab that coordinates search
-      automation.searchTabId = tabId; // Also store on automation object for easy access
+      platformState.searchTabId = tabId;
+      automation.searchTabId = tabId;
 
       this.log(`📊 Wellfound session data prepared:`, sessionData);
-      this.log(`📌 Search tab ID stored: ${tabId}`); // Log for debugging
+      this.log(`📌 Search tab ID stored: ${tabId}`);
     } else {
       this.log(`⚠️ No Wellfound automation found for window ${windowId}`);
-      this.log(
-        `Active automations:`,
-        Array.from(this.messageHandler.activeAutomations.keys())
-      );
 
-      // Provide default data structure to prevent empty data
       sessionData = {
         tabId: tabId,
         limit: 10,
         current: 0,
-        domain: ["https://wellfound.com"],
+        domain: this.platformConfig.domains,
         submittedLinks: [],
-        searchLinkPattern: "",
+        searchLinkPattern: this.platformConfig.searchLinkPattern.toString(),
+        profile: null,
       };
     }
 
-    // Send response with proper data structure
     const sent = this.safePortSend(port, {
-      type: "SEARCH_TASK_DATA", // Use specific type instead of generic SUCCESS
+      type: "SEARCH_TASK_DATA",
       data: sessionData,
     });
 
     if (!sent) {
-      this.log(
-        `❌ Failed to send Wellfound search task data to port ${port.name}`
-      );
+      this.log(`❌ Failed to send Wellfound search task data to port ${port.name}`);
     } else {
-      this.log(
-        `✅ Wellfound search task data sent successfully to tab ${tabId}`
-      );
+      this.log(`✅ Wellfound search task data sent successfully to tab ${tabId}`);
     }
   }
 
-  /**
-   * Handle CV task request - Wellfound specific data structure
-   */
   async handleGetSendCvTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    this.log(
-      `🔍 GET_SEND_CV_TASK request from Wellfound tab ${tabId}, window ${windowId}`
-    );
+    this.log(`🔍 GET_SEND_CV_TASK request from Wellfound tab ${tabId}, window ${windowId}`);
 
     let sessionData = null;
     let automation = null;
 
-    // Find automation by window ID
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
         this.log(`✅ Found Wellfound automation session: ${sessionId}`);
@@ -204,29 +180,19 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
 
     if (automation) {
-      // Ensure we have user profile data
       let userProfile = automation.userProfile;
 
-      // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          this.log(
-            `📡 Fetching user profile for Wellfound user ${automation.userId}`
-          );
-          const { default: UserService } = await import(
-            "../../services/user-service.js"
-          );
+          this.log(`📡 Fetching user profile for Wellfound user ${automation.userId}`);
+          const { default: UserService } = await import("../../services/user-service.js");
           const userService = new UserService({ userId: automation.userId });
           userProfile = await userService.getUserDetails();
 
-          // Cache it in automation for future use
           automation.userProfile = userProfile;
           this.log(`✅ User profile fetched and cached for Wellfound`);
         } catch (error) {
-          this.log(
-            `❌ Failed to fetch user profile for Wellfound:`,
-            error
-          );
+          this.log(`❌ Failed to fetch user profile for Wellfound:`, error);
         }
       }
 
@@ -248,7 +214,6 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     } else {
       this.log(`⚠️ No Wellfound automation found for window ${windowId}`);
 
-      // Provide default data structure
       sessionData = {
         devMode: false,
         profile: null,
@@ -259,40 +224,30 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
       };
     }
 
-    // Send response with specific type
     const sent = this.safePortSend(port, {
-      type: "APPLICATION_TASK_DATA", // Use specific type instead of generic SUCCESS
+      type: "APPLICATION_TASK_DATA",
       data: sessionData,
     });
 
     if (!sent) {
-      this.log(
-        `❌ Failed to send Wellfound CV task data to port ${port.name}`
-      );
+      this.log(`❌ Failed to send Wellfound CV task data to port ${port.name}`);
     } else {
-      this.log(
-        `✅ Wellfound CV task data sent successfully to tab ${tabId}`
-      );
+      this.log(`✅ Wellfound CV task data sent successfully to tab ${tabId}`);
     }
   }
 
-  /**
-   * Handle application start request - Wellfound specific logic
-   */
   async handleStartApplication(port, data, sessionId, windowId, tabId) {
     try {
-      const { url, title, location, compensation } = data;
+      const { url, title, location, compensation } = data || {};
 
-      this.log(
-        `🎯 Starting Wellfound application for: ${title} (${url}) in tab ${tabId}`
-      );
+      if (!url) {
+        throw new Error("No URL provided for application");
+      }
 
-      // Find the automation instance
+      this.log(`🎯 Starting Wellfound application for: ${title} (${url}) in tab ${tabId}`);
+
       let automation = null;
-      for (const [
-        sid,
-        auto,
-      ] of this.messageHandler.activeAutomations.entries()) {
+      for (const [sid, auto] of this.messageHandler.activeAutomations.entries()) {
         if (auto.windowId === windowId) {
           automation = auto;
           break;
@@ -303,11 +258,19 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         throw new Error(`No automation found for window ${windowId}`);
       }
 
-      // Check if already processing
+      if (!automation.platformState) {
+        automation.platformState = {
+          submittedLinks: [],
+          isProcessingJob: false,
+          currentJobUrl: null,
+          currentJobTabId: null,
+          applicationStartTime: null,
+          searchData: { current: 0, limit: 10 },
+        };
+      }
+
       if (automation.platformState.isProcessingJob) {
-        this.log(
-          `⚠️ Wellfound automation already processing job, ignoring duplicate request`
-        );
+        this.log(`⚠️ Wellfound automation already processing job, ignoring duplicate request`);
         this.safePortSend(port, {
           type: "DUPLICATE",
           message: "Already processing a job application",
@@ -315,12 +278,10 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         return;
       }
 
-      // Validate URL format
       if (!this.isValidWellfoundJobUrl(url)) {
         throw new Error(`Invalid Wellfound job URL: ${url}`);
       }
 
-      // Check if already applied
       const normalizedUrl = this.messageHandler.normalizeUrl(url);
       const alreadyApplied = automation.platformState.submittedLinks.some(
         (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
@@ -335,20 +296,17 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         return;
       }
 
-      // Set processing state
       automation.platformState.isProcessingJob = true;
       automation.platformState.currentJobUrl = url;
       automation.platformState.applicationStartTime = Date.now();
 
-      // Set application timeout
       const timeoutId = setTimeout(() => {
         this.log(`⏰ Wellfound application timeout for ${url}`);
         this.handleApplicationTimeout(automation, url, tabId);
-      }, 300000); // 5 minute timeout
+      }, 300000);
 
       this.applicationTimeouts.set(url, timeoutId);
 
-      // Create new tab for application
       const jobTab = await chrome.tabs.create({
         url: url,
         windowId: windowId,
@@ -357,36 +315,32 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
 
       automation.platformState.currentJobTabId = jobTab.id;
 
-      this.log(
-        `✅ Created Wellfound job tab ${jobTab.id} for ${url} in window ${windowId}`
-      );
+      this.log(`✅ Created Wellfound job tab ${jobTab.id} for ${url} in window ${windowId}`);
 
-      // Send confirmation
       this.safePortSend(port, {
-        type: "SUCCESS",
-        message: `Started application for ${title}`,
-        data: { url, tabId: jobTab.id },
+        type: "APPLICATION_STARTING",
+        data: { url, tabId: jobTab.id, title, location, compensation },
       });
 
-      // Notify session manager
-      await this.messageHandler.sessionManager.addNotification(sessionId, {
-        type: "application_started",
-        jobUrl: url,
-        jobTitle: title,
-        tabId: jobTab.id,
-      });
+      if (this.messageHandler.sessionManager) {
+        await this.messageHandler.sessionManager.addNotification(sessionId, {
+          type: "application_started",
+          jobUrl: url,
+          jobTitle: title,
+          tabId: jobTab.id,
+        });
+      }
     } catch (error) {
       this.log(`❌ Error starting Wellfound application:`, error);
 
       this.safePortSend(port, {
         type: "ERROR",
         message: `Failed to start application: ${error.message}`,
-        data: { url: data.url },
+        data: { url: data?.url },
       });
 
-      // Clean up on error
       const automation = this.findAutomationByWindow(windowId);
-      if (automation) {
+      if (automation && automation.platformState) {
         automation.platformState.isProcessingJob = false;
         automation.platformState.currentJobUrl = null;
         automation.platformState.applicationStartTime = null;
@@ -394,22 +348,15 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  /**
-   * Handle application timeout
-   */
   async handleApplicationTimeout(automation, url, tabId) {
     try {
-      this.log(
-        `⏰ Wellfound application timeout for ${url} in tab ${tabId}`
-      );
+      this.log(`⏰ Wellfound application timeout for ${url} in tab ${tabId}`);
 
-      // Clear timeout
       if (this.applicationTimeouts.has(url)) {
         clearTimeout(this.applicationTimeouts.get(url));
         this.applicationTimeouts.delete(url);
       }
 
-      // Close the tab
       if (tabId) {
         try {
           await chrome.tabs.remove(tabId);
@@ -418,13 +365,11 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         }
       }
 
-      // Reset automation state
       automation.platformState.isProcessingJob = false;
       automation.platformState.currentJobUrl = null;
       automation.platformState.currentJobTabId = null;
       automation.platformState.applicationStartTime = null;
 
-      // Mark as timeout in submitted links
       automation.platformState.submittedLinks.push({
         url,
         status: "TIMEOUT",
@@ -432,8 +377,7 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         timestamp: Date.now(),
       });
 
-      // Send search next to continue automation
-      await this.sendSearchNextMessage(automation.windowId, {
+      await this.sendSearchNextMessage(automation, {
         url,
         status: "TIMEOUT",
         message: "Application timed out",
@@ -443,9 +387,6 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  /**
-   * Handle check application status
-   */
   async handleCheckApplicationStatus(port, sessionId) {
     try {
       const automation = this.findAutomationBySession(sessionId);
@@ -458,10 +399,10 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
       }
 
       const status = {
-        isProcessingJob: automation.platformState.isProcessingJob,
-        currentJobUrl: automation.platformState.currentJobUrl,
-        applicationStartTime: automation.platformState.applicationStartTime,
-        currentJobTabId: automation.platformState.currentJobTabId,
+        isProcessingJob: automation.platformState?.isProcessingJob || false,
+        currentJobUrl: automation.platformState?.currentJobUrl || null,
+        applicationStartTime: automation.platformState?.applicationStartTime || null,
+        currentJobTabId: automation.platformState?.currentJobTabId || null,
       };
 
       this.safePortSend(port, {
@@ -477,43 +418,35 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  /**
-   * Handle search next ready notification
-   */
   async handleSearchNextReady(port, sessionId) {
     this.log(`📋 Wellfound search ready for session ${sessionId}`);
-    // This is just an acknowledgment, no action needed
     this.safePortSend(port, {
       type: "SUCCESS",
       message: "Search next ready acknowledged",
     });
   }
 
-  /**
-   * Handle search completion
-   */
   async handleSearchCompleted(port, sessionId, windowId) {
     try {
       this.log(`🏁 Wellfound search completed for session ${sessionId}`);
 
       const automation = this.findAutomationBySession(sessionId);
       if (automation) {
-        // Mark automation as completed
         automation.status = "completed";
         automation.endTime = Date.now();
 
-        // Update session
-        await this.messageHandler.sessionManager.updateSession(sessionId, {
-          status: "completed",
-          completedAt: Date.now(),
-        });
+        if (this.messageHandler.sessionManager) {
+          await this.messageHandler.sessionManager.updateSession(sessionId, {
+            status: "completed",
+            completedAt: Date.now(),
+          });
 
-        // Notify session manager
-        await this.messageHandler.sessionManager.addNotification(sessionId, {
-          type: "automation_completed",
-          completedJobs: automation.platformState.submittedLinks.length,
-          totalTime: Date.now() - automation.startTime,
-        });
+          await this.messageHandler.sessionManager.addNotification(sessionId, {
+            type: "automation_completed",
+            completedJobs: automation.platformState?.submittedLinks?.length || 0,
+            totalTime: Date.now() - automation.startTime,
+          });
+        }
       }
 
       this.safePortSend(port, {
@@ -529,19 +462,18 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  /**
-   * Override task completion handling for Wellfound-specific logic
-   */
   async handleTaskCompletion(port, data, status) {
     try {
-      // Clear any application timeout
-      if (data && data.url && this.applicationTimeouts.has(data.url)) {
+      this.log(`🏁 Handling Wellfound task completion: ${status}`, data);
+
+      const tabId = port.sender?.tab?.id;
+      const windowId = port.sender?.tab?.windowId;
+
+      if (data?.url && this.applicationTimeouts.has(data.url)) {
         clearTimeout(this.applicationTimeouts.get(data.url));
         this.applicationTimeouts.delete(data.url);
       }
 
-      // Close the application tab if it exists
-      const tabId = port.sender?.tab?.id;
       if (tabId) {
         try {
           await chrome.tabs.remove(tabId);
@@ -551,26 +483,121 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
         }
       }
 
-      // Call parent method for common completion logic
-      await super.handleTaskCompletion(port, data, status);
+      const automation = this.findAutomationByWindow(windowId);
+      if (!automation) {
+        this.log(`❌ No automation found for window ${windowId}`);
+        return;
+      }
+
+      if (!automation.platformState) {
+        automation.platformState = {
+          submittedLinks: [],
+          isProcessingJob: false,
+          currentJobUrl: null,
+          currentJobTabId: null,
+          applicationStartTime: null,
+          searchData: { current: 0, limit: 10 },
+        };
+      }
+
+      const jobUrl = automation.platformState.currentJobUrl || data?.jobUrl || data?.url;
+
+      if (jobUrl) {
+        const submissionRecord = {
+          url: jobUrl,
+          status: status,
+          message: data?.message || `Application ${status.toLowerCase()}`,
+          timestamp: Date.now(),
+          ...(data || {}),
+        };
+
+        automation.platformState.submittedLinks.push(submissionRecord);
+        this.log(`📊 Added submission record:`, submissionRecord);
+      }
+
+      automation.platformState.isProcessingJob = false;
+      automation.platformState.currentJobUrl = null;
+      automation.platformState.currentJobTabId = null;
+      automation.platformState.applicationStartTime = null;
+
+      await this.sendSearchNextMessage(automation, {
+        url: jobUrl,
+        status: status,
+        data: data,
+        message: data?.message || `Application ${status.toLowerCase()}`,
+      });
+
     } catch (error) {
       this.log(`❌ Error handling Wellfound task completion:`, error);
     }
   }
 
-  /**
-   * Validate Wellfound job URL
-   */
+  async sendSearchNextMessage(automation, completionData) {
+    try {
+      if (completionData.status === "SUCCESS") {
+        automation.platformState.searchData.current =
+          (automation.platformState.searchData.current || 0) + 1;
+      }
+
+      const searchTabId = automation.searchTabId || automation.platformState?.searchTabId;
+
+      if (!searchTabId) {
+        this.log(`❌ No search tab ID available for automation`);
+        return;
+      }
+
+      const messageData = {
+        url: completionData.url,
+        status: completionData.status,
+        data: completionData.data,
+        message: completionData.message,
+        submittedLinks: automation.platformState.submittedLinks || [],
+        current: automation.platformState.searchData.current || 0,
+      };
+
+      this.log(`📤 Sending SEARCH_NEXT to tab ${searchTabId}:`, messageData);
+
+      try {
+        await chrome.tabs.sendMessage(searchTabId, {
+          action: "platformMessage",
+          type: "SEARCH_NEXT",
+          data: messageData,
+        });
+        this.log(`✅ Successfully sent SEARCH_NEXT to search tab ${searchTabId}`);
+      } catch (messageError) {
+        this.log(`❌ Failed to send SEARCH_NEXT to tab ${searchTabId}:`, messageError);
+
+        try {
+          const tab = await chrome.tabs.get(searchTabId);
+          if (tab && tab.url && tab.url.includes('wellfound.com/jobs')) {
+            this.log(`🔄 Search tab exists, retrying message...`);
+            setTimeout(async () => {
+              try {
+                await chrome.tabs.sendMessage(searchTabId, {
+                  action: "platformMessage",
+                  type: "SEARCH_NEXT",
+                  data: messageData,
+                });
+                this.log(`✅ Retry successful for tab ${searchTabId}`);
+              } catch (retryError) {
+                this.log(`❌ Retry failed for tab ${searchTabId}:`, retryError);
+              }
+            }, 2000);
+          }
+        } catch (tabError) {
+          this.log(`❌ Search tab ${searchTabId} no longer exists:`, tabError);
+        }
+      }
+
+    } catch (error) {
+      this.log(`❌ Error sending search next message:`, error);
+    }
+  }
+
   isValidWellfoundJobUrl(url) {
     try {
       if (!url) return false;
-
-      // Check if it's a Wellfound domain
-      if (!url.includes("wellfound.com")) {
-        return false;
-      }
-
-      // Check if it matches job URL pattern
+      if (!url.includes("wellfound.com")) return false;
       return this.platformConfig.searchLinkPattern.test(url);
     } catch (error) {
       this.log("Error validating Wellfound URL:", error);
@@ -578,16 +605,10 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  /**
-   * Find automation by session ID
-   */
   findAutomationBySession(sessionId) {
     return this.messageHandler.activeAutomations.get(sessionId);
   }
 
-  /**
-   * Find automation by window ID
-   */
   findAutomationByWindow(windowId) {
     for (const automation of this.messageHandler.activeAutomations.values()) {
       if (automation.windowId === windowId) {
@@ -597,73 +618,63 @@ export default class WellfoundAutomationHandler extends BaseBackgroundHandler {
     return null;
   }
 
-  /**
-   * Override base class method to provide Wellfound-specific continuation logic
-   */
   async continueOrComplete(automation, windowId, status, data) {
-    if (status === "SUCCESS") {
-      automation.platformState.searchData.current++;
-    }
+    this.log(`🔄 Continue or complete called with status: ${status}`);
 
-    const oldUrl = automation.platformState.currentJobUrl;
-    const errorCount = this.logCounts.get(automation.sessionId) || 0;
-    const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
-
-    setTimeout(async () => {
-      const searchTabId =
-        automation.searchTabId || automation.platformState.searchTabId;
-
-      if (searchTabId) {
-        try {
-          await chrome.tabs.sendMessage(searchTabId, {
-            action: "platformMessage",
-            type: "SEARCH_NEXT",
-            data: {
-              url: oldUrl,
-              status: status,
-              data: data,
-              message:
-                typeof data === "string"
-                  ? data
-                  : status === "ERROR"
-                    ? "Application error"
-                    : undefined,
-              submittedLinks: automation.platformState.submittedLinks || [],
-              current: automation.platformState.searchData.current || 0,
-            },
-          });
-          this.log(
-            `✅ Sent SEARCH_NEXT with updated data to search tab ${searchTabId}`
-          );
-        } catch (error) {
-          this.log(
-            `❌ Failed to send SEARCH_NEXT to tab ${searchTabId}:`,
-            error
-          );
-        }
-      } else {
-        this.log("❌ No search tab ID available");
-      }
-    }, delay);
+    await this.sendSearchNextMessage(automation, {
+      url: automation.platformState?.currentJobUrl || data?.url,
+      status: status,
+      data: data,
+      message: typeof data === "string" ? data :
+        status === "ERROR" ? "Application error" :
+          `Application ${status.toLowerCase()}`,
+    });
   }
-  /**
-   * Enhanced cleanup for Wellfound-specific resources
-   */
+
   cleanup() {
     this.log("🧹 Starting WellfoundAutomationHandler cleanup");
 
-    // Clear all application timeouts
     for (const timeoutId of this.applicationTimeouts.values()) {
       clearTimeout(timeoutId);
     }
     this.applicationTimeouts.clear();
 
-    // Clear processed completions
     this.processedCompletions.clear();
 
-    // Call parent cleanup
-    super.cleanup();
+    if (super.cleanup) {
+      super.cleanup();
+    }
 
     this.log("✅ WellfoundAutomationHandler cleanup completed");
+  }
+
+  log(message, data = null) {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [WellfoundHandler] ${message}`;
+
+    if (data) {
+      console.log(logMessage, data);
+    } else {
+      console.log(logMessage);
+    }
+  }
+
+  safePortSend(port, message) {
+    try {
+      if (port && port.postMessage && !port.disconnected) {
+        port.postMessage(message);
+        return true;
+      } else {
+        this.log("❌ Port not available or disconnected for message:", message);
+        return false;
+      }
+    } catch (error) {
+      this.log("❌ Error sending port message:", error);
+      return false;
+    }
+  }
+
+  getSessionIdFromPort(port) {
+    return port.name || 'unknown-session';
   }
 }
