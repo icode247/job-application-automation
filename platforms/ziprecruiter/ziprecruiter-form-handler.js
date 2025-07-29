@@ -1,6 +1,4 @@
 // shared/ziprecruiter/form-handler.js
-import { AI_BASE_URL } from "../../services/constants.js";
-
 export default class ZipRecruiterFormHandler {
   constructor(config = {}) {
     this.logger = config.logger || console.log;
@@ -47,8 +45,8 @@ export default class ZipRecruiterFormHandler {
         this.logger(`Processing form step ${currentStep}`);
 
         const formContainer = document.querySelector(this.selectors.MODAL_CONTAINER) ||
-                             document.querySelector("form") ||
-                             document.body;
+          document.querySelector("form") ||
+          document.body;
 
         if (!formContainer) {
           throw new Error("No form container found");
@@ -56,10 +54,12 @@ export default class ZipRecruiterFormHandler {
 
         await this.fillFormStep(formContainer);
 
-        const actionButton = this.findActionButton();
-        if (!actionButton) {
+        // Use the improved continue button click method that prevents redirects
+        const continueSuccess = await this.clickContinueButtonWithoutRedirect(formContainer);
+
+        if (!continueSuccess) {
           if (!document.querySelector(this.selectors.MODAL_CONTAINER) ||
-              !this.isElementVisible(document.querySelector(this.selectors.MODAL_CONTAINER))) {
+            !this.isElementVisible(document.querySelector(this.selectors.MODAL_CONTAINER))) {
             this.logger("Modal closed, application completed");
             isComplete = true;
             return true;
@@ -68,20 +68,9 @@ export default class ZipRecruiterFormHandler {
           }
         }
 
-        const formElement = formContainer.closest("form");
-        if (formElement) {
-          formElement.addEventListener("submit", (e) => {
-            e.preventDefault();
-            this.logger("Form submission prevented - handling via JavaScript");
-          }, true);
-        }
-
-        this.logger(`Clicking ${actionButton.textContent.trim()} button`);
-        actionButton.click();
-        await this.sleep(this.timeouts.STANDARD);
-
+        // Check if modal is still open after button click
         if (!document.querySelector(this.selectors.MODAL_CONTAINER) ||
-            !this.isElementVisible(document.querySelector(this.selectors.MODAL_CONTAINER))) {
+          !this.isElementVisible(document.querySelector(this.selectors.MODAL_CONTAINER))) {
           this.logger("Modal closed after button click, application completed");
           isComplete = true;
           return true;
@@ -95,11 +84,92 @@ export default class ZipRecruiterFormHandler {
 
       await this.sleep(this.timeouts.STANDARD);
       return !document.querySelector(this.selectors.MODAL_CONTAINER) ||
-             !this.isElementVisible(document.querySelector(this.selectors.MODAL_CONTAINER));
+        !this.isElementVisible(document.querySelector(this.selectors.MODAL_CONTAINER));
     } catch (error) {
       this.logger(`Error filling form: ${error.message}`);
       return false;
     }
+  }
+
+  /**
+   * Improved continue button click method that prevents redirects
+   */
+  async clickContinueButtonWithoutRedirect(container) {
+    try {
+      // Find the action button (Continue/Submit)
+      const actionButton = this.findActionButton(container);
+
+      if (!actionButton) {
+        this.logger("No action button found");
+        return false;
+      }
+
+      // CRITICAL: Prevent form default submission
+      const formElement = container.closest("form");
+      if (formElement) {
+        // Add event listener to prevent default form submission
+        formElement.addEventListener("submit", (e) => {
+          e.preventDefault();
+          this.logger("Form submission prevented - handling via JavaScript");
+        }, true); // Use capture phase
+      }
+
+      this.logger(`Clicking ${actionButton.textContent.trim()} button`);
+
+      // Click the button
+      actionButton.click();
+
+      // Wait for processing
+      await this.sleep(this.timeouts.STANDARD);
+
+      return true;
+    } catch (error) {
+      this.logger(`Error clicking continue button: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Improved action button finder with better prioritization
+   */
+  findActionButton(container) {
+    // Look specifically for submit buttons in the container
+    if (!container) return null;
+
+    // Priority order: Continue -> Submit -> Apply buttons
+    const selectors = [
+      'button[type="submit"]',
+      'button[class*="continue"]',
+      'button[class*="submit"]'
+    ];
+
+    for (const selector of selectors) {
+      const buttons = container.querySelectorAll(selector);
+
+      for (const button of buttons) {
+        if (!this.isElementVisible(button)) continue;
+
+        // Skip if button is explicitly disabled
+        if (button.disabled || button.hasAttribute('aria-disabled')) continue;
+
+        return button;
+      }
+    }
+
+    // Fallback: Look for buttons by text content
+    const allButtons = container.querySelectorAll("button");
+    for (const button of allButtons) {
+      if (!this.isElementVisible(button)) continue;
+
+      const text = button.textContent.trim().toLowerCase();
+      if (text.includes('continue') || text.includes('submit') || text.includes('next')) {
+        if (!button.disabled && !button.hasAttribute('aria-disabled')) {
+          return button;
+        }
+      }
+    }
+
+    return null;
   }
 
   async fillFormStep(container) {
@@ -182,7 +252,7 @@ export default class ZipRecruiterFormHandler {
       } else if (name.includes("email") || lowerLabel.includes("email")) {
         await this.setElementValue(input, this.userData.email || "user@example.com");
       } else if (lowerLabel.includes("location") || lowerLabel.includes("postal") ||
-                 lowerLabel.includes("city") || lowerLabel.includes("zip")) {
+        lowerLabel.includes("city") || lowerLabel.includes("zip")) {
         await this.setElementValue(input, this.userData.currentCity || "10001");
       } else {
         const answer = await this.getAnswerFromAI(labelText, []);
@@ -493,15 +563,15 @@ export default class ZipRecruiterFormHandler {
 
         const parentText = checkbox.parentElement?.textContent?.toLowerCase() || "";
         const isConsent = parentText.includes("consent") ||
-                         parentText.includes("agree") ||
-                         parentText.includes("terms") ||
-                         parentText.includes("privacy");
+          parentText.includes("agree") ||
+          parentText.includes("terms") ||
+          parentText.includes("privacy");
 
         const isRequired = checkbox.hasAttribute("required") ||
-                          checkbox.getAttribute("aria-required") === "true" ||
-                          checkbox.closest('[aria-required="true"]') ||
-                          checkbox.closest(".required") ||
-                          isConsent;
+          checkbox.getAttribute("aria-required") === "true" ||
+          checkbox.closest('[aria-required="true"]') ||
+          checkbox.closest(".required") ||
+          isConsent;
 
         if (isRequired && !checkbox.checked) {
           this.logger("Checking required/consent checkbox");
@@ -655,9 +725,9 @@ export default class ZipRecruiterFormHandler {
       (attr) =>
         attr &&
         (attr.toLowerCase().includes("resume") ||
-         attr.toLowerCase().includes("cv") ||
-         attr.includes(".pdf") ||
-         attr.includes(".doc"))
+          attr.toLowerCase().includes("cv") ||
+          attr.includes(".pdf") ||
+          attr.includes(".doc"))
     )) {
       return true;
     }
@@ -670,25 +740,6 @@ export default class ZipRecruiterFormHandler {
     const resumeKeywords = ["resume", "cv", "upload", "attach", "curriculum vitae"];
 
     return resumeKeywords.some((keyword) => containerText.includes(keyword));
-  }
-
-  findActionButton() {
-    const buttonSelectors = [
-      "button[type='submit']",
-      'button[class*="submit"]',
-      'button[class*="continue"]',
-      'button[class*="next"]',
-      'button[class*="apply"]',
-    ];
-
-    for (const selector of buttonSelectors) {
-      const button = document.querySelector(selector);
-      if (button && this.isElementVisible(button)) {
-        return button;
-      }
-    }
-
-    return null;
   }
 
   async setElementValue(element, value) {
