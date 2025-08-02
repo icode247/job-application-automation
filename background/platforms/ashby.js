@@ -5,6 +5,9 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     const devMode = messageHandler.devMode;
     super(messageHandler, "ashby", devMode);
+
+    // Initialize logCounts Map to track error counts per session
+    this.logCounts = new Map();
   }
 
   /**
@@ -426,11 +429,34 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
   }
 
   /**
+   * Initialize or increment error count for a session
+   */
+  incrementErrorCount(sessionId) {
+    if (!this.logCounts.has(sessionId)) {
+      this.logCounts.set(sessionId, 0);
+    }
+    this.logCounts.set(sessionId, this.logCounts.get(sessionId) + 1);
+    return this.logCounts.get(sessionId);
+  }
+
+  /**
+   * Reset error count for a session
+   */
+  resetErrorCount(sessionId) {
+    this.logCounts.set(sessionId, 0);
+  }
+
+  /**
    * Override base class method to provide Ashby-specific continuation logic
    */
   async continueOrComplete(automation, windowId, status, data) {
     if (status === "SUCCESS") {
       automation.platformState.searchData.current++;
+      // Reset error count on success
+      this.resetErrorCount(automation.sessionId);
+    } else if (status === "ERROR") {
+      // Increment error count on error
+      this.incrementErrorCount(automation.sessionId);
     }
 
     const oldUrl = automation.platformState.currentJobUrl;
@@ -438,6 +464,8 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
     // Ashby-specific delay logic
     const errorCount = this.logCounts.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
+
+    this.log(`🕐 Applying delay of ${delay}ms before next job (errors: ${errorCount})`);
 
     setTimeout(async () => {
       await this.sendSearchNextMessage(windowId, {
@@ -452,5 +480,15 @@ export default class AshbyAutomationHandler extends BaseBackgroundHandler {
               : undefined,
       });
     }, delay);
+  }
+
+  /**
+   * Clean up session data when automation ends
+   */
+  cleanupSession(sessionId) {
+    if (this.logCounts.has(sessionId)) {
+      this.logCounts.delete(sessionId);
+      this.log(`🧹 Cleaned up error counts for session: ${sessionId}`);
+    }
   }
 }

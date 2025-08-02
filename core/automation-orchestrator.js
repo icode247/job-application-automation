@@ -501,51 +501,56 @@ export default class AutomationOrchestrator {
 
   buildLinkedInUrl(preferences, country) {
     const baseUrl = "https://www.linkedin.com/jobs/search/?";
+    const joinWithOR = (arr) => (arr ? arr.join(" OR ") : "");
     const params = new URLSearchParams();
 
-    params.append("f_AL", "true");
+    params.append("f_AL", "true"); 
 
-    const position = this.getFirstOrString(preferences.positions);
-    if (position) {
-      params.append("keywords", position);
+    // Handle positions
+    if (preferences.positions?.length) {
+      params.append("keywords", joinWithOR(preferences.positions));
     }
 
-    const location = this.getFirstOrString(preferences.location);
-    if (location) {
+    if (preferences.location) {
+      // GeoId mapping for countries
       const geoIdMap = {
-        "Nigeria": "105365761",
-        "Netherlands": "102890719",
+        Nigeria: "105365761",
+        Netherlands: "102890719",
         "United States": "103644278",
         "United Kingdom": "101165590",
-        "Canada": "101174742",
-        "Australia": "101452733",
-        "Germany": "101282230",
-        "France": "105015875",
-        "India": "102713980",
-        "Singapore": "102454443",
+        Canada: "101174742",
+        Australia: "101452733",
+        Germany: "101282230",
+        France: "105015875",
+        India: "102713980",
+        Singapore: "102454443",
         "South Africa": "104035573",
-        "Ireland": "104738515",
+        Ireland: "104738515",
         "New Zealand": "105490917",
       };
 
-      if (location === "Remote") {
+      if (preferences.location === "Remote") {
         params.append("f_WT", "2");
-      } else if (geoIdMap[location]) {
-        params.append("geoId", geoIdMap[location]);
+      } else if (geoIdMap[preferences.location]) {
+        params.append("geoId", geoIdMap[preferences.location]);
       } else {
-        params.append("location", location);
+        params.append("location", preferences.location);
       }
     }
 
     const workModeMap = {
-      "Remote": "2",
-      "Hybrid": "3",
+      Remote: "2",
+      Hybrid: "3",
       "On-site": "1",
     };
 
-    const workMode = this.getFirstOrString(preferences.workMode);
-    if (workMode && workModeMap[workMode]) {
-      params.append("f_WT", workModeMap[workMode]);
+    if (preferences.workMode?.length) {
+      const workModeCodes = preferences.workMode
+        .map((mode) => workModeMap[mode])
+        .filter(Boolean);
+      if (workModeCodes.length) {
+        params.append("f_WT", workModeCodes.join(","));
+      }
     }
 
     const datePostedMap = {
@@ -556,45 +561,52 @@ export default class AutomationOrchestrator {
       "Few Minutes Ago": "r3600",
     };
 
-    const datePosted = this.getFirstOrString(preferences.datePosted);
-    const datePostedValue = datePosted?.label || datePosted;
-
-    if (datePostedValue && datePostedMap[datePostedValue]) {
-      const dateCode = datePostedMap[datePostedValue];
+    if (preferences.datePosted) {
+      const dateCode = datePostedMap[preferences.datePosted];
       if (dateCode) {
         params.append("f_TPR", dateCode);
       }
     }
 
     const experienceLevelMap = {
-      "Internship": "1",
+      Internship: "1",
       "Entry level": "2",
-      "Associate": "3",
+      Associate: "3",
       "Mid-Senior level": "4",
-      "Director": "5",
-      "Executive": "6",
+      Director: "5",
+      Executive: "6",
     };
 
-    const experience = this.getFirstOrString(preferences.experience);
-    if (experience && experienceLevelMap[experience]) {
-      params.append("f_E", experienceLevelMap[experience]);
+    if (preferences.experience?.length) {
+      const experienceCodes = preferences.experience
+        .map((level) => experienceLevelMap[level])
+        .filter(Boolean);
+      if (experienceCodes.length) {
+        params.append("f_E", experienceCodes.join(","));
+      }
     }
 
+    // Job Type Mapping
     const jobTypeMap = {
       "Full-time": "F",
       "Part-time": "P",
-      "Contract": "C",
-      "Temporary": "T",
-      "Internship": "I",
-      "Volunteer": "V",
+      Contract: "C",
+      Temporary: "T",
+      Internship: "I",
+      Volunteer: "V",
     };
 
-    const jobType = this.getFirstOrString(preferences.jobType);
-    if (jobType && jobTypeMap[jobType]) {
-      params.append("f_JT", jobTypeMap[jobType]);
+    if (preferences.jobType?.length) {
+      const jobTypeCodes = preferences.jobType
+        .map((type) => jobTypeMap[type])
+        .filter(Boolean);
+      if (jobTypeCodes.length) {
+        params.append("f_JT", jobTypeCodes.join(","));
+      }
     }
 
-    if (preferences.salary && Array.isArray(preferences.salary) && preferences.salary.length === 2) {
+    // Salary Range Mapping
+    if (preferences.salary?.length === 2) {
       const [min] = preferences.salary;
       const salaryBuckets = {
         40000: "1",
@@ -617,10 +629,12 @@ export default class AutomationOrchestrator {
       }
     }
 
+    // Sorting
     params.append("sortBy", "R");
 
     return baseUrl + params.toString();
   }
+
 
   buildIndeedUrl(preferences, country) {
     const params = new URLSearchParams();

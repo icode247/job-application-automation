@@ -8,11 +8,6 @@ export default class AIService {
   async getAnswer(question, options = [], context = {}) {
     const normalizedQuestion = question.toLowerCase().trim();
 
-    // Check cache first
-    if (this.answerCache.has(normalizedQuestion)) {
-      return this.answerCache.get(normalizedQuestion);
-    }
-
     try {
       const response = await fetch(`${this.apiHost}/api/ai-answer`, {
         method: "POST",

@@ -1,6 +1,6 @@
 // services/user-service.js
 
-import { PLAN_LIMITS} from "./constants.js";
+import { PLAN_LIMITS } from "./constants.js";
 
 export default class UserService {
   constructor(config) {
@@ -217,14 +217,6 @@ export default class UserService {
 
   async getUserState() {
     try {
-      // Try to get cached state first
-      const result = await chrome.storage.local.get(["userState"]);
-
-      if (result.userState) {
-        return result.userState;
-      }
-
-      // If no cached state, fetch fresh from API
       return await this.checkUserRole();
     } catch (error) {
       console.error("Error getting user state:", error);

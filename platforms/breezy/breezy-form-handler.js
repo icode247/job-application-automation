@@ -9,7 +9,6 @@ export class BreezyFormHandler {
     this.logger = logger || console.log;
     this.answerCache = new Map();
     this.utils = new Utils();
-    this.processedCheckboxes = new Set(); // Track processed checkboxes to prevent duplicates
   }
 
   log(message, data = {}) {
@@ -44,7 +43,6 @@ export class BreezyFormHandler {
     try {
       this.log("Filling Breezy form with user profile data");
       this.userData = profile;
-      this.processedCheckboxes.clear(); // Reset tracking for each form
 
       // Use simplified field discovery approach
       const formFields = await this.grabFields(form);
@@ -89,7 +87,7 @@ export class BreezyFormHandler {
         }
       }
 
-      // Handle required checkboxes (GDPR, etc.) - but only ones not already processed
+      // Handle required checkboxes (GDPR, etc.)
       await this.handleRequiredCheckboxes(form);
 
       this.log(`Processing summary: ${processedCount} successful, ${failedFields.length} failed`);
@@ -472,42 +470,15 @@ export class BreezyFormHandler {
   }
 
   /**
-   * Fill checkbox group - FIXED VERSION
+   * Fill checkbox group
    */
   async fillCheckboxGroup(element, value, options) {
     try {
-      // Track this checkbox group to avoid reprocessing
-      const groupId = this.getElementIdentifier(element);
-      if (this.processedCheckboxes.has(groupId)) {
-        this.log(`Checkbox group already processed: ${groupId}`);
-        return true;
-      }
-
-      this.log(`Processing checkbox group: ${groupId}`);
-
       // For checkbox groups, we might get multiple values
       const values = Array.isArray(value) ? value : [value];
       const checkboxInputs = element.querySelectorAll('input[type="checkbox"]');
       let checkedAny = false;
 
-      // First, uncheck all checkboxes in this group to start fresh
-      for (const checkbox of checkboxInputs) {
-        if (checkbox.checked) {
-          this.log(`Unchecking previously checked option: ${checkbox.value}`);
-          const li = checkbox.closest('li');
-          const label = li?.querySelector('label');
-          if (label) {
-            label.click();
-          } else {
-            checkbox.click();
-          }
-          await this.wait(100);
-        }
-        // Track individual checkboxes to prevent reprocessing
-        this.processedCheckboxes.add(this.getElementIdentifier(checkbox));
-      }
-
-      // Then check only the desired options
       for (const checkbox of checkboxInputs) {
         const li = checkbox.closest('li');
         if (!li) continue;
@@ -526,7 +497,6 @@ export class BreezyFormHandler {
 
         if (shouldCheck && !checkbox.checked) {
           this.scrollToElement(li);
-          this.log(`Checking option: ${optionText}`);
           
           const label = li.querySelector('label');
           if (label) {
@@ -540,8 +510,6 @@ export class BreezyFormHandler {
         }
       }
 
-      // Mark this group as processed
-      this.processedCheckboxes.add(groupId);
       return checkedAny;
 
     } catch (error) {
@@ -551,17 +519,10 @@ export class BreezyFormHandler {
   }
 
   /**
-   * Fill single checkbox - FIXED VERSION
+   * Fill single checkbox
    */
   async fillSingleCheckbox(element, value) {
     try {
-      // Track this checkbox to avoid reprocessing
-      const checkboxId = this.getElementIdentifier(element);
-      if (this.processedCheckboxes.has(checkboxId)) {
-        this.log(`Checkbox already processed: ${checkboxId}`);
-        return true;
-      }
-
       const shouldCheck = this.shouldCheckValue(value);
       
       if (element.checked !== shouldCheck) {
@@ -579,8 +540,6 @@ export class BreezyFormHandler {
         await this.wait(200);
       }
 
-      // Mark as processed
-      this.processedCheckboxes.add(checkboxId);
       return true;
 
     } catch (error) {
@@ -590,77 +549,34 @@ export class BreezyFormHandler {
   }
 
   /**
-   * Handle required checkboxes (GDPR, etc.) - FIXED VERSION
+   * Handle required checkboxes (GDPR, etc.)
    */
   async handleRequiredCheckboxes(form) {
     try {
       this.log("Handling required checkboxes");
 
-      // Handle GDPR checkboxes - but only if not already processed
+      // Handle GDPR checkboxes
       const gdprContainers = form.querySelectorAll('.gdpr-accept');
       for (const container of gdprContainers) {
         const checkbox = container.querySelector('input[type="checkbox"]');
-        if (checkbox && this.isElementVisible(checkbox)) {
-          const checkboxId = this.getElementIdentifier(checkbox);
-          
-          // Skip if already processed
-          if (this.processedCheckboxes.has(checkboxId)) {
-            this.log(`Skipping already processed GDPR checkbox: ${checkboxId}`);
-            continue;
-          }
-
-          if (!checkbox.checked) {
-            this.log("Checking GDPR consent checkbox");
-            await this.fillSingleCheckbox(checkbox, true);
-          } else {
-            // Still mark as processed even if already checked
-            this.processedCheckboxes.add(checkboxId);
-          }
+        if (checkbox && this.isElementVisible(checkbox) && !checkbox.checked) {
+          this.log("Checking GDPR consent checkbox");
+          await this.fillSingleCheckbox(checkbox, true);
         }
       }
 
-      // Handle other required checkboxes - but only if not already processed
+      // Handle other required checkboxes
       const requiredCheckboxes = form.querySelectorAll('input[type="checkbox"][required]');
       for (const checkbox of requiredCheckboxes) {
-        if (this.isElementVisible(checkbox)) {
-          const checkboxId = this.getElementIdentifier(checkbox);
-          
-          // Skip if already processed
-          if (this.processedCheckboxes.has(checkboxId)) {
-            this.log(`Skipping already processed required checkbox: ${checkboxId}`);
-            continue;
-          }
-
-          if (!checkbox.checked) {
-            this.log(`Checking required checkbox: ${checkbox.name || checkbox.id || 'unnamed'}`);
-            await this.fillSingleCheckbox(checkbox, true);
-          } else {
-            // Still mark as processed even if already checked
-            this.processedCheckboxes.add(checkboxId);
-          }
+        if (this.isElementVisible(checkbox) && !checkbox.checked) {
+          this.log(`Checking required checkbox: ${checkbox.name}`);
+          await this.fillSingleCheckbox(checkbox, true);
         }
       }
 
     } catch (error) {
       this.log(`Error handling required checkboxes: ${error.message}`);
     }
-  }
-
-  /**
-   * Get unique identifier for an element
-   */
-  getElementIdentifier(element) {
-    if (element.id) return `id_${element.id}`;
-    if (element.name) return `name_${element.name}`;
-    if (element.className) return `class_${element.className}`;
-    
-    // Fallback: create identifier based on position in DOM
-    const parent = element.parentElement;
-    const siblings = parent ? Array.from(parent.children) : [element];
-    const index = siblings.indexOf(element);
-    const tagName = element.tagName.toLowerCase();
-    
-    return `${tagName}_${index}_${element.type || 'unknown'}`;
   }
 
   /**
@@ -701,13 +617,7 @@ export class BreezyFormHandler {
         return numericAnswer;
       }
 
-      // For checkbox fields, provide special instructions to prevent "all" selections
-      let contextualQuestion = question;
-      if (fieldType === "checkbox" && options.length > 1) {
-        contextualQuestion = `${question} (select only the most relevant option(s), not all options)`;
-      }
-
-      const answer = await this.aiService.getAnswer(contextualQuestion, options, {
+      const answer = await this.aiService.getAnswer(question, options, {
         platform: "breezy",
         userData: this.userData,
         jobDescription: this.jobDescription || "",

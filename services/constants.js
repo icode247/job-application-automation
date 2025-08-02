@@ -1,7 +1,7 @@
 export const PLAN_LIMITS = {
-  FREE: 5,
-  STARTER: 50,
-  PRO: 200,
+  FREE: 3,
+  STARTER: 100,
+  PRO: 170,
   UNLIMITED: Infinity,
 };
 

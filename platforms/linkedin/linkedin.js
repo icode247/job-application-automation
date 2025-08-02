@@ -1,5 +1,4 @@
 // platforms/linkedin/linkedin.js
-
 import BasePlatform from "../base-platform.js";
 import AIService from "../../services/ai-service.js";
 import ApplicationTrackerService from "../../services/application-tracker-service.js";
@@ -194,8 +193,11 @@ export default class LinkedInPlatform extends BasePlatform {
       }
 
       const canApply = await this.userService.canApplyMore();
+      console.log("Can apply:", canApply);
+      console.log("User profile:", this.userProfile);
       if (!canApply) {
         const remaining = await this.userService.getRemainingApplications();
+        console.log("Remaining applications:", remaining);
 
         const message = this.userProfile.userRole === "credit"
           ? `Looks like you're running low on credits (${this.userProfile.credits} left). Time to top up! 💳`
@@ -535,15 +537,15 @@ export default class LinkedInPlatform extends BasePlatform {
   doesJobMatchPreferences(jobDetails) {
     const preferences = this.config.preferences || {};
 
-    if (preferences.salary?.length === 2) {
-      const [minSalary, maxSalary] = preferences.salary;
-      const jobSalary = this.extractSalaryFromJobDetails(jobDetails);
+    // if (preferences.salary?.length === 2) {
+    //   const [minSalary, maxSalary] = preferences.salary;
+    //   const jobSalary = this.extractSalaryFromJobDetails(jobDetails);
 
-      if (jobSalary && (jobSalary < minSalary || jobSalary > maxSalary)) {
-        this.log(`❌ Job salary ${jobSalary} outside range ${minSalary}-${maxSalary}`);
-        return false;
-      }
-    }
+    //   if (jobSalary && (jobSalary < minSalary || jobSalary > maxSalary)) {
+    //     this.log(`❌ Job salary ${jobSalary} outside range ${minSalary}-${maxSalary}`);
+    //     return false;
+    //   }
+    // }
 
     if (preferences.positions?.length) {
       const jobTitle = jobDetails.title?.toLowerCase() || "";
@@ -613,6 +615,7 @@ export default class LinkedInPlatform extends BasePlatform {
     let processedCount = 0;
     let appliedCount = 0;
     let skippedCount = 0;
+    let filteredCount = 0; // Track jobs filtered out by preferences
     let processedJobs = new Set();
     let currentPage = 1;
     let noNewJobsCount = 0;
@@ -685,6 +688,17 @@ export default class LinkedInPlatform extends BasePlatform {
 
             const jobDetails = this.getJobProperties();
 
+            // Check if job matches user preferences BEFORE checking apply button
+            if (!this.doesJobMatchPreferences(jobDetails)) {
+              this.log(`❌ Job "${jobDetails.title}" at ${jobDetails.company} doesn't match user preferences, skipping.`);
+              this.statusOverlay.addInfo(`Skipping "${jobDetails.title}" - it doesn't match your preferences perfectly 🎯`);
+              filteredCount++;
+              continue;
+            }
+
+            this.log(`✅ Job "${jobDetails.title}" at ${jobDetails.company} matches user preferences!`);
+            this.statusOverlay.addSuccess(`Great match! "${jobDetails.title}" at ${jobDetails.company} fits your criteria perfectly! ✨`);
+
             const applyButton = await this.findEasyApplyButton();
             if (!applyButton) {
               this.log(`Already applied to job ${jobId}, skipping.`);
@@ -727,7 +741,7 @@ export default class LinkedInPlatform extends BasePlatform {
 
                 await this.userService.updateApplicationCount();
 
-                this.log(`Successfully applied to job ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped)`);
+                this.log(`Successfully applied to job ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped, ${filteredCount} filtered out)`);
                 this.statusOverlay.addSuccess(`Woohoo! Just applied to "${jobDetails.title}" at ${jobDetails.company}! That's ${appliedCount} down, ${jobsToApply - appliedCount} to go! 🎯`);
 
                 this.reportApplicationSubmitted(jobDetails, {
@@ -775,8 +789,8 @@ export default class LinkedInPlatform extends BasePlatform {
           } else {
             noNewJobsCount++;
             if (noNewJobsCount >= MAX_NO_NEW_JOBS) {
-              this.log(`No more applicable jobs to apply. Applied to ${appliedCount}/${jobsToApply} (${skippedCount} jobs)`);
-              this.statusOverlay.addSuccess(`I've looked everywhere and applied to ${appliedCount} out of ${jobsToApply} jobs! I couldn't find any more that match your criteria right now. 🎯`);
+              this.log(`No more applicable jobs to apply. Applied to ${appliedCount}/${jobsToApply} (${skippedCount} jobs skipped, ${filteredCount} filtered out)`);
+              this.statusOverlay.addSuccess(`I've looked everywhere and applied to ${appliedCount} out of ${jobsToApply} jobs! I filtered out ${filteredCount} jobs that didn't match your preferences and skipped ${skippedCount} others. 🎯`);
               break;
             }
           }
@@ -788,8 +802,8 @@ export default class LinkedInPlatform extends BasePlatform {
 
       const completionStatus = appliedCount >= jobsToApply ? "target_reached" : "no_more_jobs";
       const message = appliedCount >= jobsToApply
-        ? `Mission accomplished! 🎉 I successfully applied to all ${appliedCount} jobs you wanted! We looked through ${processedCount} total opportunities across ${currentPage} pages.`
-        : `Great work! I applied to ${appliedCount} out of ${jobsToApply} jobs. I couldn't find any more that perfectly match your criteria right now (I skipped ${skippedCount} that weren't quite right).`;
+        ? `Mission accomplished! 🎉 I successfully applied to all ${appliedCount} jobs you wanted! We looked through ${processedCount} total opportunities across ${currentPage} pages and filtered out ${filteredCount} jobs that didn't match your criteria.`
+        : `Great work! I applied to ${appliedCount} out of ${jobsToApply} jobs. I looked through ${processedCount} opportunities, filtered out ${filteredCount} that didn't match your preferences, and skipped ${skippedCount} others that weren't quite right.`;
 
       this.log(message);
       this.statusOverlay.addSuccess(message);
@@ -801,6 +815,7 @@ export default class LinkedInPlatform extends BasePlatform {
         appliedCount,
         processedCount,
         skippedCount,
+        filteredCount, // New field to track preference filtering
         totalPages: currentPage,
         preferencesUsed: this.config.preferences,
       };
@@ -1002,40 +1017,264 @@ export default class LinkedInPlatform extends BasePlatform {
     try {
       this.statusOverlay.addInfo(`Thinking about how to answer: "${label}"...`);
 
+      // Build enhanced context like Ashby does
       const context = {
         platform: this.platform,
         userData: this.userProfile,
         jobDescription: this.scrapeJobDescription(),
+        fieldType: this.determineFieldType(label, options),
+        fieldContext: this.buildFieldContext(label, options)
       };
 
-      const answer = await this.aiService.getAnswer(label, options, context);
+      let enhancedLabel = label;
+      let answer;
 
-      this.statusOverlay.addSuccess(`Got the perfect answer for that question! ✨`);
+      // Special handling for salary fields (like Ashby)
+      if (this.isSalaryField(label)) {
+        this.log(`Special salary field handling for "${label}"`);
+        enhancedLabel = `${label} (provide only the numeric amount without currency symbols or commas)`;
 
-      this.answerCache.set(normalizedLabel, answer);
-      return answer;
-    } catch (error) {
-      console.error("AI Answer Error:", error);
-      this.statusOverlay.addInfo("Using my best guess for this question...");
+        answer = await this.aiService.getAnswer(enhancedLabel, options, {
+          ...context,
+          fieldContext: context.fieldContext + " - numeric only"
+        });
 
-      const defaultAnswers = {
-        "years of experience": "3",
-        "notice period": "2 weeks",
-        "salary expectation": "Negotiable",
-        "visa sponsorship": "No",
-        "relocation": "No",
-        "remote work": "Yes",
-        "available to start": "Immediately",
-      };
+        // Extract numeric value like Ashby does
+        const numericAnswer = this.extractNumericSalary(answer);
+        this.answerCache.set(normalizedLabel, numericAnswer);
+        this.log(`Extracted numeric salary: ${numericAnswer}`);
 
-      for (const [key, value] of Object.entries(defaultAnswers)) {
-        if (normalizedLabel.includes(key)) {
-          return value;
-        }
+        this.statusOverlay.addSuccess(`Got the perfect salary amount! ✨`);
+        return numericAnswer;
       }
 
-      return options.length > 0 ? options[0] : "Yes";
+      // Special handling for date fields
+      else if (this.isDateField(label)) {
+        this.log(`Special date field handling for "${label}"`);
+        enhancedLabel = `${label} (provide date in MM/DD/YYYY format)`;
+
+        answer = await this.aiService.getAnswer(enhancedLabel, options, {
+          ...context,
+          fieldContext: context.fieldContext + " - date format MM/DD/YYYY"
+        });
+      }
+
+      // Special handling for location fields
+      else if (this.isLocationField(label)) {
+        this.log(`Special location field handling for "${label}"`);
+        answer = this.getUserLocationData() || await this.aiService.getAnswer(label, options, context);
+      }
+
+      // Special handling for "How did you hear" fields
+      else if (this.isHowDidYouHearField(label)) {
+        this.log(`Special "how did you hear" field handling for "${label}"`);
+        answer = "LinkedIn";
+      }
+
+      // Regular field handling with enhanced context
+      else {
+        answer = await this.aiService.getAnswer(label, options, context);
+      }
+
+      if (answer !== null && answer !== undefined && answer !== "") {
+        this.statusOverlay.addSuccess(`Got the perfect answer for that question! ✨`);
+        this.answerCache.set(normalizedLabel, answer);
+        return answer;
+      } else {
+        this.statusOverlay.addWarning(`Couldn't find a good answer for that question`);
+        return null;
+      }
+    } catch (error) {
+      console.error("AI Answer Error:", error);
+      this.statusOverlay.addError(`Had trouble answering that question, but I'll keep going!`);
+      throw error;
     }
+  }
+
+  // Helper methods to add to the LinkedIn class
+
+  determineFieldType(label, options) {
+    if (this.isSalaryField(label)) return "salary";
+    if (this.isDateField(label)) return "date";
+    if (this.isLocationField(label)) return "location";
+    if (this.isHowDidYouHearField(label)) return "source";
+    if (options && options.length > 0) return "select";
+    return "text";
+  }
+
+  buildFieldContext(label, options) {
+    let context = `Field label: "${label}"`;
+
+    if (options && options.length > 0) {
+      context += `. Available options: ${options.join(", ")}`;
+    }
+
+    if (this.isSalaryField(label)) {
+      context += ". This is a salary/compensation field requiring numeric input only.";
+    }
+
+    if (this.isDateField(label)) {
+      context += ". This is a date field requiring MM/DD/YYYY format.";
+    }
+
+    if (this.isLocationField(label)) {
+      context += ". This is a location field that should use user's location data.";
+    }
+
+    return context;
+  }
+
+  isSalaryField(label) {
+    const salaryPatterns = [
+      /salary/i,
+      /compensation/i,
+      /expected.*salary/i,
+      /salary.*expectation/i,
+      /pay.*range/i,
+      /wage/i,
+      /rate.*hour/i,
+      /hourly.*rate/i,
+      /annual.*income/i,
+      /desired.*salary/i
+    ];
+
+    return salaryPatterns.some(pattern => pattern.test(label));
+  }
+
+  isDateField(label) {
+    const datePatterns = [
+      /date.*available/i,
+      /start.*date/i,
+      /available.*date/i,
+      /graduation.*date/i,
+      /end.*date/i,
+      /when.*available/i,
+      /notice.*period/i
+    ];
+
+    return datePatterns.some(pattern => pattern.test(label));
+  }
+
+  isLocationField(label) {
+    const locationPatterns = [
+      /location/i,
+      /where.*located/i,
+      /city.*state/i,
+      /address/i,
+      /where.*live/i,
+      /residence/i,
+      /geographic/i
+    ];
+
+    return locationPatterns.some(pattern => pattern.test(label));
+  }
+
+  isHowDidYouHearField(label) {
+    const hearPatterns = [
+      /how.*did.*you.*hear/i,
+      /how.*did.*you.*find/i,
+      /source.*referral/i,
+      /referred.*by/i,
+      /how.*learn.*about/i
+    ];
+
+    return hearPatterns.some(pattern => pattern.test(label));
+  }
+
+  getUserLocationData() {
+    const userData = this.userProfile;
+
+    // Try different location combinations like Ashby
+    if (userData.streetAddress) {
+      return userData.streetAddress;
+    }
+
+    // Combine city, state, country
+    const parts = [];
+    if (userData.city) parts.push(userData.city);
+    if (userData.state) parts.push(userData.state);
+    if (userData.country && userData.country !== "United States") {
+      parts.push(userData.country);
+    }
+
+    if (parts.length > 0) {
+      return parts.join(", ");
+    }
+
+    // State and country only
+    if (userData.state) {
+      let location = userData.state;
+      if (userData.country && userData.country !== "United States") {
+        location += ", " + userData.country;
+      }
+      return location;
+    }
+
+    // Country only
+    if (userData.country) {
+      return userData.country;
+    }
+
+    return "";
+  }
+
+  /**
+   * Extract numeric salary value from AI response (copied from Ashby)
+   */
+  extractNumericSalary(salaryText) {
+    if (!salaryText || salaryText === null || salaryText === undefined) {
+      this.log("❌ No salary text provided");
+      return null;
+    }
+
+    // Convert to string and clean
+    const cleaned = String(salaryText)
+      .replace(/[$,\s]/g, "") // Remove dollar signs, commas, spaces
+      .replace(/[^\d.]/g, ""); // Keep only digits and decimal points
+
+    // Extract first number found
+    const match = cleaned.match(/\d+\.?\d*/);
+    if (match) {
+      const number = parseFloat(match[0]);
+      if (!isNaN(number) && number > 0) {
+        const result = Math.round(number).toString();
+        this.log(`✅ Extracted salary: ${salaryText} -> ${result}`);
+        return result;
+      }
+    }
+
+    this.log(`❌ Could not extract valid salary from: ${salaryText}`);
+    return null;
+  }
+
+
+  /**
+  * Extract numeric salary value from AI response
+  */
+  extractNumericSalary(salaryText) {
+    if (!salaryText || salaryText === null || salaryText === undefined) {
+      this.logger("❌ No salary text provided");
+      return null;
+    }
+
+    // Convert to string and clean
+    const cleaned = String(salaryText)
+      .replace(/[$,\s]/g, "") // Remove dollar signs, commas, spaces
+      .replace(/[^\d.]/g, ""); // Keep only digits and decimal points
+
+    // Extract first number found
+    const match = cleaned.match(/\d+\.?\d*/);
+    if (match) {
+      const number = parseFloat(match[0]);
+      if (!isNaN(number) && number > 0) {
+        const result = Math.round(number).toString();
+        this.logger(`✅ Extracted salary: ${salaryText} -> ${result}`);
+        return result;
+      }
+    }
+
+    this.logger(`❌ Could not extract valid salary from: ${salaryText}`);
+    return null;
   }
 
   formatDateForInput(dateStr) {
@@ -1608,3 +1847,4 @@ if (typeof Element !== "undefined" && !Element.prototype.isVisible) {
     );
   };
 }
+

@@ -7,7 +7,10 @@ import {
 } from "../../services/index.js";
 import FormHandler from "../../shared/indeed_glassdoors/form-handler.js";
 
-const INDEED_SELECTORS = {
+/**
+ * Selectors for Indeed platform elements
+ */
+const SELECTORS = {
   JOB_CARDS: [
     ".job_seen_beacon",
     '[data-testid="job-tile"]',
@@ -65,153 +68,289 @@ const INDEED_SELECTORS = {
     ".pn",
   ],
   POPUP_CLOSE: [".popover-x-button-close"],
+  LOGIN_INDICATORS: [
+    'span#signInMobile',
+    'li.link-signin a#signIn[href*="account/login"]',
+    'a[href*="account/login"]',
+    'button[data-testid="signin-button"]',
+  ],
+  CLOUDFLARE_INDICATORS: [
+    'main.error h1#heading',
+    'p#paragraph[id*="Ray ID"]',
+    'input[name="cf-turnstile-response"]',
+    'div.core-msg.spacer',
+  ],
 };
 
-const INDEED_CONFIG = {
+/**
+ * Configuration constants for Indeed automation
+ */
+const CONFIG = {
   PLATFORM: "indeed",
-  URL_PATTERNS: {
-    SEARCH_PAGE: /(?:[\w-]+\.)?indeed\.com\/jobs/,
-    JOB_PAGE: /indeed\.com\/(viewjob|job)/,
-    APPLY_PAGE:
-      /indeed\.com\/apply|smartapply\.indeed\.com\/beta\/indeedapply\/form/,
-  },
+  BASE_URL: "https://www.indeed.com",
   TIMEOUTS: {
     STANDARD: 2000,
     EXTENDED: 5000,
-    MAX_TIMEOUT: 300000,
-    APPLICATION_TIMEOUT: 3 * 60 * 1000,
-    REDIRECT_TIMEOUT: 8000,
+    PAGE_LOAD: 10000,
+    APPLICATION: 300000, // 5 minutes
+    LOGIN_WAIT: 900000, // 15 minutes
+    CLOUDFLARE_WAIT: 600000, // 10 minutes
   },
-  PLAN_LIMITS: {
-    FREE: 10,
-    STARTER: 50,
-    PRO: 500,
+  RETRY: {
+    MAX_ATTEMPTS: 3,
+    DELAYS: [2000, 5000, 10000],
   },
-  DEBUG: true,
-  BRAND_COLOR: "#4a90e2",
-  MAX_APPLICATION_TIME: 300000,
-  RETRY_DELAYS: [2000, 5000, 10000],
+  URL_PATTERNS: {
+    SEARCH: /(?:[\w-]+\.)?indeed\.com\/jobs/,
+    JOB_PAGE: /indeed\.com\/(viewjob|job)/,
+    APPLICATION: /indeed\.com\/apply|smartapply\.indeed\.com\/beta\/indeedapply\/form/,
+  },
 };
 
+/**
+ * State management class for Indeed automation
+ */
+class AutomationState {
+  constructor() {
+    this.reset();
+  }
+
+  reset() {
+    this.status = 'idle'; // idle, running, applying, paused, completed, error
+    this.currentJobIndex = 0;
+    this.processedJobIds = new Set();
+    this.isApplicationInProgress = false;
+    this.applicationStartTime = null;
+    this.currentJobData = null;
+    this.lastActivity = Date.now();
+    this.retryCount = 0;
+  }
+
+  updateStatus(status, data = {}) {
+    this.status = status;
+    this.lastActivity = Date.now();
+    Object.assign(this, data);
+  }
+
+  isRunning() {
+    return ['running', 'applying'].includes(this.status);
+  }
+
+  canProcessJobs() {
+    return this.status === 'running' && !this.isApplicationInProgress;
+  }
+
+  startApplication(jobData) {
+    this.isApplicationInProgress = true;
+    this.applicationStartTime = Date.now();
+    this.currentJobData = jobData;
+    this.updateStatus('applying');
+  }
+
+  completeApplication() {
+    this.isApplicationInProgress = false;
+    this.applicationStartTime = null;
+    this.currentJobData = null;
+    this.updateStatus('running');
+  }
+
+  addProcessedJob(jobId) {
+    this.processedJobIds.add(jobId);
+  }
+
+  isJobProcessed(jobId) {
+    return this.processedJobIds.has(jobId);
+  }
+}
+
+/**
+ * Page detector utility class
+ */
+class PageDetector {
+  static detectPageType(url = window.location.href) {
+    if (url.includes("google.com/search")) return 'google_search';
+    if (CONFIG.URL_PATTERNS.APPLICATION.test(url)) return 'application';
+    if (CONFIG.URL_PATTERNS.JOB_PAGE.test(url)) return 'job_page';
+    if (CONFIG.URL_PATTERNS.SEARCH.test(url)) return 'job_search';
+    return 'unknown';
+  }
+
+  static isCloudflareBlocked() {
+    return SELECTORS.CLOUDFLARE_INDICATORS.some(selector => {
+      const element = document.querySelector(selector);
+      return element && PageDetector.isElementVisible(element);
+    });
+  }
+
+  static isLoggedOut() {
+    return SELECTORS.LOGIN_INDICATORS.some(selector => {
+      const element = document.querySelector(selector);
+      return element && PageDetector.isElementVisible(element);
+    });
+  }
+
+  static isElementVisible(element) {
+    if (!element) return false;
+    try {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        rect.height > 0 &&
+        rect.width > 0
+      );
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * Job extraction utility class
+ */
+class JobExtractor {
+  static extractJobCards() {
+    for (const selector of SELECTORS.JOB_CARDS) {
+      const cards = Array.from(document.querySelectorAll(selector));
+      const visibleCards = cards.filter(card => PageDetector.isElementVisible(card));
+      if (visibleCards.length > 0) {
+        return visibleCards;
+      }
+    }
+    return [];
+  }
+
+  static extractJobId(jobCard) {
+    // Try data-jk attribute first
+    const dataJk = jobCard.getAttribute("data-jk");
+    if (dataJk) return dataJk;
+
+    // Try to extract from job URL
+    const titleLink = jobCard.querySelector('a[href*="viewjob?jk="], .jobTitle a, [data-testid="job-title"] a');
+    if (titleLink?.href) {
+      const match = titleLink.href.match(/jk=([^&]+)/);
+      if (match?.[1]) return match[1];
+    }
+
+    // Fallback to content-based ID
+    const title = JobExtractor.extractText(jobCard, SELECTORS.JOB_TITLE);
+    const company = JobExtractor.extractText(jobCard, SELECTORS.COMPANY_NAME);
+    return `${title}-${company}`.replace(/\s+/g, "").toLowerCase() || 
+           `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  static extractJobUrl(jobCard) {
+    const selectors = [
+      'a[href*="viewjob?jk="]',
+      ".jobTitle a",
+      '[data-testid="job-title"] a',
+      "h2 a",
+      "a[data-jk]",
+    ];
+
+    for (const selector of selectors) {
+      const link = jobCard.querySelector(selector);
+      if (link?.href && link.href.includes("indeed.com") && 
+          (link.href.includes("viewjob") || link.href.includes("jk="))) {
+        return link.href;
+      }
+    }
+    return null;
+  }
+
+  static extractJobDetails(jobCard) {
+    return {
+      jobId: JobExtractor.extractJobId(jobCard),
+      title: JobExtractor.extractText(jobCard, SELECTORS.JOB_TITLE) || "Unknown Position",
+      company: JobExtractor.extractText(jobCard, SELECTORS.COMPANY_NAME) || "Unknown Company",
+      location: JobExtractor.extractText(jobCard, SELECTORS.LOCATION) || "Unknown Location",
+      salary: JobExtractor.extractText(jobCard, SELECTORS.SALARY) || "Not specified",
+      jobUrl: JobExtractor.extractJobUrl(jobCard) || window.location.href,
+      platform: "indeed",
+      extractedAt: Date.now(),
+    };
+  }
+
+  static extractText(container, selectors) {
+    for (const selector of selectors) {
+      const element = container.querySelector(selector);
+      if (element) {
+        const text = element.getAttribute("title") || element.textContent?.trim();
+        if (text && text.length > 0) return text;
+      }
+    }
+    return "";
+  }
+
+  static extractJobDescription() {
+    const jobDescription = {
+      title: DomUtils.extractText([
+        ".jobsearch-JobInfoHeader-title",
+        '[data-testid="job-title"]',
+        "h1",
+      ]),
+      company: DomUtils.extractText([
+        ".jobsearch-InlineCompanyRating",
+        '[data-testid="company-name"]',
+        ".companyName",
+      ]),
+      location: DomUtils.extractText([
+        ".jobsearch-JobLocationDropdown",
+        '[data-testid="job-location"]',
+        ".locationsContainer",
+      ]),
+      salary: DomUtils.extractText([
+        ".salary-snippet",
+        '[data-testid="salary-snippet"]',
+      ]),
+    };
+
+    const fullDescriptionElement = document.querySelector(
+      '#jobDescriptionText, .jobsearch-jobDescriptionText, [data-testid="job-description"]'
+    );
+
+    if (fullDescriptionElement) {
+      jobDescription.fullDescription = fullDescriptionElement.textContent.trim();
+    }
+
+    return jobDescription;
+  }
+}
+
+/**
+ * Main Indeed Platform Automation class
+ */
 export default class IndeedPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
     this.platform = "indeed";
-    this.baseUrl = "https://www.indeed.com";
-
+    this.baseUrl = CONFIG.BASE_URL;
+    
+    // Initialize services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
-    this.applicationTracker = new ApplicationTrackerService({
-      userId: this.userId,
-    });
+    this.applicationTracker = new ApplicationTrackerService({ userId: this.userId });
     this.userService = new UserService({ userId: this.userId });
-
-    this.state = {
-      initialized: false,
-      ready: false,
-      isRunning: false,
-      isApplicationInProgress: false,
-      applicationStartTime: null,
-      processedCards: new Set(),
-      processedCount: 0,
-      countDown: null,
-      lastActivity: Date.now(),
-      debounceTimers: {},
-      currentJobIndex: 0,
-      pendingApplication: false,
-      maxRedirectAttempts: 3,
-      currentRedirectAttempts: 0,
-      lastClickedJobCard: null,
-      formDetectionAttempts: 0,
-      maxFormDetectionAttempts: 5,
-      currentJobDescription: "",
-      formDetected: false,
-    };
-
+    
+    // Initialize state management
+    this.state = new AutomationState();
+    
+    // Initialize form handler
     this.formHandler = null;
-    this.cachedJobDescription = null;
-    this.processedJobCards = new Set();
-    this.healthCheckTimer = null;
-    this.currentJobDetails = null;
-
-    this.applicationState = {
-      isApplicationInProgress: false,
-      applicationStartTime: null,
-      currentJobData: null,
-      currentJobTabId: null,
-      processedUrls: new Set(),
-    };
-
-    this.stuckDetectionTimeout = null;
-    this.maxApplicationTime = INDEED_CONFIG.MAX_APPLICATION_TIME;
-
-    this.healthCheckTimer = setInterval(() => this.checkHealth(), 30000);
-    this.setupFormDetectionObserver();
+    this.currentJobDescription = null;
+    
+    // Setup monitoring
+    this.setupHealthMonitoring();
   }
 
-  getPlatformDomains() {
-    return ["https://www.indeed.com", "https://smartapply.indeed.com"];
-  }
-
-  getSearchLinkPattern() {
-    return /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply).*$/;
-  }
-
-  isValidJobPage(url) {
-    return (
-      /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply)/.test(url) ||
-      /^https:\/\/smartapply\.indeed\.com\/beta\/indeedapply\/form/.test(url)
-    );
-  }
-
-  getApiHost() {
-    return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
-  }
-
-  isApplicationPage(url) {
-    return (
-      url.includes("smartapply.indeed.com") ||
-      url.includes("indeed.com/apply") ||
-      url.includes("indeed.com/viewjob")
-    );
-  }
-
-  getJobTaskMessageType() {
-    return "openJobInNewTab";
-  }
-
-  platformSpecificUrlNormalization(url) {
-    return url
-      .replace(/[?&](jk|tk|from|advn)=[^&]*/g, "")
-      .replace(/[?&]+$/, "");
-  }
-
-  isIndeedJobPage(url) {
-    return (
-      /^https:\/\/(www\.)?indeed\.com\/(viewjob|job)/.test(url) ||
-      /^https:\/\/smartapply\.indeed\.com\/beta\/indeedapply\/form/.test(url)
-    );
-  }
-
-  isIndeedSearchPage(url) {
-    return /^https:\/\/(www\.|[a-z]{2}\.)?indeed\.com\/jobs/.test(url);
-  }
-
-  isIndeedApplicationPage(url) {
-    return /^https:\/\/smartapply\.indeed\.com\/beta\/indeedapply\/form/.test(
-      url
-    );
-  }
-
-  isIndeedJobListingPage(url) {
-    return (
-      /^https:\/\/(www\.)?indeed\.com\/viewjob/.test(url) &&
-      !url.includes("indeed.com/apply")
-    );
-  }
+  // =============================================================================
+  // INITIALIZATION AND SETUP
+  // =============================================================================
 
   async initialize() {
     await super.initialize();
-
+    
     try {
       this.formHandler = new FormHandler({
         enableDebug: true,
@@ -222,595 +361,458 @@ export default class IndeedPlatform extends BasePlatformAutomation {
         platform: "indeed",
       });
 
-      this.statusOverlay.addSuccess("Indeed-specific components initialized");
+      this.statusOverlay.addSuccess("Indeed automation initialized successfully");
     } catch (error) {
-      this.log("⚠️ Could not load Indeed handlers:", error);
-      this.statusOverlay.addWarning("Indeed handlers not available");
+      this.log("⚠️ Could not initialize form handler:", error);
+      this.statusOverlay.addWarning("Form handler initialization failed");
     }
-
-    this.state.initialized = true;
   }
+
+  async setSessionContext(sessionContext) {
+    try {
+      await super.setSessionContext?.(sessionContext);
+      
+      this.sessionContext = sessionContext;
+      
+      if (sessionContext.userId) this.userId = sessionContext.userId;
+      if (sessionContext.userProfile && !this.userProfile) {
+        this.userProfile = sessionContext.userProfile;
+      }
+      if (sessionContext.apiHost) {
+        this.sessionApiHost = sessionContext.apiHost;
+      }
+
+      // Update services with new context
+      if (this.userId) {
+        this.applicationTracker = new ApplicationTrackerService({ 
+          userId: this.userId,
+          apiHost: this.getApiHost() 
+        });
+        this.userService = new UserService({ userId: this.userId });
+      }
+
+      // Update form handler
+      if (this.formHandler && this.userProfile) {
+        this.formHandler.userData = this.userProfile;
+      }
+
+      this.log("✅ Session context updated successfully");
+    } catch (error) {
+      this.log("❌ Error setting session context:", error);
+      throw error;
+    }
+  }
+
+  setupHealthMonitoring() {
+    // Health check every 30 seconds
+    this.healthCheckInterval = setInterval(() => {
+      this.performHealthCheck();
+    }, 30000);
+  }
+
+  // =============================================================================
+  // MAIN AUTOMATION FLOW
+  // =============================================================================
 
   async start(params = {}) {
     try {
-      this.isRunning = true;
-      this.state.isRunning = true;
       this.log("🚀 Starting Indeed automation");
       this.statusOverlay.addInfo("Starting Indeed automation");
-
-      if (!this.userProfile && this.userId) {
-        try {
-          this.userProfile = await this.userService.getUserDetails();
-          this.statusOverlay.addSuccess("User profile loaded");
-
-          if (this.formHandler && this.userProfile) {
-            this.formHandler.userData = this.userProfile;
-          }
-        } catch (error) {
-          this.statusOverlay.addWarning(
-            "Failed to load user profile - automation may have limited functionality"
-          );
-        }
-      }
-
+      
       this.config = { ...this.config, ...params };
-      await this.waitForPageLoad();
-      await this.detectPageTypeAndStart();
+      this.state.reset();
+      this.state.updateStatus('running');
+
+      // Load user profile if needed
+      await this.ensureUserProfile();
+      
+      // Wait for page to be ready
+      await this.waitForPageReady();
+      
+      // Start main automation loop
+      await this.runAutomationLoop();
+      
     } catch (error) {
-      this.reportError(error, { phase: "start" });
+      this.handleError(error, "start");
     }
   }
 
-  /**
- * Check for Cloudflare verification/captcha blocks and pause automation until resolved
- */
-  async checkCloudflareStatus() {
-    try {
-      this.log("🔍 Checking for Cloudflare verification blocks");
-
-      // Check for the specific Cloudflare verification page elements
-      const cloudflareSelectors = [
-        'main.error h1#heading',
-        'p#paragraph[id*="Ray ID"]',
-        'div.main-wrapper[role="main"]',
-        'div#RInW4[style*="display: grid"]',
-        'input[name="cf-turnstile-response"]',
-        'div.core-msg.spacer',
-        'noscript div.h2 span#challenge-error-text'
-      ];
-
-      // Check for Cloudflare verification page
-      const isCloudflareVerification = this.checkCloudflareElements(cloudflareSelectors);
-
-      if (isCloudflareVerification) {
-        this.log("🚫 Cloudflare verification detected, pausing automation");
-        this.statusOverlay.addWarning("Cloudflare verification required - please complete the challenge");
-
-        // Pause automation and wait for user to solve verification
-        await this.waitForCloudflareResolution();
-      } else {
-        this.log("✅ No Cloudflare verification detected, continuing");
-      }
-    } catch (error) {
-      this.log("❌ Error checking Cloudflare status:", error);
-    }
-  }
-
-  /**
-   * Check if Cloudflare verification elements are present
-   */
-  checkCloudflareElements(selectors) {
-    // Check for main error heading
-    const errorHeading = document.querySelector('main.error h1#heading');
-    if (errorHeading && errorHeading.textContent.includes('Additional Verification Required')) {
-      return true;
-    }
-
-    // Check for Ray ID paragraph
-    const rayIdParagraph = document.querySelector('p#paragraph');
-    if (rayIdParagraph && rayIdParagraph.textContent.includes('Ray ID for this request')) {
-      return true;
-    }
-
-    // Check for Cloudflare challenge elements
-    const challengeElements = [
-      'input[name="cf-turnstile-response"]',
-      'div[id*="cf-chl"]',
-      'script[src*="challenge-platform"]'
-    ];
-
-    const hasCloudflareElements = challengeElements.some(selector => {
-      const element = document.querySelector(selector);
-      return element !== null;
-    });
-
-    if (hasCloudflareElements) {
-      return true;
-    }
-
-    // Check for waiting message
-    const waitingMessage = document.querySelector('div.core-msg.spacer');
-    if (waitingMessage && waitingMessage.textContent.includes('Waiting for ng.indeed.com to respond')) {
-      return true;
-    }
-
-    // Check for JavaScript disabled message
-    const jsDisabledMessage = document.querySelector('noscript div.h2 span#challenge-error-text');
-    if (jsDisabledMessage && jsDisabledMessage.textContent.includes('Enable JavaScript and cookies to continue')) {
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Wait for Cloudflare verification to be resolved by user
-   */
-  async waitForCloudflareResolution() {
-    const maxWaitTime = 10 * 60 * 1000; // 10 minutes max wait
-    const checkInterval = 5000; // Check every 5 seconds
-    let waitTime = 0;
-
-    this.statusOverlay.addInfo("Waiting for Cloudflare verification to be completed...");
-
-    while (waitTime < maxWaitTime) {
-      await this.wait(checkInterval);
-      waitTime += checkInterval;
-
-      // Check if we're still on the Cloudflare verification page
-      const stillOnCloudflare = this.checkCloudflareElements();
-
-      if (!stillOnCloudflare) {
-        this.log("✅ Cloudflare verification resolved, continuing automation");
-        this.statusOverlay.addSuccess("Cloudflare verification completed!");
-
-        // After Cloudflare is resolved, check if user is logged in
-        await this.checkLoginStatus();
-        return;
-      }
-
-      // Check if page has changed to a normal Indeed page
-      const currentUrl = window.location.href;
-      if (currentUrl.includes('indeed.com') && !currentUrl.includes('cf_chl_tk')) {
-        this.log("✅ Redirected to Indeed page, Cloudflare verification likely completed");
-        this.statusOverlay.addSuccess("Successfully redirected to Indeed!");
-
-        // Check login status after successful redirect
-        await this.checkLoginStatus();
-        return;
-      }
-
-      this.log(`⏳ Waiting for Cloudflare verification... (${Math.floor(waitTime / 1000)}s)`);
-      this.statusOverlay.addInfo(`Waiting for verification completion... (${Math.floor(waitTime / 1000)}s)`);
-    }
-
-    throw new Error("Cloudflare verification timeout - please refresh and try again");
-  }
-
-  /**
-   * Check if user is logged in by looking for login/signin elements
-   */
-  async checkLoginStatus() {
-    try {
-      this.log("🔍 Checking user login status");
-      this.statusOverlay.addInfo("Checking if you're signed in to Indeed...");
-
-      // Wait a moment for page to fully load
-      await this.wait(2000);
-
-      // Check for sign-in elements that indicate user is NOT logged in
-      const loginIndicators = [
-        // Mobile sign in span
-        'span#signInMobile',
-        // Desktop sign in link
-        'li.link-signin a#signIn[href*="account/login"]',
-        // General sign in links
-        'a[href*="account/login"]',
-        'a[href*="secure.indeed.com/account/login"]',
-        // Sign in buttons
-        'button[data-testid="signin-button"]',
-        'button:contains("Sign in")',
-        // Join now links (also indicate not logged in)
-        'a[href*="account/register"]',
-        'a:contains("Join now")'
-      ];
-
-      const isLoggedOut = this.checkForLoginElements(loginIndicators);
-
-      if (isLoggedOut) {
-        this.log("🚫 User not logged in to Indeed");
-        this.statusOverlay.addWarning("Please sign in to Indeed to continue automation");
-
-        // Wait for user to log in
-        await this.waitForUserLogin();
-      } else {
-        this.log("✅ User appears to be logged in to Indeed");
-        this.statusOverlay.addSuccess("Indeed login confirmed!");
-      }
-    } catch (error) {
-      this.log("❌ Error checking login status:", error);
-      this.statusOverlay.addError("Error checking login status: " + error.message);
-    }
-  }
-
-  /**
-   * Check for login elements that indicate user is not logged in
-   */
-  checkForLoginElements(selectors) {
-    for (const selector of selectors) {
-      // Handle special case for :contains() pseudo-selector
-      if (selector.includes(':contains(')) {
-        const match = selector.match(/^([^:]+):contains\("([^"]+)"\)$/);
-        if (match) {
-          const [, baseSelector, text] = match;
-          const elements = document.querySelectorAll(baseSelector);
-
-          for (const element of elements) {
-            if (element.textContent && element.textContent.trim().includes(text)) {
-              this.log(`Found login indicator: ${selector}`);
-              return true;
-            }
-          }
+  async runAutomationLoop() {
+    while (this.state.isRunning()) {
+      try {
+        const pageType = PageDetector.detectPageType();
+        this.log(`📄 Current page type: ${pageType}`);
+        
+        switch (pageType) {
+          case 'google_search':
+            await this.handleGoogleSearchPage();
+            break;
+          case 'job_search':
+            await this.handleJobSearchPage();
+            break;
+          case 'job_page':
+            await this.handleJobPage();
+            break;
+          case 'application':
+            await this.handleApplicationPage();
+            break;
+          default:
+            await this.handleUnknownPage();
         }
-        continue;
-      }
-
-      const element = document.querySelector(selector);
-      if (element && this.isElementVisible(element)) {
-        this.log(`Found login indicator: ${selector}`);
-
-        // Additional validation for sign-in links
-        if (selector.includes('signIn') || selector.includes('signin')) {
-          const href = element.getAttribute('href');
-          const text = element.textContent.trim().toLowerCase();
-
-          if ((href && href.includes('login')) || text.includes('sign in')) {
-            return true;
-          }
-        } else {
-          return true;
+        
+        // Add delay between iterations
+        await this.wait(CONFIG.TIMEOUTS.STANDARD);
+        
+      } catch (error) {
+        this.handleError(error, "automation_loop");
+        
+        // Reset application state on error and continue
+        if (this.state.isApplicationInProgress) {
+          this.state.completeApplication();
         }
+        
+        await this.wait(CONFIG.TIMEOUTS.EXTENDED);
       }
     }
-
-    // Also check for common "Account" or "Profile" elements that indicate logged-in state
-    const loggedInIndicators = [
-      'a[href*="/account/"]',
-      'button[data-testid="profile-menu"]',
-      'div[data-testid="user-menu"]',
-      'a:contains("My account")',
-      'a:contains("Profile")',
-      'button:contains("Account")'
-    ];
-
-    for (const selector of loggedInIndicators) {
-      if (selector.includes(':contains(')) {
-        const match = selector.match(/^([^:]+):contains\("([^"]+)"\)$/);
-        if (match) {
-          const [, baseSelector, text] = match;
-          const elements = document.querySelectorAll(baseSelector);
-
-          for (const element of elements) {
-            if (element.textContent && element.textContent.trim().includes(text)) {
-              this.log(`Found logged-in indicator: ${selector}`);
-              return false; // User IS logged in
-            }
-          }
-        }
-        continue;
-      }
-
-      const element = document.querySelector(selector);
-      if (element && this.isElementVisible(element)) {
-        this.log(`Found logged-in indicator: ${selector}`);
-        return false; // User IS logged in
-      }
-    }
-
-    return false; // No clear login indicators found, assume logged in
   }
 
-  /**
-   * Wait for user to log in to Indeed
-   */
-  async waitForUserLogin() {
-    const maxWaitTime = 15 * 60 * 1000; // 15 minutes max wait
-    const checkInterval = 10000; // Check every 10 seconds
-    let waitTime = 0;
+  // =============================================================================
+  // PAGE HANDLERS
+  // =============================================================================
 
-    this.statusOverlay.addInfo("Please sign in to Indeed to continue automation");
-
-    while (waitTime < maxWaitTime) {
-      await this.wait(checkInterval);
-      waitTime += checkInterval;
-
-      // Check if login indicators are gone (user has logged in)
-      const loginIndicators = [
-        'span#signInMobile',
-        'li.link-signin a#signIn[href*="account/login"]',
-        'a[href*="account/login"]',
-        'button[data-testid="signin-button"]'
-      ];
-
-      const stillLoggedOut = this.checkForLoginElements(loginIndicators);
-
-      if (!stillLoggedOut) {
-        this.log("✅ User logged in to Indeed, continuing automation");
-        this.statusOverlay.addSuccess("Indeed login successful!");
-        return;
-      }
-
-      // Check if we're on a page that clearly indicates login success
-      const currentUrl = window.location.href;
-      if (currentUrl.includes('indeed.com') &&
-        (currentUrl.includes('/account/') ||
-          currentUrl.includes('/dashboard') ||
-          currentUrl.includes('/jobs'))) {
-
-        // Double-check by looking for login elements again
-        const doubleCheck = this.checkForLoginElements(loginIndicators);
-        if (!doubleCheck) {
-          this.log("✅ Login confirmed by URL and element check");
-          this.statusOverlay.addSuccess("Indeed login confirmed!");
-          return;
-        }
-      }
-
-      this.log(`⏳ Waiting for user login... (${Math.floor(waitTime / 1000)}s)`);
-      this.statusOverlay.addInfo(`Waiting for Indeed login... (${Math.floor(waitTime / 1000)}s)`);
-    }
-
-    throw new Error("Login timeout - please refresh and try again");
+  async handleGoogleSearchPage() {
+    this.statusOverlay.addInfo("Processing Google search results");
+    await super.searchNext?.() || this.handleFallbackSearch();
   }
 
-  async detectPageTypeAndStart() {
-    const url = window.location.href;
-    this.log(`🔍 Detecting page type for: ${url}`);
+  async handleJobSearchPage() {
+    this.statusOverlay.addInfo("Processing Indeed job search page");
+    
+    // Check for prerequisites
+    await this.checkPrerequisites();
+    
+    // Process job cards
+    const jobCards = JobExtractor.extractJobCards();
+    this.log(`📋 Found ${jobCards.length} job cards`);
+    
+    if (jobCards.length === 0) {
+      await this.handleNoJobsFound();
+      return;
+    }
 
-    // FIRST: Check for Cloudflare verification
-    await this.checkCloudflareStatus();
-
-    // SECOND: Detect page type and proceed
-    if (url.includes("google.com/search")) {
-      this.statusOverlay.addInfo("Google search page detected");
-      await this.startSearchProcess();
-    } else if (this.isIndeedApplicationPage(url)) {
-      this.statusOverlay.addInfo("Indeed application page detected");
-      await this.startApplicationProcess();
-    } else if (this.isIndeedJobListingPage(url)) {
-      this.statusOverlay.addInfo("Indeed job page detected");
-      await this.handleJobListingPage();
-    } else if (this.isIndeedSearchPage(url)) {
-      this.statusOverlay.addInfo("Indeed search page detected");
-      await this.startJobSearchProcess();
+    // Find next unprocessed job
+    const unprocessedJob = this.findNextUnprocessedJob(jobCards);
+    
+    if (unprocessedJob) {
+      await this.processJob(unprocessedJob.card, unprocessedJob.details);
     } else {
-      this.log("❓ Unknown page type, waiting for navigation");
-      await this.waitForValidPage();
+      await this.handleAllJobsProcessed();
     }
   }
 
-  getIndeedJobCards() {
-    for (const selector of INDEED_SELECTORS.JOB_CARDS) {
-      const cards = document.querySelectorAll(selector);
-      if (cards.length > 0) {
-        this.log(
-          `Found ${cards.length} job cards using selector: ${selector}`
-        );
-        const visibleCards = Array.from(cards).filter((card) =>
-          this.isElementVisible(card)
-        );
-        if (visibleCards.length > 0) {
-          return visibleCards;
-        }
-      }
+  async handleJobPage() {
+    this.statusOverlay.addInfo("Processing Indeed job page");
+    
+    // Extract job description for form filling
+    this.currentJobDescription = JobExtractor.extractJobDescription();
+    
+    // Look for apply button
+    const applyButton = this.findApplyButton();
+    
+    if (!applyButton) {
+      this.statusOverlay.addWarning("No Easy Apply button found");
+      this.state.updateStatus('running');
+      return;
     }
 
-    this.log("No job cards found with standard selectors, trying fallback");
-
-    const fallbackCards = document.querySelectorAll(
-      '[data-jk], [class*="job"], [id*="job"]'
-    );
-    return Array.from(fallbackCards).filter(
-      (card) =>
-        this.isElementVisible(card) && card.querySelector('a[href*="viewjob"]')
-    );
-  }
-
-  getUnprocessedJobCards() {
-    const allCards = this.getIndeedJobCards();
-
-    return Array.from(allCards).filter((card) => {
-      const cardId = this.getJobCardId(card);
-      return !this.state.processedCards.has(cardId);
-    });
-  }
-
-  getJobCardId(jobCard) {
-    try {
-      const dataJk = jobCard.getAttribute("data-jk");
-      if (dataJk) return dataJk;
-
-      const titleLink = jobCard.querySelector(
-        'a[href*="viewjob?jk="], .jobTitle a, [data-testid="job-title"] a'
-      );
-      if (titleLink && titleLink.href) {
-        const match = titleLink.href.match(/jk=([^&]+)/);
-        if (match && match[1]) {
-          return match[1];
-        }
-      }
-
-      const anyLink = jobCard.querySelector('a[href*="jk="]');
-      if (anyLink && anyLink.href) {
-        const match = anyLink.href.match(/jk=([^&]+)/);
-        if (match && match[1]) {
-          return match[1];
-        }
-      }
-
-      const title = this.getJobTitleFromCard(jobCard) || "";
-      const company = this.getCompanyFromCard(jobCard) || "";
-      const fallbackId = `${title}-${company}`
-        .replace(/\s+/g, "")
-        .toLowerCase();
-
-      return (
-        fallbackId ||
-        `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      );
-    } catch (error) {
-      console.error("Error extracting job card ID:", error);
-      return `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    }
-  }
-
-  getJobUrlFromCard(card) {
-    const selectors = [
-      'a[href*="viewjob?jk="]',
-      ".jobTitle a",
-      '[data-testid="job-title"] a',
-      "h2 a",
-      "a[data-jk]",
-      'a[href*="/viewjob/"]',
-      'a[href*="indeed.com"]',
-    ];
-
-    for (const selector of selectors) {
-      const link = card.querySelector(selector);
-      if (link && link.href) {
-        if (
-          link.href.includes("indeed.com") &&
-          (link.href.includes("viewjob") || link.href.includes("jk="))
-        ) {
-          return link.href;
-        }
-      }
+    if (this.isExternalApplication()) {
+      this.statusOverlay.addInfo("External application detected, skipping");
+      this.state.updateStatus('running');
+      return;
     }
 
+    // Click apply button and wait for form
+    this.statusOverlay.addInfo("Clicking Apply button");
+    applyButton.click();
+    
+    await this.waitForApplicationPage();
+  }
+
+  async handleApplicationPage() {
+    this.statusOverlay.addInfo("Processing Indeed application page");
+    
+    // Check if already applied
+    if (this.checkAlreadyApplied()) {
+      this.statusOverlay.addInfo("Already applied to this job");
+      await this.handleApplicationComplete(true);
+      return;
+    }
+
+    // Check if form is ready
+    if (!this.formHandler || !this.formHandler.findFormContainer()) {
+      this.statusOverlay.addWarning("Application form not ready");
+      await this.wait(CONFIG.TIMEOUTS.STANDARD);
+      return;
+    }
+
+    // Fill and submit form
+    await this.fillApplicationForm();
+  }
+
+  async handleUnknownPage() {
+    this.statusOverlay.addInfo("Unknown page type, waiting for navigation");
+    await this.waitForValidPage();
+  }
+
+  // =============================================================================
+  // JOB PROCESSING
+  // =============================================================================
+
+  findNextUnprocessedJob(jobCards) {
+    for (const card of jobCards) {
+      const jobDetails = JobExtractor.extractJobDetails(card);
+      
+      // Skip if already processed
+      if (this.state.isJobProcessed(jobDetails.jobId)) {
+        continue;
+      }
+      
+      // Skip if no valid URL
+      if (!jobDetails.jobUrl || !this.isValidJobUrl(jobDetails.jobUrl)) {
+        this.state.addProcessedJob(jobDetails.jobId);
+        continue;
+      }
+      
+      return { card, details: jobDetails };
+    }
+    
     return null;
   }
 
-  getJobTitleFromCard(card) {
-    for (const selector of INDEED_SELECTORS.JOB_TITLE) {
-      const element = card.querySelector(selector);
-      if (element) {
-        const title =
-          element.getAttribute("title") || element.textContent?.trim();
-        if (title && title.length > 0) {
-          return title;
-        }
-      }
-    }
-
-    return "Job Application";
-  }
-
-  getCompanyFromCard(jobCard) {
-    for (const selector of INDEED_SELECTORS.COMPANY_NAME) {
-      const element = jobCard.querySelector(selector);
-      if (element) {
-        return element.textContent?.trim() || "";
-      }
-    }
-
-    return "";
-  }
-
-  getLocationFromCard(jobCard) {
-    for (const selector of INDEED_SELECTORS.LOCATION) {
-      const element = jobCard.querySelector(selector);
-      if (element) {
-        return element.textContent?.trim() || "";
-      }
-    }
-
-    return "";
-  }
-
-  getSalaryFromCard(jobCard) {
-    for (const selector of INDEED_SELECTORS.SALARY) {
-      const element = jobCard.querySelector(selector);
-      if (element) {
-        return element.textContent?.trim() || "";
-      }
-    }
-
-    return "";
-  }
-
-  extractJobDetailsFromCard(jobCard) {
+  async processJob(jobCard, jobDetails) {
     try {
-      const title = this.getJobTitleFromCard(jobCard) || "Unknown Position";
-      const company = this.getCompanyFromCard(jobCard) || "Unknown Company";
-      const location = this.getLocationFromCard(jobCard) || "Unknown Location";
-      const salary = this.getSalaryFromCard(jobCard) || "Not specified";
-      const jobUrl = this.getJobUrlFromCard(jobCard) || window.location.href;
-      const jobId = this.getJobCardId(jobCard);
-
-      return {
-        jobId,
-        title,
-        company,
-        location,
-        salary,
-        jobUrl,
-        platform: "indeed",
-        extractedAt: Date.now(),
-        workplace: "Not specified",
-        postedDate: "Not specified",
-        applicants: "Not specified",
-      };
+      this.log(`🎯 Processing job: ${jobDetails.title} at ${jobDetails.company}`);
+      this.statusOverlay.addInfo(`Processing: ${jobDetails.title}`);
+      
+      this.state.startApplication(jobDetails);
+      this.state.addProcessedJob(jobDetails.jobId);
+      
+      // Mark job card as processing
+      this.markJobCard(jobCard, 'processing');
+      
+      // Click job card to view details
+      const jobLink = jobCard.querySelector('.jcs-JobTitle a, [data-testid="job-title"] a, .jobTitle a');
+      if (jobLink) {
+        jobLink.click();
+        await this.wait(CONFIG.TIMEOUTS.STANDARD);
+      }
+      
     } catch (error) {
-      console.error("Error extracting Indeed job details:", error);
-      return {
-        jobId: "",
-        title: "Unknown Position",
-        company: "Unknown Company",
-        location: "Unknown Location",
-        salary: "Not specified",
-        jobUrl: window.location.href,
-        platform: "indeed",
-        extractedAt: Date.now(),
-        workplace: "Not specified",
-        postedDate: "Not specified",
-        applicants: "Not specified",
-      };
+      this.markJobCard(jobCard, 'error');
+      this.state.completeApplication();
+      throw error;
+    }
+  }
+
+  async fillApplicationForm() {
+    try {
+      this.statusOverlay.addInfo("Filling application form");
+      
+      // Update form handler with current job description
+      if (this.formHandler && this.currentJobDescription) {
+        this.formHandler.jobDescription = this.currentJobDescription;
+      }
+      
+      // Fill and submit form
+      const success = await this.formHandler.fillCompleteForm();
+      
+      if (success) {
+        this.statusOverlay.addSuccess("Application submitted successfully");
+        await this.trackApplication();
+        await this.handleApplicationComplete(true);
+      } else {
+        this.statusOverlay.addError("Failed to submit application");
+        await this.handleApplicationComplete(false);
+      }
+      
+    } catch (error) {
+      this.statusOverlay.addError(`Form submission error: ${error.message}`);
+      await this.handleApplicationComplete(false);
+      throw error;
+    }
+  }
+
+  async handleApplicationComplete(success) {
+    if (success) {
+      this.markCurrentJobCard('applied');
+      await this.trackApplication();
+    } else {
+      this.markCurrentJobCard('error');
+    }
+    
+    this.state.completeApplication();
+    this.currentJobDescription = null;
+    
+    // Add delay before next job
+    await this.wait(CONFIG.TIMEOUTS.EXTENDED);
+  }
+
+  // =============================================================================
+  // UTILITY METHODS
+  // =============================================================================
+
+  async checkPrerequisites() {
+    // Check for Cloudflare blocks
+    if (PageDetector.isCloudflareBlocked()) {
+      this.statusOverlay.addWarning("Cloudflare verification required");
+      await this.waitForCloudflareResolution();
+    }
+    
+    // Check login status
+    if (PageDetector.isLoggedOut()) {
+      this.statusOverlay.addWarning("Please sign in to Indeed");
+      await this.waitForLogin();
+    }
+  }
+
+  async waitForCloudflareResolution() {
+    const maxWait = CONFIG.TIMEOUTS.CLOUDFLARE_WAIT;
+    const checkInterval = 5000;
+    let waited = 0;
+    
+    while (waited < maxWait && PageDetector.isCloudflareBlocked()) {
+      await this.wait(checkInterval);
+      waited += checkInterval;
+      this.statusOverlay.addInfo(`Waiting for Cloudflare verification... (${Math.floor(waited / 1000)}s)`);
+    }
+    
+    if (PageDetector.isCloudflareBlocked()) {
+      throw new Error("Cloudflare verification timeout");
+    }
+  }
+
+  async waitForLogin() {
+    const maxWait = CONFIG.TIMEOUTS.LOGIN_WAIT;
+    const checkInterval = 10000;
+    let waited = 0;
+    
+    while (waited < maxWait && PageDetector.isLoggedOut()) {
+      await this.wait(checkInterval);
+      waited += checkInterval;
+      this.statusOverlay.addInfo(`Waiting for login... (${Math.floor(waited / 1000)}s)`);
+    }
+    
+    if (PageDetector.isLoggedOut()) {
+      throw new Error("Login timeout");
+    }
+  }
+
+  async waitForPageReady() {
+    await this.wait(CONFIG.TIMEOUTS.STANDARD);
+    
+    // Wait for basic page elements to load
+    const maxWait = CONFIG.TIMEOUTS.PAGE_LOAD;
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWait) {
+      if (document.readyState === 'complete' && document.body) {
+        return;
+      }
+      await this.wait(500);
+    }
+  }
+
+  async waitForApplicationPage() {
+    const maxWait = CONFIG.TIMEOUTS.PAGE_LOAD;
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWait) {
+      const pageType = PageDetector.detectPageType();
+      if (pageType === 'application') {
+        return;
+      }
+      await this.wait(1000);
+    }
+    
+    throw new Error("Timeout waiting for application page");
+  }
+
+  async waitForValidPage() {
+    const maxWait = CONFIG.TIMEOUTS.PAGE_LOAD;
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWait) {
+      const pageType = PageDetector.detectPageType();
+      if (pageType !== 'unknown') {
+        return;
+      }
+      await this.wait(1000);
+    }
+    
+    throw new Error("Timeout waiting for valid page");
+  }
+
+  findApplyButton() {
+    for (const selector of SELECTORS.APPLY_BUTTON) {
+      const button = document.querySelector(selector);
+      if (button && PageDetector.isElementVisible(button) && !button.disabled) {
+        return button;
+      }
+    }
+    return null;
+  }
+
+  isExternalApplication() {
+    return SELECTORS.EXTERNAL_APPLY.some(selector => {
+      const element = document.querySelector(selector);
+      return element && PageDetector.isElementVisible(element);
+    });
+  }
+
+  checkAlreadyApplied() {
+    const pageText = document.body.innerText.toLowerCase();
+    const indicators = [
+      "you've applied to this job",
+      "already applied",
+      "application submitted",
+      "you applied",
+    ];
+    return indicators.some(text => pageText.includes(text));
+  }
+
+  isValidJobUrl(url) {
+    if (!url || typeof url !== "string") return false;
+    
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname.includes("indeed.com") && 
+             (url.includes("viewjob") || url.includes("jk=")) &&
+             !url.includes("/apply/") && 
+             !url.includes("smartapply");
+    } catch {
+      return false;
     }
   }
 
   markJobCard(jobCard, status) {
     try {
-      const existingHighlight = jobCard.querySelector(".job-highlight");
-      if (existingHighlight) {
-        existingHighlight.remove();
-      }
-
+      // Remove existing highlight
+      const existing = jobCard.querySelector(".job-highlight");
+      if (existing) existing.remove();
+      
+      // Create new highlight
       const highlight = document.createElement("div");
       highlight.className = "job-highlight";
-
-      let color, text;
-      switch (status) {
-        case "processing":
-          color = "#2196F3";
-          text = "Processing";
-          break;
-        case "applied":
-          color = "#4CAF50";
-          text = "Applied";
-          break;
-        case "skipped":
-          color = "#FF9800";
-          text = "Skipped";
-          break;
-        case "error":
-          color = "#F44336";
-          text = "Error";
-          break;
-        default:
-          color = "#9E9E9E";
-          text = "Unknown";
-      }
-
+      
+      const colors = {
+        processing: "#2196F3",
+        applied: "#4CAF50",
+        skipped: "#FF9800",
+        error: "#F44336"
+      };
+      
+      const color = colors[status] || "#9E9E9E";
+      
       highlight.style.cssText = `
         position: absolute;
         top: 0;
@@ -823,1785 +825,267 @@ export default class IndeedPlatform extends BasePlatformAutomation {
         border-radius: 0 0 0 5px;
         z-index: 999;
       `;
-      highlight.textContent = text;
-
+      
+      highlight.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+      
       jobCard.style.border = `2px solid ${color}`;
       jobCard.style.position = "relative";
-
       jobCard.appendChild(highlight);
+      
     } catch (error) {
       this.log("Error marking job card:", error);
     }
   }
 
-  markLastJobCardIfAvailable(status) {
-    if (this.state.lastClickedJobCard) {
-      this.markJobCard(this.state.lastClickedJobCard, status);
-    }
-  }
-
-  async startSearchProcess() {
-    try {
-      // Prevent duplicate search process starts
-      if (this.searchProcessStarted) {
-        this.log("⚠️ Search process already started, ignoring duplicate");
-        return;
-      }
-
-      this.statusOverlay.addInfo("Starting Indeed job search process");
-
-      // Check for Cloudflare verification first
-      await this.checkCloudflareStatus();
-
-      // Check if user is logged in
-      await this.checkLoginStatus();
-
-      this.searchProcessStarted = true;
-
-      this.statusOverlay.addInfo("All verifications passed, proceeding with search");
-      this.statusOverlay.updateStatus("searching");
-
-      // Continue with existing search logic
-      await this.fetchSearchTaskData();
-    } catch (error) {
-      this.searchProcessStarted = false; // Reset on error
-      this.reportError(error, { phase: "search" });
-    }
-  }
-
-
-  async startJobSearchProcess() {
-    try {
-      this.statusOverlay.addInfo("Starting job search on Indeed results page");
-
-      // Check for Cloudflare verification
-      await this.checkCloudflareStatus();
-
-      // Check login status
-      await this.checkLoginStatus();
-
-      this.statusOverlay.updateStatus("searching");
-
-      await this.fetchSearchTaskData();
-    } catch (error) {
-      this.reportError(error, { phase: "jobSearch" });
-    }
-  }
-
-  async fetchSearchTaskData() {
-    this.log("📡 Fetching search task data from background");
-    this.statusOverlay.addInfo("Fetching search task data...");
-
-    const success = this.safeSendPortMessage({ type: "GET_SEARCH_TASK" });
-    if (!success) {
-      throw new Error("Failed to request search task data");
-    }
-  }
-
-  processSearchTaskData(data) {
-    try {
-      this.log("📊 Processing search task data:", data);
-
-      if (!data) {
-        this.log("⚠️ No search task data provided");
-        return;
-      }
-
-      this.searchData = {
-        tabId: data.tabId,
-        limit: data.limit || 10,
-        current: data.current || 0,
-        domain: data.domain || this.getPlatformDomains(),
-        submittedLinks: data.submittedLinks
-          ? data.submittedLinks.map((link) => ({ ...link, tries: 0 }))
-          : [],
-        searchLinkPattern: data.searchLinkPattern
-          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
-          : this.getSearchLinkPattern(),
-      };
-
-      this.log("✅ Search data initialized:", this.searchData);
-      this.statusOverlay.addSuccess("Search initialization complete");
-
-      setTimeout(() => this.searchNext(), 1000);
-    } catch (error) {
-      this.log("❌ Error processing search task data:", error);
-      this.statusOverlay.addError(
-        "Error processing search task data: " + error.message
-      );
-    }
-  }
-
-  async searchNext() {
-    try {
-      this.log("Executing Indeed searchNext");
-
-      if (this.state.isApplicationInProgress || this.state.pendingApplication) {
-        this.log("Application in progress, checking status...");
-        this.statusOverlay.addInfo(
-          "Application in progress, waiting to complete..."
-        );
-
-        const now = Date.now();
-        const applicationDuration =
-          now - (this.state.applicationStartTime || now);
-
-        if (applicationDuration > this.maxApplicationTime) {
-          this.log(
-            "Application has been running for too long, resetting state"
-          );
-          this.statusOverlay.addWarning(
-            "Application timeout detected, resetting..."
-          );
-          this.resetApplicationStateOnError();
-        } else {
-          this.safeSendPortMessage({ type: "CHECK_APPLICATION_STATUS" });
-          return;
+  markCurrentJobCard(status) {
+    if (this.state.currentJobData) {
+      // Find the job card by ID and mark it
+      const jobCards = JobExtractor.extractJobCards();
+      for (const card of jobCards) {
+        const cardId = JobExtractor.extractJobId(card);
+        if (cardId === this.state.currentJobData.jobId) {
+          this.markJobCard(card, status);
+          break;
         }
       }
-
-      this.statusOverlay.addInfo("Searching for job cards...");
-
-      if (this.isIndeedSearchPage(window.location.href)) {
-        await this.processIndeedJobCards();
-      } else if (window.location.href.includes("google.com/search")) {
-        await super.searchNext();
-      } else {
-        this.statusOverlay.addWarning("Unknown page type for search");
-        await this.waitForValidPage();
-      }
-    } catch (err) {
-      console.error("Error in Indeed searchNext:", err);
-      this.statusOverlay.addError("Error in search: " + err.message);
-      this.resetApplicationStateOnError();
-
-      setTimeout(() => {
-        if (!this.state.isApplicationInProgress) {
-          this.searchNext();
-        }
-      }, 5000);
     }
   }
 
-  async processIndeedJobCards() {
-    try {
-      const jobCards = this.getIndeedJobCards();
-      this.log(`Found ${jobCards.length} job cards on Indeed page`);
-
-      if (jobCards.length === 0) {
-        await this.handleNoJobCardsFound();
-        return;
-      }
-
-      const unprocessedCard = await this.findValidUnprocessedJobCard(jobCards);
-
-      if (unprocessedCard) {
-        await this.processIndeedJobCard(unprocessedCard);
-      } else {
-        await this.handleNoUnprocessedJobCards();
-      }
-    } catch (error) {
-      console.error("Error processing Indeed job cards:", error);
-      this.statusOverlay.addError(
-        "Error processing job cards: " + error.message
-      );
-      throw error;
-    }
-  }
-
-  async findValidUnprocessedJobCard(jobCards) {
-    for (const card of jobCards) {
-      try {
-        const cardId = this.getJobCardId(card);
-
-        if (this.state.processedCards.has(cardId)) {
-          continue;
-        }
-
-        const jobUrl = this.getJobUrlFromCard(card);
-        if (!jobUrl) {
-          this.log(`Skipping card ${cardId} - no valid URL found`);
-          continue;
-        }
-
-        if (!this.isValidJobUrl(jobUrl)) {
-          this.log(`Skipping card ${cardId} - invalid URL format: ${jobUrl}`);
-          continue;
-        }
-
-        const normalizedUrl = this.normalizeUrlFully(jobUrl);
-
-        if (this.isLinkProcessed(normalizedUrl)) {
-          this.state.processedCards.add(cardId);
-          this.log(`Skipping card ${cardId} - URL already processed`);
-          continue;
-        }
-
-        const hasTitle = this.getJobTitleFromCard(card);
-        if (!hasTitle || hasTitle === "Job Application") {
-          this.log(`Skipping card ${cardId} - no valid title found`);
-          continue;
-        }
-
-        this.log(`Found valid unprocessed job card: ${cardId}`);
-        return { card, url: jobUrl, cardId };
-      } catch (error) {
-        console.error(`Error validating job card:`, error);
-        continue;
-      }
-    }
-
-    return null;
-  }
-
-  isValidJobUrl(url) {
-    if (!url || typeof url !== "string") return false;
-
-    try {
-      const urlObj = new URL(url);
-
-      if (!urlObj.hostname.includes("indeed.com")) return false;
-
-      if (!url.includes("viewjob") && !url.includes("jk=")) return false;
-
-      if (url.includes("/apply/") || url.includes("smartapply")) return false;
-
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async processIndeedJobCard(jobData) {
-    const { card, url, cardId } = jobData;
-
-    try {
-      this.statusOverlay.addSuccess("Found Indeed job to apply: " + url);
-      this.state.processedCards.add(cardId);
-
-      if (this.state.isApplicationInProgress) {
-        this.log("Application in progress, aborting new job processing");
-        return;
-      }
-
-      const jobDetails = this.extractJobDetailsFromCard(card);
-
-      this.markJobCard(card, "processing");
-
-      this.state.isApplicationInProgress = true;
-      this.state.applicationStartTime = Date.now();
-      this.state.pendingApplication = true;
-      this.state.formDetected = false;
-      this.state.currentRedirectAttempts = 0;
-      this.state.lastClickedJobCard = card;
-
-      this.currentJobDetails = jobDetails;
-
-      if (!this.applicationState.processedUrls) {
-        this.applicationState.processedUrls = new Set();
-      }
-      this.applicationState.processedUrls.add(this.normalizeUrlFully(url));
-
-      this.setStuckDetectionTimeout();
-
-      this.safeSendPortMessage({
-        type: this.getJobTaskMessageType(),
-        data: {
-          url,
-          title: jobDetails.title,
-          company: jobDetails.company,
-          location: jobDetails.location,
-        },
-      });
-    } catch (err) {
-      this.handleJobTaskError(err, url, card);
-    }
-  }
-
-  async handleNoJobCardsFound() {
-    this.statusOverlay.addInfo(
-      "No job cards found, attempting to load more..."
-    );
-
+  async handleNoJobsFound() {
+    this.statusOverlay.addInfo("No job cards found, trying to load more");
+    
+    // Try scrolling to load more jobs
     window.scrollTo(0, document.body.scrollHeight);
-    await this.wait(2000);
-
-    const jobCardsAfterScroll = this.getIndeedJobCards();
+    await this.wait(CONFIG.TIMEOUTS.STANDARD);
+    
+    const jobCardsAfterScroll = JobExtractor.extractJobCards();
     if (jobCardsAfterScroll.length > 0) {
-      this.statusOverlay.addInfo("Found jobs after scrolling");
-      return await this.processIndeedJobCards();
+      return; // Will be processed in next iteration
     }
-
-    const nextButton = document.querySelector(
-      'a[aria-label="Next Page"], .np[aria-label="Next"], .pn'
-    );
-
-    if (
-      nextButton &&
-      this.isElementVisible(nextButton) &&
-      !nextButton.getAttribute("aria-disabled")
-    ) {
-      this.statusOverlay.addInfo('Clicking "Next Page" button');
+    
+    // Try next page
+    const nextButton = document.querySelector(SELECTORS.NEXT_PAGE[0]);
+    if (nextButton && PageDetector.isElementVisible(nextButton)) {
+      this.statusOverlay.addInfo("Moving to next page");
       nextButton.click();
-
-      await this.wait(3000);
-
-      if (!this.state.isApplicationInProgress) {
-        return this.searchNext();
-      }
+      await this.wait(CONFIG.TIMEOUTS.EXTENDED);
     } else {
-      this.statusOverlay.addSuccess("All Indeed jobs processed!");
-      this.safeSendPortMessage({ type: "SEARCH_COMPLETED" });
+      this.statusOverlay.addSuccess("All jobs processed!");
+      this.state.updateStatus('completed');
     }
   }
 
-  async handleNoUnprocessedJobCards() {
-    this.statusOverlay.addInfo("All visible job cards have been processed");
-    await this.handleNoJobCardsFound();
+  async handleAllJobsProcessed() {
+    this.statusOverlay.addInfo("All visible jobs processed");
+    await this.handleNoJobsFound();
   }
 
-  async startApplicationProcess() {
-    try {
-      this.log("📝 Starting Indeed application process");
-      this.statusOverlay.addInfo("Starting application process");
-
-      // Check for Cloudflare verification
-      await this.checkCloudflareStatus();
-
-      // Check login status
-      await this.checkLoginStatus();
-
-      if (!this.userProfile) {
-        this.log("⚠️ No user profile available, attempting to fetch...");
-        await this.fetchSendCvTaskData();
-      }
-
-      if (this.checkIndeedSubmissionSuccess()) {
-        await this.handleAlreadyApplied();
-        return;
-      }
-
-      if (this.checkAlreadyApplied()) {
-        await this.handleAlreadyApplied();
-        return;
-      }
-
-      await this.apply();
-    } catch (error) {
-      this.reportError(error, { phase: "application" });
-      this.handleApplicationError(error);
-    }
+  async handleFallbackSearch() {
+    this.statusOverlay.addInfo("Fallback search not implemented");
+    // Implement fallback search logic if needed
   }
 
-  async handleJobListingPage() {
+  async ensureUserProfile() {
+    if (this.userProfile) return;
+    
     try {
-      this.statusOverlay.addInfo(
-        "Indeed job listing page detected - looking for Apply button"
-      );
-
-      this.cachedJobDescription = await this.extractIndeedJobDescription();
-
-      const applyButton = await this.findIndeedApplyButton();
-      if (!applyButton) {
-        throw new Error("Cannot find Apply button on Indeed job listing page");
-      }
-
-      this.log("🖱️ Clicking Apply button");
-      applyButton.click();
-
-      await this.waitForIndeedApplicationPage();
-      this.statusOverlay.addSuccess("Application page loaded successfully");
-
-      await this.startApplicationProcess();
-    } catch (error) {
-      this.reportError(error, { phase: "jobListing" });
-      this.handleApplicationError(error);
-    }
-  }
-
-  async handleJobPage() {
-    try {
-      this.statusOverlay.addInfo("Processing Indeed job page");
-
-      const isApplyPage = this.isOnApplyFormPage();
-      this.log("Is on apply form page:", isApplyPage);
-
-      if (isApplyPage) {
-        this.statusOverlay.addInfo(
-          "On Indeed application form page, starting application process"
-        );
-
-        if (!this.userProfile) {
-          this.userProfile = await this.getProfileData();
-        }
-
-        if (this.userProfile) {
-          this.statusOverlay.addInfo("Starting form completion process");
-          this.state.isApplicationInProgress = true;
-          this.state.applicationStartTime = Date.now();
-          this.state.formDetected = true;
-
-          const success = await this.handleApplyForm();
-
-          this.state.isApplicationInProgress = false;
-          this.state.applicationStartTime = null;
-          this.state.formDetected = false;
-
-          if (success) {
-            this.statusOverlay.addSuccess("Application completed successfully");
-
-            if (this.currentJobDetails) {
-              this.trackApplication(this.currentJobDetails);
-            }
-
-            if (this.state.pendingApplication) {
-              this.state.pendingApplication = false;
-              this.statusOverlay.addInfo("Ready to process next job");
-            }
-          } else {
-            this.statusOverlay.addError("Failed to complete application");
-
-            if (this.state.pendingApplication) {
-              this.state.pendingApplication = false;
-            }
-          }
-        } else {
-          this.statusOverlay.addError("No profile data available");
-        }
-      } else {
-        this.statusOverlay.addInfo("Looking for Easy Apply button");
-
-        let applyButton = await this.findIndeedApplyButton();
-
-        if (applyButton) {
-          this.statusOverlay.addInfo("Found apply button, clicking it");
-          this.state.isApplicationInProgress = true;
-          this.state.applicationStartTime = Date.now();
-          this.state.pendingApplication = true;
-          this.state.formDetected = false;
-          this.state.currentRedirectAttempts = 0;
-
-          applyButton.click();
-
-          this.checkForRedirectOrForm();
-        } else {
-          this.statusOverlay.addInfo(
-            "No apply button found or not an Easy Apply job"
-          );
+      if (this.userId) {
+        this.userProfile = await this.userService.getUserDetails();
+        this.statusOverlay.addSuccess("User profile loaded");
+        
+        if (this.formHandler) {
+          this.formHandler.userData = this.userProfile;
         }
       }
     } catch (error) {
-      this.log("Error handling job page:", error);
-      this.statusOverlay.addError(error);
-
-      this.state.isApplicationInProgress = false;
-      this.state.applicationStartTime = null;
-      this.state.pendingApplication = false;
-      this.state.formDetected = false;
+      this.statusOverlay.addWarning("Failed to load user profile");
+      this.log("Error loading user profile:", error);
     }
   }
 
-  async apply() {
+  async trackApplication() {
+    if (!this.state.currentJobData || !this.userId) return;
+    
     try {
-      this.statusOverlay.addInfo("Starting Indeed application process");
-      this.statusOverlay.updateStatus("applying");
-
-      return await this.handleApplyForm();
-    } catch (e) {
-      this.log("Error in Indeed apply:", e);
-      throw new Error(
-        "Error during application process: " + this.errorToString(e)
-      );
-    }
-  }
-
-  async handleApplyForm() {
-    try {
-      await this.wait(1500);
-
-      if (!this.formHandler) {
-        this.statusOverlay.addError("Form handler not available");
-        return false;
-      }
-
-      this.formHandler.jobDescription =
-        this.cachedJobDescription || (await this.extractIndeedJobDescription());
-      this.formHandler.userData = this.userProfile;
-
-      this.statusOverlay.addInfo("Starting comprehensive form filling process");
-
-      const success = await this.formHandler.fillCompleteForm();
-
-      if (success) {
-        this.statusOverlay.addSuccess("Application submitted successfully!");
-        this.markLastJobCardIfAvailable("applied");
-      } else {
-        this.statusOverlay.addInfo(
-          "Application process completed but success not confirmed"
-        );
-        this.markLastJobCardIfAvailable("error");
-      }
-
-      return success;
-    } catch (error) {
-      this.log("Error handling application form:", error);
-      this.statusOverlay.addError("Form submission error: " + error.message);
-      this.markLastJobCardIfAvailable("error");
-      return false;
-    }
-  }
-
-  async findIndeedApplyButton() {
-    try {
-      this.statusOverlay.addInfo("Looking for Indeed apply button...");
-
-      for (const selector of INDEED_SELECTORS.APPLY_BUTTON) {
-        const button = document.querySelector(selector);
-        if (button && this.isElementVisible(button) && !button.disabled) {
-          this.statusOverlay.addSuccess("✅ Found Easy Apply button");
-          return button;
-        }
-      }
-
-      for (const selector of INDEED_SELECTORS.EXTERNAL_APPLY) {
-        const button = document.querySelector(selector);
-        if (button && this.isElementVisible(button)) {
-          this.statusOverlay.addWarning(
-            "⚠️ Found External Apply button (redirects to company site)"
-          );
-          return null;
-        }
-      }
-
-      const allButtons = document.querySelectorAll("button, a");
-      for (const button of allButtons) {
-        if (
-          button.textContent.toLowerCase().includes("apply") &&
-          this.isElementVisible(button) &&
-          !button.disabled
-        ) {
-          this.statusOverlay.addInfo("Found generic apply button");
-          return button;
-        }
-      }
-
-      this.statusOverlay.addWarning("❌ No apply button found");
-      return null;
-    } catch (error) {
-      console.error("Error finding apply button:", error);
-      this.statusOverlay.addError(
-        "Error finding apply button: " + error.message
-      );
-      return null;
-    }
-  }
-
-  isOnApplyFormPage() {
-    const url = window.location.href;
-
-    if (
-      url.includes("smartapply.indeed.com/beta/indeedapply/form") ||
-      url.includes("indeed.com/apply") ||
-      url.includes("indeed.com/viewjob")
-    ) {
-      this.log("Detected Indeed application form page via URL");
-      return true;
-    }
-
-    // Use FormHandler's form detection
-    if (this.formHandler) {
-      const formContainer = this.formHandler.findFormContainer();
-      return formContainer !== null;
-    }
-
-    return false;
-  }
-
-  setupFormDetectionObserver() {
-    try {
-      this.formObserver = new MutationObserver((mutations) => {
-        if (this.state.isApplicationInProgress || this.isOnApplyPage()) {
-          // Use FormHandler for form detection
-          if (this.formHandler) {
-            const formContainer = this.formHandler.findFormContainer();
-            const hasForm = formContainer !== null;
-
-            if (hasForm && !this.state.formDetected) {
-              this.log("Form detected by mutation observer");
-              this.state.formDetected = true;
-
-              setTimeout(() => {
-                this.handleDetectedForm();
-              }, 1000);
-            }
-          }
-        }
-      });
-
-      this.formObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-      });
-
-      this.log("Form detection observer set up");
-    } catch (error) {
-      this.log("Error setting up form observer:", error);
-    }
-  }
-
-  isOnApplyPage() {
-    const url = window.location.href;
-    return (
-      url.includes("smartapply.indeed.com") || url.includes("indeed.com/apply")
-    );
-  }
-
-  async trackApplication(jobDetails) {
-    try {
-      if (!this.userProfile || !this.userId) {
-        return;
-      }
-
-      const updateResponse = await fetch(
-        `${this.getApiHost()}/api/applications`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            userId: this.userId,
-          }),
-        }
-      );
-
-      await fetch(`${this.getApiHost()}/api/applied-jobs`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ...jobDetails,
-          userId: this.userId,
-          applicationPlatform: "indeed",
-        }),
+      await this.applicationTracker.trackApplication({
+        ...this.state.currentJobData,
+        userId: this.userId,
+        applicationPlatform: "indeed",
       });
     } catch (error) {
       this.log("Error tracking application:", error);
     }
   }
 
-  async extractIndeedJobDescription() {
+  performHealthCheck() {
     try {
-      this.log("🔍 Extracting Indeed job details...");
-      this.statusOverlay.addInfo("Extracting job details...");
-
-      const jobDescription = {
-        title: DomUtils.extractText([
-          ".jobsearch-JobInfoHeader-title",
-          '[data-testid="job-title"]',
-          "h1",
-        ]),
-        company: DomUtils.extractText([
-          ".jobsearch-InlineCompanyRating",
-          '[data-testid="company-name"]',
-          ".companyName",
-        ]),
-        location: DomUtils.extractText([
-          ".jobsearch-JobLocationDropdown",
-          '[data-testid="job-location"]',
-          ".locationsContainer",
-        ]),
-        salary: DomUtils.extractText([
-          ".salary-snippet",
-          '[data-testid="salary-snippet"]',
-        ]),
-      };
-
-      const fullDescriptionElement = document.querySelector(
-        '#jobDescriptionText, .jobsearch-jobDescriptionText, [data-testid="job-description"]'
-      );
-
-      if (fullDescriptionElement) {
-        jobDescription.fullDescription =
-          fullDescriptionElement.textContent.trim();
-      }
-
-      this.log("✅ Indeed job details extracted:", jobDescription);
-      return jobDescription;
-    } catch (error) {
-      this.log("❌ Error extracting Indeed job details:", error);
-      return { title: document.title || "Job Position" };
-    }
-  }
-
-  extractJobIdFromUrl() {
-    try {
-      const url = window.location.href;
-      const match = url.match(/jk=([^&]+)/);
-      return match ? match[1] : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  async getProfileData() {
-    try {
-      if (this.userProfile) {
-        return this.userProfile;
-      }
-
-      this.statusOverlay.addInfo("Fetching profile data");
-
-      try {
-        return new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage(
-            { action: "getProfileData" },
-            (response) => {
-              if (chrome.runtime.lastError) {
-                this.statusOverlay.addInfo(
-                  "Error from background: " + chrome.runtime.lastError.message
-                );
-                resolve(this.getFallbackProfile());
-              } else if (response && response.success && response.data) {
-                this.log(
-                  "Got profile data from background script",
-                  response.data
-                );
-                this.statusOverlay.addInfo(
-                  "Got profile data from background script"
-                );
-                resolve(response.data);
-              } else {
-                this.statusOverlay.addInfo(
-                  "No valid profile data in response, using fallback"
-                );
-                resolve(this.getFallbackProfile());
-              }
-            }
-          );
-        });
-      } catch (err) {
-        this.statusOverlay.addInfo(
-          "Error requesting profile data: " + err.message
-        );
-        return this.getFallbackProfile();
-      }
-    } catch (error) {
-      this.log("Error getting profile data:", error);
-      return this.getFallbackProfile();
-    }
-  }
-
-  getFallbackProfile() {
-    this.statusOverlay.addInfo("Using fallback profile data");
-    return this.userProfile;
-  }
-
-  checkIndeedSubmissionSuccess() {
-    const url = window.location.href;
-    if (
-      url.includes("success") ||
-      url.includes("confirmation") ||
-      url.includes("applied")
-    ) {
-      this.statusOverlay.addSuccess(
-        "URL indicates success - application submitted"
-      );
-      return true;
-    }
-
-    // Use FormHandler's success detection
-    if (this.formHandler) {
-      return this.formHandler.isSuccessPage();
-    }
-
-    const pageText = document.body.innerText.toLowerCase();
-    return (
-      pageText.includes("application submitted") ||
-      pageText.includes("successfully applied") ||
-      pageText.includes("thank you for applying") ||
-      pageText.includes("successfully submitted") ||
-      pageText.includes("application complete")
-    );
-  }
-
-  checkAlreadyApplied() {
-    const pageText = document.body.innerText.toLowerCase();
-
-    const alreadyAppliedTexts = [
-      "you've applied to this job",
-      "already applied",
-      "application submitted",
-      "you applied",
-    ];
-
-    return alreadyAppliedTexts.some((text) => pageText.includes(text));
-  }
-
-  async checkIndeedAlreadyApplied() {
-    try {
-      const url = window.location.href;
-
-      if (url.includes("smartapply.indeed.com/beta/indeedapply/form")) {
-        const pageText = document.body.innerText;
-        const alreadyAppliedText = "You've applied to this job";
-
-        if (pageText.includes(alreadyAppliedText)) {
-          this.statusOverlay.addInfo(
-            "Found 'You've applied to this job' message - already applied"
-          );
-          return true;
-        }
-      }
-
-      const appliedIndicators = [
-        ".indeed-apply-status-applied",
-        ".application-submitted",
-        ".already-applied",
-      ];
-
-      for (const selector of appliedIndicators) {
-        if (document.querySelector(selector)) {
-          this.statusOverlay.addInfo(
-            "Found applied indicator - already applied"
-          );
-          return true;
-        }
-      }
-
-      return false;
-    } catch (error) {
-      console.error("Error checking if already applied:", error);
-      return false;
-    }
-  }
-
-  isOnIndeedApplyFormPage() {
-    const url = window.location.href;
-
-    if (
-      url.includes("smartapply.indeed.com/beta/indeedapply/form") ||
-      url.includes("indeed.com/apply") ||
-      url.includes("indeed.com/viewjob")
-    ) {
-      return true;
-    }
-
-    // Use FormHandler for form detection
-    if (this.formHandler) {
-      const formContainer = this.formHandler.findFormContainer();
-      return formContainer !== null;
-    }
-
-    return false;
-  }
-
-  async waitForIndeedApplicationPage(timeout = 10000) {
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < timeout) {
-      if (this.isIndeedApplicationPage(window.location.href)) {
-        // Use FormHandler to check for form
-        if (this.formHandler) {
-          const form = this.formHandler.findFormContainer();
-          if (form) {
-            return true;
-          }
-        }
-      }
-      await this.wait(500);
-    }
-
-    throw new Error("Timeout waiting for Indeed application page to load");
-  }
-
-  async checkIfAlreadyApplied() {
-    try {
-      const isSmartApplyPage = window.location.href.includes(
-        "smartapply.indeed.com/beta/indeedapply/form"
-      );
-
-      if (!isSmartApplyPage) {
-        return false;
-      }
-
-      const pageText = document.body.innerText;
-      const alreadyAppliedText = "You've applied to this job";
-
-      if (pageText.includes(alreadyAppliedText)) {
-        this.statusOverlay.addInfo(
-          "Found 'You've applied to this job' message - already applied"
-        );
-
-        this.state.isApplicationInProgress = false;
-        this.state.applicationStartTime = null;
-        this.state.pendingApplication = false;
-        this.state.formDetected = false;
-
-        return true;
-      }
-
-      return false;
-    } catch (error) {
-      console.error("Error checking if already applied:", error);
-      return false;
-    }
-  }
-
-  async handleDetectedForm() {
-    try {
-      const alreadyApplied = await this.checkIfAlreadyApplied();
-      if (alreadyApplied) {
-        this.statusOverlay.addInfo(
-          "Job already applied to, moving to next job"
-        );
-        if (this.state.isRunning) {
-          setTimeout(() => this.processNextJob(), 2000);
-        }
-        return;
-      }
-
-      this.statusOverlay.addInfo("Form detected, starting application process");
-
-      if (!this.userProfile) {
-        this.userProfile = await this.getProfileData();
-      }
-
-      if (this.userProfile) {
-        const success = await this.handleApplyForm();
-
-        if (success) {
-          this.statusOverlay.addSuccess("Application submitted successfully");
-          if (this.currentJobDetails) {
-            this.trackApplication(this.currentJobDetails);
-          }
-          this.markLastJobCardIfAvailable("applied");
-        } else {
-          this.statusOverlay.addInfo("Failed to complete application");
-          this.markLastJobCardIfAvailable("error");
-        }
-
-        this.state.isApplicationInProgress = false;
-        this.state.applicationStartTime = null;
-        this.state.pendingApplication = false;
-        this.state.formDetected = false;
-        this.state.currentRedirectAttempts = 0;
-
-        if (this.state.isRunning) {
-          this.statusOverlay.addInfo("Moving to next job...");
-          setTimeout(() => this.processNextJob(), 2000);
-        }
-      } else {
-        this.statusOverlay.addError(
-          "No profile data available for form filling"
-        );
-        this.state.isApplicationInProgress = false;
-        this.state.applicationStartTime = null;
-        this.state.pendingApplication = false;
-        this.state.formDetected = false;
-
-        if (this.state.isRunning) {
-          setTimeout(() => this.processNextJob(), 2000);
-        }
-      }
-    } catch (error) {
-      this.log("Error handling detected form:", error);
-      this.statusOverlay.addError("Error handling form: " + error.message);
-
-      this.state.isApplicationInProgress = false;
-      this.state.applicationStartTime = null;
-      this.state.pendingApplication = false;
-      this.state.formDetected = false;
-
-      if (this.state.isRunning) {
-        setTimeout(() => this.processNextJob(), 2000);
-      }
-    }
-  }
-
-  checkForRedirectOrForm() {
-    if (this.state.currentRedirectAttempts >= this.state.maxRedirectAttempts) {
-      this.statusOverlay.addError("Max redirect attempts reached, giving up");
-
-      this.state.isApplicationInProgress = false;
-      this.state.applicationStartTime = null;
-      this.state.pendingApplication = false;
-      this.state.formDetected = false;
-
-      if (this.state.isRunning) {
-        setTimeout(() => this.processNextJob(), 2000);
-      }
-
-      return;
-    }
-
-    this.state.currentRedirectAttempts++;
-    this.statusOverlay.addInfo(
-      `Checking for redirect or form (attempt ${this.state.currentRedirectAttempts})`
-    );
-
-    const currentUrl = window.location.href;
-
-    const isIndeedFormPage = currentUrl.includes(
-      "smartapply.indeed.com/beta/indeedapply/form"
-    );
-
-    if (isIndeedFormPage) {
-      const pageText = document.body.innerText;
-      if (pageText.includes("You've applied to this job")) {
-        this.statusOverlay.addInfo(
-          "Found 'You've applied to this job' message - already applied"
-        );
-
-        this.state.isApplicationInProgress = false;
-        this.state.applicationStartTime = null;
-        this.state.pendingApplication = false;
-        this.state.formDetected = false;
-
-        if (this.state.isRunning) {
-          setTimeout(() => this.processNextJob(), 2000);
-        }
-
-        return;
-      }
-    }
-
-    // Use FormHandler for form detection
-    let hasFormElements = false;
-    if (this.formHandler) {
-      const formContainer = this.formHandler.findFormContainer();
-      hasFormElements = formContainer !== null;
-    }
-
-    if (isIndeedFormPage || hasFormElements) {
-      this.statusOverlay.addInfo(
-        "Successfully redirected to form page or form detected"
-      );
-      this.state.formDetected = true;
-
-      setTimeout(async () => {
-        await this.handleDetectedForm();
-      }, 1000);
-    } else {
-      this.statusOverlay.addInfo("No form detected yet, waiting...");
-
-      setTimeout(() => {
-        this.checkForRedirectOrForm();
-      }, INDEED_CONFIG.TIMEOUTS.STANDARD);
-    }
-  }
-
-  applySearchFilters() {
-    try {
-      this.statusOverlay.addInfo("Applying search filters...");
-
-      const easyApplyFilter = document.querySelector("#filter-epiccapplication");
-      if (easyApplyFilter && !easyApplyFilter.checked) {
-        this.statusOverlay.addInfo("Selecting Easy Apply filter");
-        easyApplyFilter.click();
-      }
-
-      setTimeout(() => {
-        this.statusOverlay.addInfo("Filters applied, checking for job results");
-
-        const { jobsFound, jobCount } = this.checkIfJobsFound();
-
-        if (!jobsFound) {
-          this.statusOverlay.addInfo("No jobs found matching search criteria");
-          this.statusOverlay.updateStatus("completed");
-          this.state.ready = true;
-          this.state.isRunning = false;
-          return;
-        }
-
-        this.statusOverlay.addInfo(
-          `Found ${jobCount || "multiple"} jobs, starting automation`
-        );
-        this.state.ready = true;
-
-        if (!this.state.isRunning) {
-          this.startAutomation();
-        }
-      }, 2000);
-    } catch (error) {
-      this.log("Error applying search filters:", error);
-      this.statusOverlay.addError(error);
-
-      this.state.ready = true;
-      setTimeout(() => {
-        if (!this.state.isRunning) {
-          this.startAutomation();
-        }
-      }, 2000);
-    }
-  }
-
-  checkIfJobsFound() {
-    try {
-      const searchHeaderSelectors = [
-        ".jobsearch-JobCountAndSortPane-jobCount",
-        ".count",
-      ];
-
-      let searchHeader = null;
-      for (const selector of searchHeaderSelectors) {
-        searchHeader = document.querySelector(selector);
-        if (searchHeader) break;
-      }
-
-      if (!searchHeader) {
-        this.statusOverlay.addInfo("Could not find search results header");
-        return { jobsFound: true };
-      }
-
-      const headerText = searchHeader.textContent.trim();
-      this.statusOverlay.addInfo(`Found search header: "${headerText}"`);
-
-      const jobCountMatch = headerText.match(/^(\d+)\s+/);
-
-      if (jobCountMatch) {
-        const jobCount = parseInt(jobCountMatch[1], 10);
-        this.statusOverlay.addInfo(`Found ${jobCount} jobs in search results`);
-        return {
-          jobsFound: jobCount > 0,
-          jobCount: jobCount,
-          searchQuery: headerText.replace(jobCountMatch[0], "").trim(),
-        };
-      } else if (
-        headerText.toLowerCase().includes("no jobs found") ||
-        headerText.toLowerCase().includes("0 jobs") ||
-        headerText.toLowerCase().includes("found 0")
-      ) {
-        this.statusOverlay.addInfo("No jobs found in search results");
-        return { jobsFound: false, jobCount: 0 };
-      }
-
-      const jobCards = this.getIndeedJobCards();
-      if (jobCards.length === 0) {
-        this.statusOverlay.addInfo("No job cards found in search results");
-        return { jobsFound: false, jobCount: 0 };
-      }
-
-      return { jobsFound: true };
-    } catch (error) {
-      this.log("Error checking if jobs found:", error);
-      return { jobsFound: true };
-    }
-  }
-
-  async startAutomation() {
-    try {
-      if (this.state.isRunning) {
-        this.statusOverlay.addInfo("Automation already running");
-        return;
-      }
-
-      this.statusOverlay.addInfo("Starting automation");
-
-      const { jobsFound, jobCount, searchQuery } = this.checkIfJobsFound();
-
-      if (!jobsFound) {
-        this.statusOverlay.addInfo(
-          `No jobs found for search: ${searchQuery || "your search criteria"}`
-        );
-        this.statusOverlay.updateStatus("completed");
-        return;
-      }
-
-      this.statusOverlay.updateStatus("running");
-
-      this.state.isRunning = true;
-      this.state.currentJobIndex = 0;
-      this.state.processedCount = 0;
-      this.state.lastActivity = Date.now();
-      this.state.formDetected = false;
-      this.state.isApplicationInProgress = false;
-      this.state.pendingApplication = false;
-      this.state.applicationStartTime = null;
-      this.state.currentRedirectAttempts = 0;
-      this.state.lastClickedJobCard = null;
-
-      await this.processNextJob();
-    } catch (error) {
-      this.log("Error starting automation:", error);
-      this.statusOverlay.addError(
-        "Failed to start automation: " + error.message
-      );
-      this.state.isRunning = false;
-    }
-  }
-
-  async processNextJob() {
-    try {
-      if (!this.state.isRunning) {
-        this.statusOverlay.addInfo("Automation stopped");
-        return;
-      }
-
-      if (this.state.isApplicationInProgress || this.state.pendingApplication) {
-        this.statusOverlay.addInfo(
-          "Application in progress, waiting before processing next job"
-        );
-        setTimeout(() => this.processNextJob(), 5000);
-        return;
-      }
-
-      if (this.state.currentJobIndex === 0) {
-        const { jobsFound } = this.checkIfJobsFound();
-        if (!jobsFound) {
-          this.statusOverlay.addInfo(
-            "No jobs found in search results, stopping automation"
-          );
-          this.statusOverlay.updateStatus("completed");
-          this.state.isRunning = false;
-          return;
-        }
-      }
-
-      const jobCards = this.getUnprocessedJobCards();
-
-      if (jobCards.length === 0) {
-        if (await this.goToNextPage()) {
-          setTimeout(() => this.processNextJob(), 3000);
-        } else {
-          this.statusOverlay.addInfo("No more jobs to process");
-          this.statusOverlay.updateStatus("completed");
-          this.state.isRunning = false;
-        }
-        return;
-      }
-
-      const jobCard = jobCards[0];
-      this.state.lastClickedJobCard = jobCard;
-
-      this.markJobCard(jobCard, "processing");
-
-      this.statusOverlay.addInfo("Clicking job card to show details");
-      jobCard.querySelector("a.jcs-JobTitle")?.click();
-
-      await this.wait(INDEED_CONFIG.TIMEOUTS.STANDARD);
-
-      this.handlePopups();
-
-      const jobDetails = this.extractJobDetailsFromCard(jobCard);
-
-      this.currentJobDetails = jobDetails;
-
-      const applyButton = await this.findIndeedApplyButton();
-
-      if (!applyButton) {
-        this.statusOverlay.addInfo("No Easy Apply button found, skipping job");
-        this.markJobCard(jobCard, "skipped");
-        this.state.processedCards.add(this.getJobCardId(jobCard));
-        this.state.processedCount++;
-
-        setTimeout(() => this.processNextJob(), 1000);
-        return;
-      }
-
-      this.statusOverlay.addInfo(
-        "Found Easy Apply button, starting application"
-      );
-
-      this.state.isApplicationInProgress = true;
-      this.state.applicationStartTime = Date.now();
-      this.state.pendingApplication = true;
-      this.state.formDetected = false;
-      this.state.currentRedirectAttempts = 0;
-
-      this.state.processedCards.add(this.getJobCardId(jobCard));
-
-      applyButton.click();
-
-      this.checkForRedirectOrForm();
-    } catch (error) {
-      this.log("Error processing job:", error);
-      this.statusOverlay.addError("Error processing job: " + error.message);
-
-      this.state.isApplicationInProgress = false;
-      this.state.applicationStartTime = null;
-      this.state.pendingApplication = false;
-      this.state.formDetected = false;
-
-      setTimeout(() => this.processNextJob(), 3000);
-    }
-  }
-
-  async goToNextPage() {
-    try {
-      const nextButton = document.querySelector(INDEED_SELECTORS.NEXT_PAGE[0]);
-      if (nextButton && this.isElementVisible(nextButton)) {
-        this.statusOverlay.addInfo("Moving to next page of results");
-        nextButton.click();
-
-        await this.wait(3000);
-
-        const { jobsFound } = this.checkIfJobsFound();
-        if (!jobsFound) {
-          this.statusOverlay.addInfo("No jobs found on next page");
-          return false;
-        }
-
-        return true;
-      }
-      return false;
-    } catch (error) {
-      this.log("Error going to next page:", error);
-      return false;
-    }
-  }
-
-  handlePopups() {
-    try {
-      const closeButton = document.querySelector(
-        INDEED_SELECTORS.POPUP_CLOSE[0]
-      );
-      if (closeButton && this.isElementVisible(closeButton)) {
-        closeButton.click();
-      }
-    } catch (error) {
-      // Ignore errors with popups
-    }
-  }
-
-  isExternalApplication() {
-    for (const selector of INDEED_SELECTORS.EXTERNAL_APPLY) {
-      const element = document.querySelector(selector);
-      if (element && this.isElementVisible(element)) {
-        return true;
-      }
-    }
-
-    const jobContainer = document.querySelector(".jobsearch-JobComponent");
-    if (jobContainer) {
-      const containerText = jobContainer.textContent.toLowerCase();
-      if (
-        containerText.includes("apply on company site") ||
-        containerText.includes("apply externally") ||
-        containerText.includes("apply on the company website")
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  checkHealth() {
-    try {
-      if (
-        this.state.isApplicationInProgress &&
-        this.state.applicationStartTime
-      ) {
-        const now = Date.now();
+      const now = Date.now();
+      
+      // Check for stuck applications
+      if (this.state.isApplicationInProgress && this.state.applicationStartTime) {
         const applicationTime = now - this.state.applicationStartTime;
-
-        if (applicationTime > INDEED_CONFIG.TIMEOUTS.APPLICATION_TIMEOUT) {
-          this.log("Application appears to be stuck, resetting state");
-
-          this.markLastJobCardIfAvailable("error");
-
-          this.state.isApplicationInProgress = false;
-          this.state.applicationStartTime = null;
-          this.state.pendingApplication = false;
-          this.state.formDetected = false;
-
-          this.statusOverlay.addWarning(
-            "Application timeout detected - resetting state"
-          );
-          this.statusOverlay.updateStatus("error");
-
-          if (this.state.isRunning) {
-            setTimeout(() => this.processNextJob(), 2000);
-          }
+        if (applicationTime > CONFIG.TIMEOUTS.APPLICATION) {
+          this.log("Application timeout detected, resetting state");
+          this.statusOverlay.addWarning("Application timeout - resetting");
+          this.state.completeApplication();
         }
       }
-
-      if (this.state.isRunning) {
-        const now = Date.now();
-        const inactiveTime = now - this.state.lastActivity;
-
-        if (inactiveTime > 120000) {
-          this.log("Automation appears inactive, attempting recovery");
-
-          if (this.state.isApplicationInProgress) {
-            this.state.isApplicationInProgress = false;
-            this.state.applicationStartTime = null;
-            this.state.pendingApplication = false;
-            this.state.formDetected = false;
-          }
-
-          this.state.lastActivity = now;
-          this.processNextJob();
-        }
+      
+      // Check for general inactivity
+      const inactiveTime = now - this.state.lastActivity;
+      if (inactiveTime > 120000 && this.state.isRunning()) { // 2 minutes
+        this.log("Inactivity detected, refreshing automation");
+        this.state.lastActivity = now;
       }
+      
     } catch (error) {
       this.log("Error in health check:", error);
     }
   }
 
+  handleError(error, context = "") {
+    this.log(`❌ Error in ${context}:`, error);
+    this.statusOverlay.addError(`Error: ${error.message}`);
+    
+    // Reset application state on error
+    if (this.state.isApplicationInProgress) {
+      this.state.completeApplication();
+      this.markCurrentJobCard('error');
+    }
+    
+    // Don't stop automation for recoverable errors
+    if (!this.isRecoverableError(error)) {
+      this.state.updateStatus('error');
+    }
+  }
+
+  isRecoverableError(error) {
+    const recoverableErrors = [
+      'timeout',
+      'network',
+      'element not found',
+      'page load',
+    ];
+    
+    return recoverableErrors.some(errorType => 
+      error.message.toLowerCase().includes(errorType)
+    );
+  }
+
+  // =============================================================================
+  // PLATFORM-SPECIFIC INTERFACE METHODS
+  // =============================================================================
+
+  getPlatformDomains() {
+    return ["https://www.indeed.com", "https://smartapply.indeed.com"];
+  }
+
+  getSearchLinkPattern() {
+    return /^https:\/\/(www\.)?indeed\.com\/(viewjob|job|jobs|apply).*$/;
+  }
+
+  isValidJobPage(url) {
+    return CONFIG.URL_PATTERNS.JOB_PAGE.test(url) || 
+           CONFIG.URL_PATTERNS.APPLICATION.test(url);
+  }
+
+  isApplicationPage(url) {
+    return CONFIG.URL_PATTERNS.APPLICATION.test(url);
+  }
+
+  getApiHost() {
+    return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
+  }
+
+  getJobTaskMessageType() {
+    return "openJobInNewTab";
+  }
+
+  platformSpecificUrlNormalization(url) {
+    return url
+      .replace(/[?&](jk|tk|from|advn)=[^&]*/g, "")
+      .replace(/[?&]+$/, "");
+  }
+
+  // =============================================================================
+  // MESSAGE HANDLING
+  // =============================================================================
+
   handlePlatformSpecificMessage(type, data) {
     switch (type) {
-      case "SUCCESS":
-        this.handleSuccessMessage(data);
+      case "START_AUTOMATION":
+        this.start(data);
         break;
-
-      case "APPLICATION_STATUS_RESPONSE":
-        this.handleApplicationStatusResponse(data);
+        
+      case "STOP_AUTOMATION":
+        this.stop();
         break;
-
-      case "JOB_TAB_STATUS":
-        this.handleJobTabStatus(data);
+        
+      case "GET_STATUS":
+        return this.getStatus();
+        
+      case "RESET_STATE":
+        this.resetState();
         break;
-
-      case "NEXT_READY_ACKNOWLEDGED":
-        this.handleSearchNextReady(data);
-        break;
-
-      default:
-        super.handlePlatformSpecificMessage(type, data);
-    }
-  }
-
-  handleSuccessMessage(data) {
-    if (data) {
-      if (data.submittedLinks !== undefined) {
+        
+      case "SEARCH_TASK_DATA":
         this.processSearchTaskData(data);
-      } else if (data.profile !== undefined && !this.userProfile) {
+        break;
+        
+      case "SEND_CV_TASK_DATA":
         this.processSendCvTaskData(data);
-      }
+        break;
+        
+      default:
+        super.handlePlatformSpecificMessage?.(type, data);
     }
   }
 
-  handleApplicationStatusResponse(data) {
-    this.log("📊 Application status response:", data);
-
-    if (data && data.active === false && this.state.isApplicationInProgress) {
-      this.log(
-        "⚠️ State mismatch detected! Resetting application progress flag"
-      );
-      this.state.isApplicationInProgress = false;
-      this.state.applicationStartTime = null;
-      this.statusOverlay.addWarning(
-        "Detected state mismatch - resetting flags"
-      );
-      setTimeout(() => this.searchNext(), 1000);
-    }
-  }
-
-  handleJobTabStatus(data) {
-    this.log("📊 Job tab status:", data);
-
-    if (data && !data.isOpen && this.state.isApplicationInProgress) {
-      this.log(
-        "⚠️ Job tab closed but application still in progress - resetting"
-      );
-      this.resetApplicationStateOnError();
-    }
-  }
-
-  handleSearchNextReady(data) {
-    this.log("🔄 Search next ready acknowledged");
-    setTimeout(() => {
-      if (!this.state.isApplicationInProgress) {
-        this.searchNext();
-      }
-    }, 1000);
-  }
-
-  async fetchSendCvTaskData() {
-    if (this.userProfile && this.hasSessionContext) {
-      this.log("✅ User profile already available from session context");
-      return;
-    }
-
-    this.log("📡 Fetching send CV task data from background");
-    this.statusOverlay.addInfo("Fetching CV task data...");
-
-    const success = this.safeSendPortMessage({ type: "GET_SEND_CV_TASK" });
-    if (!success) {
-      throw new Error("Failed to request send CV task data");
+  processSearchTaskData(data) {
+    try {
+      this.log("📊 Processing search task data:", data);
+      
+      this.searchData = {
+        tabId: data.tabId,
+        limit: data.limit || 10,
+        current: data.current || 0,
+        domain: data.domain || this.getPlatformDomains(),
+        submittedLinks: data.submittedLinks || [],
+        searchLinkPattern: data.searchLinkPattern 
+          ? new RegExp(data.searchLinkPattern.replace(/^\/|\/[gimy]*$/g, ""))
+          : this.getSearchLinkPattern(),
+      };
+      
+      this.statusOverlay.addSuccess("Search data initialized");
+    } catch (error) {
+      this.log("❌ Error processing search task data:", error);
+      this.statusOverlay.addError("Error processing search data: " + error.message);
     }
   }
 
   processSendCvTaskData(data) {
     try {
-      this.log("📊 Processing send CV task data:", data);
-
+      this.log("📊 Processing CV task data:", data);
+      
       if (data?.profile && !this.userProfile) {
         this.userProfile = data.profile;
-        this.log("👤 User profile set from background response");
+        this.log("👤 User profile set from task data");
+        
+        if (this.formHandler) {
+          this.formHandler.userData = this.userProfile;
+        }
       }
-
-      if (this.formHandler && this.userProfile) {
-        this.formHandler.userData = this.userProfile;
-      }
-
-      this.statusOverlay.addSuccess("Apply initialization complete");
+      
+      this.statusOverlay.addSuccess("CV task data processed");
     } catch (error) {
-      this.log("❌ Error processing send CV task data:", error);
+      this.log("❌ Error processing CV task data:", error);
       this.statusOverlay.addError("Error processing CV data: " + error.message);
     }
   }
 
-  async handleAlreadyApplied() {
-    const jobId = UrlUtils.extractJobId(window.location.href, "indeed");
-    const jobDetails = await this.extractIndeedJobDescription();
-
-    this.safeSendPortMessage({
-      type: "SEND_CV_TASK_DONE",
-      data: {
-        jobId: jobId,
-        title: jobDetails.title || "Job on Indeed",
-        company: jobDetails.company || "Company on Indeed",
-        location: jobDetails.location || "Not specified",
-        jobUrl: window.location.href,
-        platform: "indeed",
-      },
-    });
-
-    this.state.isApplicationInProgress = false;
-    this.statusOverlay.addSuccess("Application completed successfully");
-  }
-
-  handleJobTaskError(error, url, card) {
-    console.error("Error processing Indeed job:", error);
-    this.statusOverlay.addError("Error processing job: " + error.message);
-
-    this.state.isApplicationInProgress = false;
-    this.state.applicationStartTime = null;
-    this.state.pendingApplication = false;
-    this.state.formDetected = false;
-
-    if (card) {
-      card.style.border = "";
-      card.style.backgroundColor = "";
-      const indicator = card.querySelector(".processing-indicator");
-      if (indicator) {
-        indicator.remove();
-      }
-    }
-
-    setTimeout(() => {
-      if (!this.state.isApplicationInProgress) {
-        this.searchNext();
-      }
-    }, 3000);
-  }
-
-  handleApplicationError(error) {
-    if (
-      error.name === "SendCvSkipError" ||
-      error.name === "ApplicationSkipError"
-    ) {
-      this.statusOverlay.addWarning("Application skipped: " + error.message);
-      this.safeSendPortMessage({
-        type: "SEND_CV_TASK_SKIP",
-        data: error.message,
-      });
-    } else {
-      this.statusOverlay.addError("Application error: " + error.message);
-      this.safeSendPortMessage({
-        type: "SEND_CV_TASK_ERROR",
-        data: this.errorToString(error),
-      });
-    }
-
-    this.resetApplicationStateOnError();
-  }
-
-  resetApplicationStateOnError() {
-    this.log("Resetting application state due to error");
-
-    this.state.isApplicationInProgress = false;
-    this.state.applicationStartTime = null;
-    this.state.pendingApplication = false;
-    this.state.formDetected = false;
-    this.state.currentRedirectAttempts = 0;
-    this.state.lastClickedJobCard = null;
-
-    this.applicationState.isApplicationInProgress = false;
-    this.applicationState.applicationStartTime = null;
-    this.applicationState.currentJobData = null;
-    this.applicationState.currentJobTabId = null;
-
-    if (this.stuckDetectionTimeout) {
-      clearTimeout(this.stuckDetectionTimeout);
-      this.stuckDetectionTimeout = null;
-    }
-
-    this.statusOverlay.addInfo("Application state reset - ready for next job");
-  }
-
-  setStuckDetectionTimeout() {
-    if (this.stuckDetectionTimeout) {
-      clearTimeout(this.stuckDetectionTimeout);
-    }
-
-    this.stuckDetectionTimeout = setTimeout(() => {
-      this.log("Stuck detection triggered - application taking too long");
-      this.statusOverlay.addWarning(
-        "Application timeout detected, moving to next job"
-      );
-      this.resetApplicationStateOnError();
-
-      setTimeout(() => {
-        if (!this.state.isApplicationInProgress) {
-          this.searchNext();
-        }
-      }, 2000);
-    }, this.maxApplicationTime);
-  }
-
-  // Keep element visibility check as it's used throughout the platform
-  isElementVisible(element) {
-    if (!element) return false;
-    try {
-      const style = window.getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-
-      return (
-        style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        style.opacity !== "0" &&
-        rect.height > 0 &&
-        rect.width > 0
-      );
-    } catch (error) {
-      return false;
-    }
-  }
-
-  // Utility method for waiting - used by platform-specific logic
-  wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  errorToString(e) {
-    if (!e) return "Unknown error (no details)";
-    if (e instanceof Error) {
-      return e.message + (e.stack ? `\n${e.stack}` : "");
-    }
-    return String(e);
-  }
-
-  async waitForValidPage(timeout = 30000) {
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < timeout) {
-      const url = window.location.href;
-
-      if (
-        url.includes("google.com/search") ||
-        this.isValidJobPage(url) ||
-        this.isApplicationPage(url)
-      ) {
-        await this.detectPageTypeAndStart();
-        return;
-      }
-
-      await this.wait(1000);
-    }
-
-    throw new Error("Timeout waiting for valid page");
-  }
-
-  async setSessionContext(sessionContext) {
-    try {
-      this.sessionContext = sessionContext;
-      this.hasSessionContext = true;
-
-      if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
-      if (sessionContext.platform) this.platform = sessionContext.platform;
-      if (sessionContext.userId) this.userId = sessionContext.userId;
-
-      if (sessionContext.userProfile) {
-        if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
-          this.userProfile = sessionContext.userProfile;
-          this.log("👤 User profile loaded from session context");
-        } else {
-          this.userProfile = {
-            ...this.userProfile,
-            ...sessionContext.userProfile,
-          };
-          this.log("👤 User profile merged with session context");
-        }
-      }
-
-      if (!this.userProfile && this.userId) {
-        try {
-          this.log("📡 Fetching user profile from user service...");
-          this.userProfile = await this.userService.getUserDetails();
-          this.log("✅ User profile fetched successfully");
-        } catch (error) {
-          console.error("❌ Failed to fetch user profile:", error);
-          this.statusOverlay?.addError(
-            "Failed to fetch user profile: " + error.message
-          );
-        }
-      }
-
-      if (
-        this.userProfile.userId &&
-        (!this.userService || this.userService.userId !== this.userProfile.userId)
-      ) {
-        this.applicationTracker = new ApplicationTrackerService({
-          userId: this.userProfile.userId,
-          apiHost: this.getApiHost(),
-        });
-        this.userService = new UserService({ userId: this.userProfile.userId });
-        this.log("📋 Updated services with new userId:", this.userId);
-      }
-
-      if (sessionContext.apiHost) {
-        this.sessionApiHost = sessionContext.apiHost;
-      }
-
-      if (this.formHandler && this.userProfile) {
-        this.formHandler.userData = this.userProfile;
-      }
-
-      this.log("✅ Indeed session context set successfully", {
-        hasUserProfile: !!this.userProfile,
-        userId: this.userId,
-        sessionId: this.sessionId,
-        profileName: this.userProfile?.name || this.userProfile?.firstName,
-        profileEmail: this.userProfile?.email,
-      });
-    } catch (error) {
-      console.error("❌ Error setting Indeed session context:", error);
-      this.statusOverlay?.addError(
-        "❌ Error setting session context: " + error.message
-      );
-    }
-  }
-
-  cleanup() {
-    super.cleanup();
-
-    this.state.processedCards.clear();
-    this.cachedJobDescription = null;
-    this.currentJobDetails = null;
-
-    if (this.stuckDetectionTimeout) {
-      clearTimeout(this.stuckDetectionTimeout);
-      this.stuckDetectionTimeout = null;
-    }
-
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-      this.healthCheckTimer = null;
-    }
-
-    if (this.formObserver) {
-      this.formObserver.disconnect();
-      this.formObserver = null;
-    }
-
-    this.resetApplicationStateOnError();
-    this.log("🧹 Indeed-specific cleanup completed");
-  }
+  // =============================================================================
+  // CHROME MESSAGE HANDLER
+  // =============================================================================
 
   handleChromeMessage(message, sender, sendResponse) {
     try {
@@ -2611,34 +1095,24 @@ export default class IndeedPlatform extends BasePlatformAutomation {
       switch (messageType) {
         case "startJobSearch":
         case "startAutomation":
-          this.startAutomation();
-          sendResponse({ status: "processing" });
+          this.start();
+          sendResponse({ status: "started" });
           break;
 
         case "stopAutomation":
-          this.state.isRunning = false;
-          this.statusOverlay.addInfo("Automation stopped by user");
-          this.statusOverlay.updateStatus("stopped");
+          this.stop();
           sendResponse({ status: "stopped" });
           break;
 
         case "checkStatus":
           sendResponse({
             success: true,
-            data: {
-              initialized: this.state.initialized,
-              isApplicationInProgress: this.state.isApplicationInProgress,
-              processedCount: this.state.processedCount,
-              isRunning: this.state.isRunning,
-              platform: "indeed",
-            },
+            data: this.getStatus()
           });
           break;
 
         case "resetState":
-          this.resetApplicationStateOnError();
-          this.statusOverlay.updateStatus("ready");
-          this.statusOverlay.addInfo("State reset complete");
+          this.resetState();
           sendResponse({ success: true, message: "State reset" });
           break;
 
@@ -2649,266 +1123,124 @@ export default class IndeedPlatform extends BasePlatformAutomation {
           });
       }
     } catch (error) {
-      console.error("Error handling message:", error);
+      this.log("Error handling Chrome message:", error);
       sendResponse({ success: false, message: error.message });
     }
 
     return true;
   }
 
-  async performJobSearch() {
-    return await this.safeExecute(async () => {
-      const state = await this.getCurrentState();
-      const preferences = state.preferences || {};
+  // =============================================================================
+  // CONTROL METHODS
+  // =============================================================================
 
-      const searchParams = new URLSearchParams();
-
-      const searchQuery = Array.isArray(preferences.positions)
-        ? preferences.positions[0]
-        : "";
-      searchParams.append("q", searchQuery);
-
-      searchParams.append("l", preferences.location || "Lagos");
-
-      let filterString = "0kf:";
-
-      const jobTypeMap = {
-        "Full-time": "4HKF7",
-        "Part-time": "CPAHG",
-        Contract: "5QWDV",
-        Temporary: "CF3CP",
-        Internship: "VDTG7",
-      };
-
-      if (
-        Array.isArray(preferences.jobType) &&
-        preferences.jobType.length > 0
-      ) {
-        const jobTypeFilters = preferences.jobType
-          .filter((type) => jobTypeMap[type])
-          .map((type) => jobTypeMap[type]);
-
-        if (jobTypeFilters.length > 0) {
-          filterString += `attr(${jobTypeFilters.join("|")},OR)`;
-        }
-      }
-
-      filterString += "attr(DSQF7);";
-      searchParams.append("sc", filterString);
-
-      if (preferences.datePosted && preferences.datePosted.value) {
-        searchParams.append("fromage", preferences.datePosted.value);
-      }
-
-      searchParams.append("from", "searchOnDesktopSerp");
-
-      const searchUrl = `${this.getJobURL(
-        state.userDetails.country
-      )}/jobs?${searchParams.toString()}`;
-
-      await this.stateManager.updateState({
-        pendingSearch: true,
-        lastActionTime: new Date().toISOString(),
-      });
-
-      window.location.href = searchUrl;
-    }, "Error performing job search");
+  stop() {
+    this.log("🛑 Stopping Indeed automation");
+    this.state.updateStatus('stopped');
+    this.statusOverlay.addInfo("Automation stopped");
   }
 
-  async getCurrentState() {
-    return await this.safeExecute(async () => {
-      const state = await this.stateManager.getState();
-      if (!state?.userId) {
-        throw new Error("No valid state found - please reinitialize");
-      }
-      return state;
-    }, "Error getting current state");
+  resetState() {
+    this.log("🔄 Resetting automation state");
+    this.state.reset();
+    this.currentJobDescription = null;
+    this.statusOverlay.addInfo("State reset complete");
+    this.statusOverlay.updateStatus("ready");
   }
 
-  async startAutomationFromSearch() {
-    try {
-      const canApply = await this.userService.canApplyMore();
-      if (!canApply) {
-        const userState = await this.userService.getUserState();
-        this.sendStatusUpdate(
-          "error",
-          `Cannot apply: ${userState.userRole === "credit"
-            ? `Insufficient credits (${userState.credits} remaining)`
-            : `Daily limit reached`
-          }`
-        );
-        return "limit_reached";
-      }
-
-      this.log("started automation");
-      this.isRunning = true;
-      this.jobsToApply = await this.getIndeedJobCards();
-
-      if (this.jobsToApply.length === 0) {
-        throw new Error("No jobs found to process");
-      }
-
-      const remainingApplications = await this.userService.getRemainingApplications();
-      const maxJobs = Math.min(remainingApplications, this.jobsToApply.length);
-
-      this.log(
-        `Processing ${maxJobs} out of ${this.jobsToApply.length} jobs found`
-      );
-
-      for (let i = 0; i < maxJobs && this.isRunning; i++) {
-        const job = this.jobsToApply[i];
-        this.currentJobIndex = i;
-
-        try {
-          await this.processJobFromSearch(job);
-
-          let completed = false;
-          const startTime = Date.now();
-
-          while (!completed && Date.now() - startTime < 300000) {
-            const state = await this.getCurrentState();
-            if (!state.pendingApplication) {
-              completed = true;
-              break;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-          }
-
-          if (!completed) {
-            throw new Error("Application timeout");
-          }
-
-          if (i < maxJobs - 1) {
-            const minDelay = 6000;
-            const maxDelay = 8000;
-            await new Promise((resolve) =>
-              setTimeout(
-                resolve,
-                Math.floor(Math.random() * (maxDelay - minDelay) + minDelay)
-              )
-            );
-          }
-        } catch (error) {
-          console.error(`Error processing job ${job.title}:`, error);
-          await this.stateManager.updateState({ pendingApplication: false });
-
-          if (
-            error.message.includes("limit reached") ||
-            error.message.includes("session expired")
-          ) {
-            throw error;
-          }
-          continue;
-        }
-      }
-    } catch (error) {
-      console.error("Error in automation:", error);
-      this.sendStatusUpdate("error", error.message);
-      throw error;
-    } finally {
-      this.isRunning = false;
-    }
-  }
-
-  async processJobFromSearch(job) {
-    let retryCount = 0;
-    const maxRetries = 2;
-
-    while (retryCount <= maxRetries) {
-      try {
-        const canApply = await this.userService.canApplyMore();
-        if (!canApply) {
-          throw new Error("Application limit reached");
-        }
-
-        if (this.currentJobIndex > 0) {
-          const delay = Math.floor(Math.random() * (8000 - 6000) + 6000);
-          await this.wait(delay);
-        }
-
-        const jobLink = job.element?.querySelector(".jcs-JobTitle") || job.querySelector?.(".jcs-JobTitle");
-        if (!jobLink) {
-          throw new Error("Job link not found");
-        }
-
-        jobLink.click();
-        await this.wait(2000);
-
-        await this.handlePopups();
-
-        const applyButton = await this.findIndeedApplyButton();
-        if (!applyButton) {
-          throw new Error("Apply button not found");
-        }
-
-        if (this.isExternalApplication()) {
-          this.log("Skipping external application");
-          return;
-        }
-
-        await this.stateManager.updateState({
-          currentJobIndex: this.currentJobIndex + 1,
-          lastActionTime: new Date().toISOString(),
-          currentJob: {
-            id: job.id,
-            title: job.title,
-            company: job.company,
-            location: job.location,
-            url: job.url,
-            description: job.description,
-          },
-          pendingApplication: true,
-        });
-
-        applyButton.click();
-        await this.wait(2000);
-
-        return;
-      } catch (error) {
-        console.error(`Attempt ${retryCount + 1} failed:`, error);
-        retryCount++;
-
-        if (
-          error.message.includes("limit reached") ||
-          error.message.includes("session expired")
-        ) {
-          throw error;
-        }
-
-        if (retryCount > maxRetries) {
-          throw error;
-        }
-
-        await this.wait(3000 * retryCount);
-      }
-    }
-  }
-
-  async getJobURL(country) {
-    const countryDomains = {
-      US: "https://www.indeed.com",
-      UK: "https://uk.indeed.com",
-      CA: "https://ca.indeed.com",
-      AU: "https://au.indeed.com"
+  getStatus() {
+    return {
+      platform: "indeed",
+      status: this.state.status,
+      isRunning: this.state.isRunning(),
+      isApplicationInProgress: this.state.isApplicationInProgress,
+      currentJobIndex: this.state.currentJobIndex,
+      processedJobsCount: this.state.processedJobIds.size,
+      lastActivity: this.state.lastActivity,
+      currentJob: this.state.currentJobData,
     };
-    return countryDomains[country] || "https://www.indeed.com";
   }
 
-  async safeExecute(operation, errorMessage) {
+  // =============================================================================
+  // CLEANUP
+  // =============================================================================
+
+  cleanup() {
+    this.log("🧹 Cleaning up Indeed automation");
+    
+    // Clear intervals
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+    
+    // Reset state
+    this.state.reset();
+    this.currentJobDescription = null;
+    
+    // Call parent cleanup
+    super.cleanup?.();
+    
+    this.log("✅ Cleanup completed");
+  }
+
+  // =============================================================================
+  // UTILITY METHODS
+  // =============================================================================
+
+  wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  log(message, ...args) {
+    console.log(`[IndeedPlatform] ${message}`, ...args);
+  }
+
+  // Safe message sending with error handling
+  safeSendPortMessage(message) {
     try {
-      return await operation();
+      if (this.port && this.port.postMessage) {
+        this.port.postMessage(message);
+        return true;
+      }
+      return false;
     } catch (error) {
-      console.error(errorMessage, error);
+      this.log("Error sending port message:", error);
+      return false;
+    }
+  }
+
+  // Normalize URL for comparison
+  normalizeUrlFully(url) {
+    try {
+      const urlObj = new URL(url);
+      // Remove Indeed-specific tracking parameters
+      ['jk', 'tk', 'from', 'advn', 'pp', 'sp', 'rsltid'].forEach(param => {
+        urlObj.searchParams.delete(param);
+      });
+      return urlObj.toString();
+    } catch {
+      return url;
+    }
+  }
+
+  // Check if link has been processed (using searchData if available)
+  isLinkProcessed(url) {
+    if (!this.searchData?.submittedLinks) return false;
+    
+    const normalizedUrl = this.normalizeUrlFully(url);
+    return this.searchData.submittedLinks.some(link => 
+      this.normalizeUrlFully(link.url) === normalizedUrl
+    );
+  }
+
+  // Extract job ID from URL
+  extractJobIdFromUrl(url = window.location.href) {
+    try {
+      const match = url.match(/jk=([^&]+)/);
+      return match ? match[1] : null;
+    } catch {
       return null;
     }
-  }
-
-  sendStatusUpdate(status, data) {
-    chrome.runtime.sendMessage({
-      action: "statusUpdate",
-      status,
-      data,
-      timestamp: new Date().toISOString(),
-    });
   }
 }

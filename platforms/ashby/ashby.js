@@ -9,7 +9,6 @@ import {
   UserService,
 } from "../../services/index.js";
 
-// Custom error types for Ashby
 class ApplicationError extends Error {
   constructor(message, details) {
     super(message);
@@ -31,24 +30,17 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     this.platform = "ashby";
     this.baseUrl = "https://ashbyhq.com";
 
-    // Initialize Ashby-specific services
     this.aiService = new AIService({ apiHost: this.getApiHost() });
     this.applicationTracker = new ApplicationTrackerService({
-      userId: this.userProfile.userId,
+      userId: this.userProfile?.userId,
       apiHost: this.getApiHost(),
     });
-    this.userService = new UserService({ userId: this.userProfile.userId });
+    this.userService = new UserService({ userId: this.userProfile?.userId });
 
     this.fileHandler = null;
     this.formHandler = null;
-
-    // Add flags to prevent duplicate starts
     this.searchProcessStarted = false;
   }
-
-  // ========================================
-  // PLATFORM-SPECIFIC IMPLEMENTATIONS (Required by base class)
-  // ========================================
 
   getPlatformDomains() {
     return ["ashbyhq.com", "jobs.ashbyhq.com"];
@@ -65,23 +57,52 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     );
   }
 
+  /**
+   * Extract just the UUID job ID from Ashby URLs
+   * @param {string} url - The full URL
+   * @returns {string|null} - The extracted job ID or null if not found
+   */
+  extractAshbyJobId(url) {
+    try {
+      // Match UUID pattern in Ashby URLs
+      // Pattern: 8-4-4-4-12 hexadecimal characters separated by hyphens
+      const uuidPattern = /\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
+      const match = url.match(uuidPattern);
+
+      if (match && match[1]) {
+        this.log(`✅ Extracted Ashby job ID: ${match[1]} from URL: ${url}`);
+        return match[1];
+      }
+
+      // Fallback: try to use the existing UrlUtils method
+      const fallbackId = UrlUtils.extractJobId(url, "ashby");
+      if (fallbackId && fallbackId !== url) {
+        this.log(`✅ Extracted job ID using fallback method: ${fallbackId}`);
+        return fallbackId;
+      }
+
+      this.log(`⚠️ Could not extract job ID from URL: ${url}`);
+      return null;
+    } catch (error) {
+      this.log(`❌ Error extracting job ID from URL ${url}:`, error);
+      return null;
+    }
+  }
+
   async setSessionContext(sessionContext) {
     try {
       this.sessionContext = sessionContext;
       this.hasSessionContext = true;
 
-      // Update basic properties
       if (sessionContext.sessionId) this.sessionId = sessionContext.sessionId;
       if (sessionContext.platform) this.platform = sessionContext.platform;
       if (sessionContext.userId) this.userId = sessionContext.userId;
 
-      // Set user profile with priority handling
       if (sessionContext.userProfile) {
         if (!this.userProfile || Object.keys(this.userProfile).length === 0) {
           this.userProfile = sessionContext.userProfile;
           this.log("👤 User profile loaded from session context");
         } else {
-          // Merge profiles, preferring non-null values
           this.userProfile = {
             ...this.userProfile,
             ...sessionContext.userProfile,
@@ -90,7 +111,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Fetch user profile if still missing
       if (!this.userProfile && this.userId) {
         try {
           this.log("📡 Fetching user profile from user service...");
@@ -104,8 +124,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Update services with user context
-      if (this.userProfile.userId) {
+      if (this.userProfile?.userId) {
         this.applicationTracker = new ApplicationTrackerService({
           userId: this.userProfile.userId,
           apiHost: this.getApiHost(),
@@ -113,12 +132,10 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         this.userService = new UserService({ userId: this.userProfile.userId });
       }
 
-      // Store API host from session context
       if (sessionContext.apiHost) {
         this.sessionApiHost = sessionContext.apiHost;
       }
 
-      // Update form handler if it exists
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
@@ -140,7 +157,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
   async start(params = {}) {
     try {
-      // Prevent duplicate starts
       if (this.isRunning) {
         this.log("⚠️ Automation already running, ignoring duplicate start");
         return true;
@@ -149,7 +165,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       this.isRunning = true;
       this.log("▶️ Starting Ashby automation");
 
-      // Ensure user profile is available before starting
       if (!this.userProfile && this.userId) {
         try {
           this.log("🔄 Attempting to fetch user profile during start...");
@@ -160,26 +175,21 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         }
       }
 
-      // Update config with parameters
       this.config = { ...this.config, ...params };
 
-      // Update progress
       this.updateProgress({
         total: params.jobsToApply || 0,
         completed: 0,
         current: "Starting automation...",
       });
 
-      // Wait for page to be ready
       await this.waitForPageLoad();
-
-      // Detect page type and start appropriate automation
       await this.detectPageTypeAndStart();
 
       return true;
     } catch (error) {
       this.reportError(error, { action: "start" });
-      this.isRunning = false; // Reset on error
+      this.isRunning = false;
       return false;
     }
   }
@@ -197,43 +207,32 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       switch (type) {
         case "CONNECTION_ESTABLISHED":
           break;
-
         case "SEARCH_TASK_DATA":
           this.handleSearchTaskData(data);
           break;
-
         case "APPLICATION_TASK_DATA":
           this.handleApplicationTaskData(data);
           break;
-
         case "APPLICATION_STARTING":
           this.handleApplicationStarting(data);
           break;
-
         case "APPLICATION_STATUS":
           this.handleApplicationStatus(data);
           break;
-
         case "SEARCH_NEXT":
           this.handleSearchNext(data);
           break;
-
         case "DUPLICATE":
           this.handleDuplicateJob(data);
           break;
-
         case "ERROR":
           this.handleErrorMessage(data);
           break;
-
         case "KEEPALIVE_RESPONSE":
-          // Just acknowledge keepalive
           break;
-
         case "SUCCESS":
           this.handleSuccessMessage(data);
           break;
-
         default:
           this.log(`❓ Unhandled message type: ${type}`);
       }
@@ -254,9 +253,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     return this.sessionApiHost || this.sessionContext?.apiHost || this.config.apiHost;
   }
 
-  /**
-   * Check if we're on the application page
-   */
   isApplicationPage(url) {
     return url.includes("/application") || super.isApplicationPage(url);
   }
@@ -265,14 +261,9 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     return "SEND_CV_TASK";
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC INITIALIZATION
-  // ========================================
-
   async initialize() {
-    await super.initialize(); // Handles all common initialization
+    await super.initialize();
 
-    // Initialize Ashby-specific handlers
     this.fileHandler = new AshbyFileHandler({
       statusService: this.statusOverlay,
       apiHost: this.getApiHost(),
@@ -286,40 +277,29 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     });
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC MESSAGE HANDLING
-  // ========================================
-
   handlePlatformSpecificMessage(type, data) {
     switch (type) {
       case "SEARCH_TASK_DATA":
         this.handleSearchTaskData(data);
         break;
-
       case "APPLICATION_TASK_DATA":
         this.handleApplicationTaskData(data);
         break;
-
       case "APPLICATION_STARTING":
         this.handleApplicationStarting(data);
         break;
-
       case "APPLICATION_STATUS":
         this.handleApplicationStatus(data);
         break;
-
       case "SUCCESS":
         this.handleSuccessMessage(data);
         break;
-
       case "APPLICATION_STATUS_RESPONSE":
         this.handleApplicationStatusResponse(data);
         break;
-
       case "JOB_TAB_STATUS":
         this.handleJobTabStatus(data);
         break;
-
       default:
         super.handlePlatformSpecificMessage(type, data);
     }
@@ -346,7 +326,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
           : this.getSearchLinkPattern(),
       };
 
-      // Include user profile if available
       if (data.profile && !this.userProfile) {
         this.userProfile = data.profile;
         this.log("👤 User profile loaded from search task data");
@@ -355,7 +334,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       this.log("✅ Ashby search data initialized:", this.searchData);
       this.statusOverlay.addSuccess("Search initialization complete");
 
-      // Start search process
       setTimeout(() => this.searchNext(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
@@ -367,10 +345,8 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
   handleSuccessMessage(data) {
     if (data && data.submittedLinks !== undefined) {
-      // This is search task data
       this.processSearchTaskData(data);
     } else if (data && data.profile !== undefined && !this.userProfile) {
-      // This is application task data
       this.processSendCvTaskData(data);
     }
   }
@@ -400,7 +376,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       this.log("✅ Ashby search data initialized:", this.searchData);
       this.statusOverlay.addSuccess("Search initialization complete");
 
-      // Start the search process after initialization
       setTimeout(() => this.searchNext(), 1000);
     } catch (error) {
       this.log("❌ Error processing search task data:", error);
@@ -422,7 +397,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         this.log("👤 User profile set from background response");
       }
 
-      // Update form handler
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
@@ -443,14 +417,12 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         this.log("👤 User profile loaded from application task data");
       }
 
-      // Update form handler
       if (this.formHandler && this.userProfile) {
         this.formHandler.userData = this.userProfile;
       }
 
       this.statusOverlay.addSuccess("Application initialization complete");
 
-      // Start application process
       setTimeout(() => this.startApplicationProcess(), 1000);
     } catch (error) {
       this.log("❌ Error processing application task data:", error);
@@ -485,10 +457,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC PAGE TYPE DETECTION
-  // ========================================
-
   async detectPageTypeAndStart() {
     const url = window.location.href;
     this.log(`🔍 Detecting page type for: ${url}`);
@@ -498,19 +466,13 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     } else if (this.isValidJobPage(url)) {
       await this.startApplicationProcess();
     } else {
-      // Skip to next job instead of waiting for valid page
       this.log("⚠️ Not a valid job page, skipping to next job");
       this.skipToNextJob("Not a valid job page");
     }
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC SEARCH LOGIC
-  // ========================================
-
   async startSearchProcess() {
     try {
-      // Prevent duplicate search process starts
       if (this.searchProcessStarted) {
         this.log("⚠️ Search process already started, ignoring duplicate");
         return;
@@ -520,10 +482,9 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       this.statusOverlay.addInfo("Starting job search process");
       this.statusOverlay.updateStatus("searching");
 
-      // Get search task data from background
       await this.fetchSearchTaskData();
     } catch (error) {
-      this.searchProcessStarted = false; // Reset on error
+      this.searchProcessStarted = false;
       this.reportError(error, { phase: "search" });
     }
   }
@@ -538,16 +499,11 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC APPLICATION LOGIC
-  // ========================================
-
   async startApplicationProcess() {
     try {
       this.statusOverlay.addInfo("Starting application process");
       this.statusOverlay.updateStatus("applying");
 
-      // Validate user profile
       if (!this.userProfile) {
         await this.fetchApplicationTaskData();
       }
@@ -558,10 +514,7 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         );
       }
 
-      // Wait for page to fully load
       await this.wait(3000);
-
-      // Start application
       await this.apply();
     } catch (error) {
       this.reportError(error, { phase: "application" });
@@ -579,6 +532,8 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         type: "SEND_CV_TASK_ERROR",
         data: this.errorToString(error),
       });
+
+      this.closeCurrentTabAndMoveToNext("Application error occurred");
     }
     this.applicationState.isApplicationInProgress = false;
   }
@@ -593,12 +548,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     }
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC FORM HANDLING
-  // ========================================
-  /**
-   * Wait for URL to change and contain expected path
-   */
   async waitForUrlChange(originalUrl, expectedPath, timeout = 10000) {
     const startTime = Date.now();
 
@@ -607,7 +556,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
       const currentUrl = window.location.href;
 
-      // Check if URL changed and contains expected path
       if (currentUrl !== originalUrl && currentUrl.includes(expectedPath)) {
         return true;
       }
@@ -619,12 +567,8 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     return false;
   }
 
-  /**
-   * Navigate to the Application tab
-   */
   async navigateToApplicationTab() {
     try {
-      // Find the Application tab using multiple selectors
       const applicationTab =
         document.querySelector("#job-application-form") ||
         document.querySelector('a[href*="/application"]') ||
@@ -639,13 +583,10 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         return false;
       }
 
-      // Get current URL to detect navigation
       const currentUrl = window.location.href;
 
-      // Click the Application tab
       applicationTab.click();
 
-      // Wait for navigation to complete
       const navigationSuccess = await this.waitForUrlChange(
         currentUrl,
         "/application",
@@ -653,7 +594,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       );
 
       if (!navigationSuccess) {
-        // Give it a bit more time and continue
         await this.wait(2000);
       }
 
@@ -666,24 +606,42 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
   async apply() {
     try {
-      // Check if page is valid
       if (this.hasPageErrors()) {
         throw new SkipApplicationError(
           "Cannot start application: Page error or job no longer available"
         );
       }
 
-      // Extract job ID from URL (Ashby-specific)
-      const jobId = UrlUtils.extractJobId(window.location.href, "ashby");
-      this.log("Extracted Ashby job ID:", jobId);
+      // Use the new method to extract just the UUID job ID
+      const jobId = this.extractAshbyJobId(window.location.href);
+      if (!jobId) {
+        throw new SkipApplicationError(
+          "Could not extract valid job ID from URL"
+        );
+      }
 
-      // Wait for page to fully load
+      this.log("✅ Extracted Ashby job ID:", jobId);
+
+      try {
+        const existingApplication = await this.applicationTracker.checkIfAlreadyApplied(
+          window.location.href,
+          this.platform
+        );
+
+        if (existingApplication) {
+          this.log("✅ Job already applied to, skipping");
+          throw new SkipApplicationError(
+            `Already applied to this job on ${new Date(existingApplication.appliedAt).toLocaleDateString()}`
+          );
+        }
+      } catch (error) {
+        this.log("⚠️ Could not check application status:", error.message);
+      }
+
       await this.wait(3000);
 
-      // Extract job description from Overview tab (current page)
       const jobDescription = this.extractJobDescription();
 
-      // Navigate to Application tab
       const applicationTabNavigated = await this.navigateToApplicationTab();
       if (!applicationTabNavigated) {
         throw new SkipApplicationError(
@@ -693,16 +651,13 @@ export default class AshbyPlatform extends BasePlatformAutomation {
 
       this.statusOverlay.addInfo("Successfully navigated to Application tab");
 
-      // Wait for application page to load
       await this.wait(2000);
 
-      // Find application form
       const form = this.findApplicationForm();
       if (!form) {
         throw new SkipApplicationError("Cannot find Ashby application form");
       }
 
-      // Process the form
       const result = await this.processApplicationForm(
         form,
         this.userProfile,
@@ -727,7 +682,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
   }
 
   async handleSuccessfulApplication(jobId) {
-    // Get job details from page
     const jobTitle =
       DomUtils.extractText(["h1", ".job-title", "[data-testid='job-title']"]) ||
       document.title.split(" - ")[0] ||
@@ -743,11 +697,11 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       ]) || "Not specified";
 
     const jobData = {
-      jobId,
+      jobId, // This will now be just the UUID (e.g., "2ec11991-e231-4532-9064-abf610c2edc5")
       title: jobTitle,
       company: companyName,
       location,
-      jobUrl: window.location.href,
+      jobUrl: window.location.href, // This will be the full URL
       salary: "Not specified",
       workplace: "Not specified",
       postedDate: "Not specified",
@@ -757,23 +711,21 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       status: "applied",
     };
 
-    // Save job using ApplicationTrackerService
     try {
       await this.applicationTracker.saveJob(jobData);
-      this.log("✅ Job saved to application tracker");
+      this.log("✅ Job saved to application tracker with ID:", jobId);
+
+      this.updateApplicationCount();
     } catch (error) {
       this.log("❌ Failed to save job to tracker:", error);
     }
 
-    // Send completion message using Ashby-specific message type
     this.safeSendPortMessage({
       type: "SEND_CV_TASK_DONE",
       data: jobData,
     });
 
-    // Reset application state
-    this.applicationState.isApplicationInProgress = false;
-    this.applicationState.applicationStartTime = null;
+    this.closeCurrentTabAndMoveToNext("Application completed successfully");
 
     this.log("Ashby application completed successfully");
     this.statusOverlay.addSuccess("Application completed successfully");
@@ -786,7 +738,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     );
 
     try {
-      // Initialize/update form handler
       if (!this.formHandler) {
         this.formHandler = new AshbyFormHandler({
           logger: (message) => this.statusOverlay.addInfo(message),
@@ -799,17 +750,13 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         this.formHandler.jobDescription = jobDescription;
       }
 
-      // Handle file uploads (resume)
       await this.fileHandler.handleFileUploads(form, profile, jobDescription);
 
-      // Fill out form fields using AI-enhanced AshbyFormHandler
       await this.formHandler.fillFormWithProfile(profile);
 
-      // Submit the form
       const submitResult = await this.formHandler.submitAndVerify();
 
-      // Check for success/error messages after submission
-      await this.wait(2000); // Wait for any messages to appear
+      await this.wait(2000);
 
       const submissionStatus = this.checkSubmissionStatus();
 
@@ -822,7 +769,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
             ", "
           )}`
         );
-        // Still consider it a successful submission, just with warnings
         return true;
       } else if (submissionStatus.hasFailure) {
         this.statusOverlay.addError(
@@ -843,9 +789,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     }
   }
 
-  /**
-   * Check for success/error messages after form submission
-   */
   checkSubmissionStatus() {
     const status = {
       isSuccess: false,
@@ -855,7 +798,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       failureMessage: "",
     };
 
-    // Check for success message
     const successContainer = document.querySelector(
       ".ashby-application-form-success-container"
     );
@@ -864,7 +806,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       this.log("✅ Found success message after form submission");
     }
 
-    // Check for error list
     const errorsList = document.querySelector("ul._errors_oj0x8_78");
     if (errorsList && this.isElementVisible(errorsList)) {
       status.hasErrors = true;
@@ -875,7 +816,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       this.log("⚠️ Found error messages after form submission:", status.errors);
     }
 
-    // Check for other failure indicators
     const failureSelectors = [
       ".error-message",
       ".submission-failed",
@@ -899,9 +839,34 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     return status;
   }
 
-  /**
-   * Skip to next job with reason
-   */
+  closeCurrentTabAndMoveToNext(reason) {
+    this.log(`🔄 Closing current tab and moving to next job: ${reason}`);
+
+    this.applicationState.isApplicationInProgress = false;
+    this.applicationState.applicationStartTime = null;
+
+    if (window.location.href.includes("/application") || window.location.href.includes("/apply")) {
+      try {
+        window.close();
+      } catch (error) {
+        this.log("Could not close tab automatically:", error);
+      }
+    }
+
+    setTimeout(() => {
+      this.moveToNextJob();
+    }, 1000);
+  }
+
+  moveToNextJob() {
+    this.log("🎯 Moving to next job");
+
+    this.safeSendPortMessage({
+      type: "SEARCH_NEXT_READY",
+      data: { status: "ready" }
+    });
+  }
+
   skipToNextJob(reason) {
     this.log(`⏭️ Skipping to next job: ${reason}`);
     this.statusOverlay.addWarning(`Skipping job: ${reason}`);
@@ -911,18 +876,20 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       data: reason,
     });
 
-    // Reset application state
-    this.applicationState.isApplicationInProgress = false;
-    this.applicationState.applicationStartTime = null;
+    this.closeCurrentTabAndMoveToNext(`Skipped: ${reason}`);
   }
 
-  // ========================================
-  // ASHBY-SPECIFIC UTILITY METHODS
-  // ========================================
+  updateApplicationCount() {
+    if (this.searchData) {
+      this.searchData.current++;
+      this.updateProgress({
+        total: this.searchData.limit,
+        completed: this.searchData.current,
+        current: `Applied to ${this.searchData.current} jobs`,
+      });
+    }
+  }
 
-  /**
-   * Check if element is visible - Ashby specific
-   */
   isElementVisible(element) {
     if (!element) return false;
 
@@ -935,15 +902,11 @@ export default class AshbyPlatform extends BasePlatformAutomation {
         element.offsetParent !== null
       );
     } catch (error) {
-      return true; // Default to true on error
+      return true;
     }
   }
 
-  /**
-   * Find Ashby application form
-   */
   findApplicationForm() {
-    // Ashby-specific form selectors
     const ashbySelectors = [
       "._jobPostingForm_oj0x8_399",
       ".ashby-application-form-container",
@@ -952,7 +915,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       'div[class*="jobPostingForm"]',
     ];
 
-    // Try Ashby-specific selectors first
     for (const selector of ashbySelectors) {
       const formContainer = document.querySelector(selector);
       if (formContainer && this.isElementVisible(formContainer)) {
@@ -960,15 +922,10 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       }
     }
 
-    // Fallback to generic form detection
     return DomUtils.findForm([]);
   }
 
-  /**
-   * Enhanced job description extraction from Overview tab
-   */
   extractJobDescription() {
-    // Ashby-specific description selectors for Overview tab
     const ashbyDescriptionSelectors = [
       ".ashby-job-posting-overview",
       ".job-description",
@@ -978,16 +935,13 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       ".job-details",
       ".content",
       ".ashby-job-posting-content",
-      // More specific Ashby selectors
       ".ashby-job-posting-overview-section",
       ".overview-content",
     ];
 
     let description = DomUtils.extractText(ashbyDescriptionSelectors);
 
-    // If no description found with specific selectors, try broader approach
     if (!description) {
-      // Look for the overview tab content specifically
       const overviewTab =
         document.querySelector("#overview") ||
         document
@@ -1002,7 +956,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       }
     }
 
-    // Fallback to main content area
     if (!description) {
       const mainContent = document.querySelector(
         "main, #content, .content, .job-content, .ashby-job-posting"
@@ -1012,7 +965,6 @@ export default class AshbyPlatform extends BasePlatformAutomation {
       }
     }
 
-    // Final fallback using job title and company
     if (!description) {
       const jobTitle = document.title || "";
       const companyName =
@@ -1043,21 +995,12 @@ export default class AshbyPlatform extends BasePlatformAutomation {
     return String(e);
   }
 
-  // Override URL normalization for Ashby-specific needs
   platformSpecificUrlNormalization(url) {
-    // Remove /apply suffix for Ashby URLs
     return url.replace(/\/apply$/, "");
   }
 
-  // ========================================
-  // CLEANUP - Inherited from base class with Ashby-specific additions
-  // ========================================
-
   cleanup() {
-    // Base class handles most cleanup
     super.cleanup();
-
-    // Ashby-specific cleanup if needed
     this.log("🧹 Ashby-specific cleanup completed");
   }
 }

@@ -1,6 +1,6 @@
 // core/logger.js
 export default class Logger {
-  constructor(context = "Automation", devMode = false) {
+  constructor(context = "Automation", devMode = true) {
     this.context = context;
     this.devMode = devMode;
     this.logs = [];
