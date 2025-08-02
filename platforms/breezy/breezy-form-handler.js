@@ -59,16 +59,16 @@ export class BreezyFormHandler {
 
       for (let i = 0; i < formFields.length; i++) {
         const field = formFields[i];
-        
+
         try {
           this.log(`Processing field ${i + 1}/${formFields.length}: ${field.label} (${field.type})`);
-          
+
           // Skip file uploads for now
           if (field.type === 'file') {
             this.log(`⏭️ Skipping file upload: ${field.label}`);
             continue;
           }
-          
+
           const success = await this.handleField(field);
           if (success) {
             processedCount++;
@@ -77,10 +77,10 @@ export class BreezyFormHandler {
             failedFields.push(field.label);
             this.log(`❌ Failed to process: ${field.label}`);
           }
-          
+
           // Wait between fields
           await this.wait(300);
-          
+
         } catch (error) {
           failedFields.push(field.label);
           this.log(`❌ Error processing field "${field.label}": ${error.message}`);
@@ -110,7 +110,7 @@ export class BreezyFormHandler {
       // Use the proven selector approach
       const fieldSelectors = [
         'input[type=text]',
-        'input[type=email]', 
+        'input[type=email]',
         'input[type=tel]',
         'input[type=number]',
         'input[name="cSalary"]', // Specific salary field
@@ -160,12 +160,12 @@ export class BreezyFormHandler {
       // Determine field type and get options
       if (element.tagName === 'INPUT') {
         field.type = element.type;
-        
+
         // Special handling for salary fields
         if (element.name === 'cSalary' || this.isSalaryField(element)) {
           field.type = 'salary';
         }
-      } 
+      }
       else if (element.tagName === 'SELECT') {
         field.type = 'select';
         field.options = Array.from(element.options)
@@ -182,18 +182,18 @@ export class BreezyFormHandler {
           const inputType = inputs[0].type;
           field.type = inputType;
           field.element = element; // Keep the UL as the main element
-          
+
           // Extract options from the list
           const optionElements = element.querySelectorAll('li span, li strong, li .ng-binding');
           field.options = Array.from(optionElements)
             .map(span => span.textContent.trim())
             .filter(text => text.length > 0);
-          
+
           // Fallback to input labels if no spans found
           if (field.options.length === 0) {
             field.options = Array.from(inputs).map(input => {
-              const label = input.closest('label') || 
-                          document.querySelector(`label[for="${input.id}"]`);
+              const label = input.closest('label') ||
+                document.querySelector(`label[for="${input.id}"]`);
               return label ? label.textContent.trim() : '';
             }).filter(text => text.length > 0);
           }
@@ -220,10 +220,10 @@ export class BreezyFormHandler {
 
       while (label && attempts < maxAttempts) {
         attempts++;
-        
+
         // Move to previous sibling or parent
         label = label.previousElementSibling || label.parentElement;
-        
+
         if (!label) break;
 
         // Check if this is a header element
@@ -233,12 +233,12 @@ export class BreezyFormHandler {
           if (spanH2) {
             return spanH2.textContent.trim();
           }
-          
+
           const polygotSpan = label.querySelector('span.polygot');
           if (polygotSpan) {
             return polygotSpan.textContent.trim();
           }
-          
+
           return label.textContent.trim();
         }
       }
@@ -447,7 +447,7 @@ export class BreezyFormHandler {
           radioValue === valueStr
         ) {
           this.scrollToElement(li);
-          
+
           // Click the list item or label to select the radio
           const label = li.querySelector('label');
           if (label) {
@@ -489,15 +489,15 @@ export class BreezyFormHandler {
 
         const shouldCheck = values.some(val => {
           const valStr = String(val).toLowerCase();
-          return optionText === valStr || 
-                 optionText.includes(valStr) || 
-                 valStr.includes(optionText) ||
-                 checkboxValue === valStr;
+          return optionText === valStr ||
+            optionText.includes(valStr) ||
+            valStr.includes(optionText) ||
+            checkboxValue === valStr;
         });
 
         if (shouldCheck && !checkbox.checked) {
           this.scrollToElement(li);
-          
+
           const label = li.querySelector('label');
           if (label) {
             label.click();
@@ -524,13 +524,13 @@ export class BreezyFormHandler {
   async fillSingleCheckbox(element, value) {
     try {
       const shouldCheck = this.shouldCheckValue(value);
-      
+
       if (element.checked !== shouldCheck) {
         this.scrollToElement(element);
-        
-        const label = element.closest('label') || 
-                     document.querySelector(`label[for="${element.id}"]`);
-        
+
+        const label = element.closest('label') ||
+          document.querySelector(`label[for="${element.id}"]`);
+
         if (label) {
           label.click();
         } else {
@@ -584,8 +584,6 @@ export class BreezyFormHandler {
    */
   async getAIAnswer(question, options = [], fieldType = "text", fieldContext = "") {
     try {
-      this.log(`Requesting AI answer for "${question}"`);
-
       const cacheKey = JSON.stringify({
         question: this.cleanLabelText(question),
         options: options.sort(),
@@ -598,36 +596,26 @@ export class BreezyFormHandler {
         return this.answerCache.get(cacheKey);
       }
 
-      // Special handling for salary fields
-      if (fieldType === "salary" || question.toLowerCase().includes("salary")) {
-        const answer = await this.aiService.getAnswer(
-          `${question} (provide only the numeric amount without currency symbols or commas)`,
-          options,
-          {
-            platform: "breezy",
-            userData: this.userData,
-            jobDescription: this.jobDescription || "",
-            fieldType,
-            fieldContext: fieldContext + " - numeric only",
-          }
-        );
+      this.log(`Requesting AI answer for: "${question}"`);
 
-        const numericAnswer = this.extractNumericSalary(answer);
-        this.answerCache.set(cacheKey, numericAnswer);
-        return numericAnswer;
-      }
-
-      const answer = await this.aiService.getAnswer(question, options, {
+      // Use standardized AI service
+      const context = {
         platform: "breezy",
         userData: this.userData,
         jobDescription: this.jobDescription || "",
         fieldType,
         fieldContext,
-      });
+        required: fieldContext.includes('required')
+      };
 
-      this.answerCache.set(cacheKey, answer);
-      return answer;
+      const answer = await this.aiService.getAnswer(question, options, context);
 
+      if (answer !== null && answer !== undefined && answer !== "") {
+        this.answerCache.set(cacheKey, answer);
+        return answer;
+      } else {
+        return null;
+      }
     } catch (error) {
       this.log(`Error getting AI answer: ${error.message}`);
       return null;
@@ -675,10 +663,10 @@ export class BreezyFormHandler {
    * Check if a field is required
    */
   isFieldRequired(element) {
-    return element.required || 
-           element.getAttribute("aria-required") === "true" ||
-           element.classList.contains("is-required") ||
-           element.closest(".form-group")?.classList.contains("required");
+    return element.required ||
+      element.getAttribute("aria-required") === "true" ||
+      element.classList.contains("is-required") ||
+      element.closest(".form-group")?.classList.contains("required");
   }
 
   /**

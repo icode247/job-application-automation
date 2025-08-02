@@ -1,5 +1,4 @@
-
-// background/platforms/recruitee.js - REFACTORED VERSION
+// background/platforms/recruitee.js - FIXED VERSION
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
 
 export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
@@ -426,7 +425,8 @@ export default class RecruiteeAutomationHandler extends BaseBackgroundHandler {
     const oldUrl = automation.platformState.currentJobUrl;
 
     // Recruitee-specific delay logic (shorter delays than Lever)
-    const errorCount = this.logounts.get(automation.sessionId) || 0;
+    // FIX: Changed 'logounts' to 'logCounts' (assuming this exists in base class)
+    const errorCount = this.logCounts?.get(automation.sessionId) || 0;
     const delay = status === "ERROR" ? Math.min(2000 * errorCount, 10000) : 0;
 
     setTimeout(async () => {

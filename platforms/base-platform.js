@@ -1,5 +1,6 @@
 // platforms/base-platform.js
 import Logger from "../../core/logger.js";
+import AIService from "../../services/ai-service.js";
 
 export default class BasePlatform {
   constructor(config) {
@@ -8,6 +9,10 @@ export default class BasePlatform {
     this.userId = config.userId;
     this.contentScript = config.contentScript;
     this.config = config.config || {};
+    this.aiService = new AIService({
+      apiHost: this.apiHost,
+      platform: this.platform
+    });
 
     // State
     this.isRunning = false;
@@ -34,7 +39,6 @@ export default class BasePlatform {
     this.logger = new Logger(`${this.platform}`, this.devMode);
   }
 
-  // Abstract methods - must be implemented by platform-specific classes
   async initialize() {
     this.log("🚀 Initializing platform automation");
   }
@@ -67,7 +71,7 @@ export default class BasePlatform {
       if (sessionContext.userId) this.userId = sessionContext.userId;
       if (sessionContext.userProfile)
         this.userProfile = sessionContext.userProfile;
-       console.log(sessionContext)
+      console.log(sessionContext)
       if (sessionContext.devMode !== undefined) {
         this.devMode = sessionContext.devMode;
         // Update logger with new devMode setting
@@ -230,6 +234,30 @@ export default class BasePlatform {
 
   getRandomDelay(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+
+  /**
+   * Standardized method for getting AI answers with field analysis
+   */
+  async getAIAnswer(question, options = [], fieldElement = null, additionalContext = {}) {
+    const context = {
+      platform: this.platform,
+      userData: this.userData || this.userProfile,
+      jobDescription: this.jobDescription || this.scrapeJobDescription?.() || "",
+      fieldElement,
+      ...additionalContext
+    };
+
+    return await this.aiService.getAnswer(question, options, context);
+  }
+
+  /**
+   * Helper method to scrape job description (override in platforms)
+   */
+  scrapeJobDescription() {
+    // Default implementation - override in specific platforms
+    return "";
   }
 
   cleanup() {

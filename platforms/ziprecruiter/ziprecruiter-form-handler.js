@@ -6,6 +6,7 @@ export default class ZipRecruiterFormHandler {
     this.jobDescription = config.jobDescription || "";
     this.fileHandler = config.fileHandler;
     this.host = config.host;
+    console.log(this.host);
 
     this.selectors = {
       INPUTS: 'input[type="text"], input[type="email"], input[type="tel"], input[type="number"]',
@@ -586,33 +587,25 @@ export default class ZipRecruiterFormHandler {
 
   async getAnswerFromAI(questionText, options = []) {
     try {
-      const data = {
-        question: questionText,
-        options: options,
+      // Use standardized AI service method
+      const context = {
+        platform: "ziprecruiter",
         userData: this.userData || {},
-        description: this.jobDescription || "",
+        jobDescription: this.jobDescription || "",
+        fieldContext: `ZipRecruiter application form field`
       };
 
-      const response = await fetch(`${this.host}/api/ai-answer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
+      const answer = await this.aiService.getAnswer(questionText, options, context);
 
-      if (!response.ok) {
-        throw new Error(`AI service returned ${response.status}`);
-      }
-
-      const result = await response.json();
-
-      if (result.answer) {
-        this.logger(`AI generated answer for "${questionText}": ${result.answer}`);
-        return result.answer;
+      if (answer) {
+        this.logger(`AI generated answer for "${questionText}": ${answer}`);
+        return answer;
       }
     } catch (aiError) {
       this.logger(`AI service error: ${aiError.message}`);
     }
 
+    // Fallback logic (keep existing fallback for compatibility)
     const normalizedQuestion = questionText.toLowerCase();
     const defaultAnswers = {
       "work authorization": "Yes",

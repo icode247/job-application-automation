@@ -733,18 +733,25 @@ export class RecruiteeFormHandler {
     try {
       this.log(`🤖 Thinking of answer for "${label}"...`);
 
+      // Use standardized AI service method
       const context = {
         platform: "recruitee",
         userData: this.userData,
         jobDescription: this.scrapeJobDescription(),
+        fieldContext: `Recruitee application form field`
       };
 
       const answer = await this.aiService.getAnswer(label, options, context);
-      const cleanedAnswer = answer.replace(/["*\-]/g, "");
 
-      this.answerCache.set(normalizedLabel, cleanedAnswer);
-      return cleanedAnswer;
+      if (answer !== null && answer !== undefined && answer !== "") {
+        const cleanedAnswer = answer.replace(/["*\-]/g, "");
+        this.answerCache.set(normalizedLabel, cleanedAnswer);
+        return cleanedAnswer;
+      } else {
+        return null;
+      }
     } catch (error) {
+      this.log(`Error getting AI answer: ${error.message}`);
       throw error;
     }
   }

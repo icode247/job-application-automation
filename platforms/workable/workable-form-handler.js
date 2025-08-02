@@ -1,6 +1,6 @@
 // platforms/workable/workable-form-handler.js - FIXED VERSION
 import { AIService } from "../../services/index.js";
-//handlePhoneInputWithCountryCode
+
 export default class WorkableFormHandler {
   constructor(options = {}) {
     this.logger = options.logger || console.log;
@@ -9,8 +9,6 @@ export default class WorkableFormHandler {
     this.jobDescription = options.jobDescription || "";
     this.aiService = new AIService({ apiHost: this.host });
     this.answerCache = new Map();
-
-    // FIXED: Add form state tracking to prevent duplicates
     this.processedForms = new Set();
     this.fillInProgress = false;
     this.lastFillTime = 0;
@@ -146,8 +144,7 @@ export default class WorkableFormHandler {
       }
 
       this.logger(
-        `Found submit button: ${
-          submitButton.textContent || submitButton.value || "Unnamed button"
+        `Found submit button: ${submitButton.textContent || submitButton.value || "Unnamed button"
         }`
       );
 
@@ -673,18 +670,18 @@ export default class WorkableFormHandler {
       // Workable-specific selectors with enhanced coverage
       const formElements = form.querySelectorAll(
         'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), ' +
-          "select, textarea, " +
-          '[role="radio"], [role="checkbox"], [role="combobox"], ' +
-          'fieldset[role="radiogroup"], ' +
-          'div[role="group"], ' +
-          '[data-ui="select"], ' +
-          '[data-role="dropzone"], ' +
-          "div.field-type-Boolean, " +
-          ".styles--3aPac input, " +
-          ".styles--3aPac select, " +
-          ".styles--3aPac textarea, " +
-          'div[class*="styles--3IYUq"], ' +
-          'div[class*="styles--2-TzV"]'
+        "select, textarea, " +
+        '[role="radio"], [role="checkbox"], [role="combobox"], ' +
+        'fieldset[role="radiogroup"], ' +
+        'div[role="group"], ' +
+        '[data-ui="select"], ' +
+        '[data-role="dropzone"], ' +
+        "div.field-type-Boolean, " +
+        ".styles--3aPac input, " +
+        ".styles--3aPac select, " +
+        ".styles--3aPac textarea, " +
+        'div[class*="styles--3IYUq"], ' +
+        'div[class*="styles--2-TzV"]'
       );
 
       this.logger(`Found ${formElements.length} form elements`);
@@ -1133,54 +1130,37 @@ export default class WorkableFormHandler {
   /**
    * Get an appropriate answer from AI for a form field
    */
-  async getAIAnswer(
-    question,
-    options = [],
-    fieldType = "text",
-    fieldContext = ""
-  ) {
+  async getAIAnswer(question, options = [], fieldType = "text", fieldContext = "") {
     try {
-      const cacheKey = `${question}:${options.join(",")}:${fieldType}`;
+      const cacheKey = `${question}_${options.join("_")}_${fieldType}`;
+
+      // Check cache first
       if (this.answerCache.has(cacheKey)) {
-        const cachedAnswer = this.answerCache.get(cacheKey);
-        this.logger(`Using cached answer for "${question}": ${cachedAnswer}`);
-        return cachedAnswer;
+        return this.answerCache.get(cacheKey);
       }
 
-      this.logger(`Requesting AI answer for "${question}"`);
+      this.logger(`Requesting AI answer for: "${question}" with ${options.length} options`);
 
-      const answer = await this.aiService.getAnswer(question, options, {
+      // Use standardized AI service
+      const context = {
         platform: "workable",
         userData: this.userData,
         jobDescription: this.jobDescription,
         fieldType,
         fieldContext,
-      });
+        required: fieldContext.includes('required')
+      };
 
-      // Only cache and return valid answers
-      if (answer !== null && answer !== undefined && answer !== "") {
-        this.answerCache.set(cacheKey, answer);
-        return answer;
-      } else {
-        this.logger(`AI returned empty answer for "${question}"`);
+      const answer = await this.aiService.getAnswer(question, options, context);
 
-        // Return fallback answer instead of null
-        const fallback = this.getFallbackAnswer(fieldType, options);
-        this.logger(`Using fallback answer for "${question}": ${fallback}`);
-        return fallback;
-      }
+      // Cache the answer
+      this.answerCache.set(cacheKey, answer);
+      return answer;
     } catch (error) {
-      this.logger(
-        `Error getting AI answer for "${question}": ${error.message}`
-      );
-
-      // Return fallback answer instead of null
-      const fallback = this.getFallbackAnswer(fieldType, options);
-      this.logger(`Using fallback answer for "${question}": ${fallback}`);
-      return fallback;
+      this.logger(`Error getting AI answer: ${error.message}`);
+      return null;
     }
   }
-
   /**
    * Get fallback answer based on field type
    */
@@ -1344,8 +1324,7 @@ export default class WorkableFormHandler {
       const phoneCountryCode = profile.phoneCountryCode;
 
       this.logger(
-        `Setting phone: ${phoneNumber} with country code: ${
-          phoneCountryCode || "default"
+        `Setting phone: ${phoneNumber} with country code: ${phoneCountryCode || "default"
         }`
       );
 
@@ -1792,8 +1771,7 @@ export default class WorkableFormHandler {
         }
 
         this.logger(
-          `Checkbox ${shouldCheck ? "check" : "uncheck"} ${
-            success ? "successful" : "failed"
+          `Checkbox ${shouldCheck ? "check" : "uncheck"} ${success ? "successful" : "failed"
           }`
         );
         return success;
@@ -2059,7 +2037,7 @@ export default class WorkableFormHandler {
           element.tagName === "FIELDSET"
             ? element
             : element.closest('fieldset[role="radiogroup"]') ||
-              element.closest('[role="radiogroup"]');
+            element.closest('[role="radiogroup"]');
 
         if (radioContainer) {
           const radios = radioContainer.querySelectorAll('[role="radio"]');
@@ -2164,8 +2142,7 @@ export default class WorkableFormHandler {
 
             if (shouldCheck !== null) {
               this.logger(
-                `AI decision for checkbox "${field.label}": ${
-                  shouldCheck ? "CHECK" : "UNCHECK"
+                `AI decision for checkbox "${field.label}": ${shouldCheck ? "CHECK" : "UNCHECK"
                 }`
               );
               await this.fillCheckboxField(field.element, shouldCheck);

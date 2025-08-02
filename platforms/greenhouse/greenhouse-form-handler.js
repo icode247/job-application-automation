@@ -614,17 +614,20 @@ export default class GreenhouseFormHandler {
 
             this.logger(`Requesting AI answer for: "${question}" with ${options.length} options`);
 
-            const answer = await this.aiService.getAnswer(question, options, {
+            // Use standardized AI service
+            const context = {
                 platform: "greenhouse",
                 userData: this.userData,
                 jobDescription: this.jobDescription,
                 fieldType,
                 fieldContext,
-            });
+                required: fieldContext.includes('required')
+            };
+
+            const answer = await this.aiService.getAnswer(question, options, context);
 
             // Cache the answer
             this.answerCache.set(cacheKey, answer);
-
             return answer;
         } catch (error) {
             this.logger(`Error getting AI answer: ${error.message}`);

@@ -216,8 +216,8 @@ export class AshbyFormHandler {
           textInput.tagName.toLowerCase() === "textarea"
             ? "textarea"
             : textInput.type === "number"
-            ? "number"
-            : textInput.type || "text",
+              ? "number"
+              : textInput.type || "text",
         subType: textInput.type || "text",
         element: textInput,
       };
@@ -1317,12 +1317,7 @@ export class AshbyFormHandler {
   /**
    * Get AI answer for a form field
    */
-  async getAIAnswer(
-    question,
-    options = [],
-    fieldType = "text",
-    fieldContext = ""
-  ) {
+  async getAIAnswer(question, options = [], fieldType = "text", fieldContext = "") {
     try {
       const cacheKey = JSON.stringify({
         question: this.cleanLabelText(question),
@@ -1337,43 +1332,19 @@ export class AshbyFormHandler {
         return cachedAnswer;
       }
 
-      // Use userData directly instead of calling getUserDetailsForContext
-      const userDataForContext = this.userData;
-
-      // Special handling for salary fields
-      if (
-        question.toLowerCase().includes("salary") ||
-        question.toLowerCase().includes("compensation") ||
-        question.toLowerCase().includes("expected salary") ||
-        question.toLowerCase().includes("salary expectation") ||
-        fieldContext.includes("salary")
-      ) {
-        this.logger(`Special salary field handling for "${question}"`);
-        const answer = await this.aiService.getAnswer(
-          `${question} (provide only the numeric amount without currency symbols or commas)`,
-          options,
-          {
-            platform: "ashby",
-            userData: userDataForContext,
-            jobDescription: this.jobDescription || "",
-            fieldType,
-            fieldContext: fieldContext + " - numeric only",
-          }
-        );
-
-        const numericAnswer = this.extractNumericSalary(answer);
-        this.answerCache.set(cacheKey, numericAnswer);
-        this.logger(`Extracted numeric salary: ${numericAnswer}`);
-        return numericAnswer;
-      }
-
-      const answer = await this.aiService.getAnswer(question, options, {
+      // Use standardized AI service
+      const context = {
         platform: "ashby",
-        userData: userDataForContext,
+        userData: this.userData,
         jobDescription: this.jobDescription || "",
         fieldType,
         fieldContext,
-      });
+        required: fieldContext.includes('required')
+      };
+
+      console.log("Context:", context);
+
+      const answer = await this.aiService.getAnswer(question, options, context);
 
       if (answer !== null && answer !== undefined && answer !== "") {
         this.answerCache.set(cacheKey, answer);
@@ -1445,7 +1416,7 @@ export class AshbyFormHandler {
         return false;
       }
 
-     
+
       return this.clickSubmitButton(submitButton);
     } catch (error) {
       this.logger(`❌ Error submitting form: ${error.message}`);

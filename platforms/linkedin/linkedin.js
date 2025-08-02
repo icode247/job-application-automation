@@ -1017,64 +1017,10 @@ export default class LinkedInPlatform extends BasePlatform {
     try {
       this.statusOverlay.addInfo(`Thinking about how to answer: "${label}"...`);
 
-      // Build enhanced context like Ashby does
-      const context = {
-        platform: this.platform,
-        userData: this.userProfile,
-        jobDescription: this.scrapeJobDescription(),
-        fieldType: this.determineFieldType(label, options),
-        fieldContext: this.buildFieldContext(label, options)
-      };
-
-      let enhancedLabel = label;
-      let answer;
-
-      // Special handling for salary fields (like Ashby)
-      if (this.isSalaryField(label)) {
-        this.log(`Special salary field handling for "${label}"`);
-        enhancedLabel = `${label} (provide only the numeric amount without currency symbols or commas)`;
-
-        answer = await this.aiService.getAnswer(enhancedLabel, options, {
-          ...context,
-          fieldContext: context.fieldContext + " - numeric only"
-        });
-
-        // Extract numeric value like Ashby does
-        const numericAnswer = this.extractNumericSalary(answer);
-        this.answerCache.set(normalizedLabel, numericAnswer);
-        this.log(`Extracted numeric salary: ${numericAnswer}`);
-
-        this.statusOverlay.addSuccess(`Got the perfect salary amount! ✨`);
-        return numericAnswer;
-      }
-
-      // Special handling for date fields
-      else if (this.isDateField(label)) {
-        this.log(`Special date field handling for "${label}"`);
-        enhancedLabel = `${label} (provide date in MM/DD/YYYY format)`;
-
-        answer = await this.aiService.getAnswer(enhancedLabel, options, {
-          ...context,
-          fieldContext: context.fieldContext + " - date format MM/DD/YYYY"
-        });
-      }
-
-      // Special handling for location fields
-      else if (this.isLocationField(label)) {
-        this.log(`Special location field handling for "${label}"`);
-        answer = this.getUserLocationData() || await this.aiService.getAnswer(label, options, context);
-      }
-
-      // Special handling for "How did you hear" fields
-      else if (this.isHowDidYouHearField(label)) {
-        this.log(`Special "how did you hear" field handling for "${label}"`);
-        answer = "LinkedIn";
-      }
-
-      // Regular field handling with enhanced context
-      else {
-        answer = await this.aiService.getAnswer(label, options, context);
-      }
+      // Use the standardized method from base platform
+      const answer = await this.getAIAnswer(label, options, null, {
+        fieldContext: `LinkedIn Easy Apply form field`
+      });
 
       if (answer !== null && answer !== undefined && answer !== "") {
         this.statusOverlay.addSuccess(`Got the perfect answer for that question! ✨`);
