@@ -5,9 +5,9 @@ import SessionManager from "./session-manager.js";
 import Logger from "../core/logger.js";
 
 class BackgroundService {
-  constructor(devMode = false) {
+  constructor(devMode = false, apiHost = null) {
     this.devMode = devMode;
-
+    this.apiHost = apiHost;
     this.logger = new Logger("BackgroundService", this.devMode);
 
     // Initialize managers with shared logger context

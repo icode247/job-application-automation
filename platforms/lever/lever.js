@@ -8,7 +8,7 @@ import {
   ApplicationTrackerService,
   UserService,
 } from "../../services/index.js";
-
+//Cannot find Apply button on job listing page
 export default class LeverPlatform extends BasePlatformAutomation {
   constructor(config) {
     super(config);
@@ -394,6 +394,14 @@ export default class LeverPlatform extends BasePlatformAutomation {
       this.log("📝 Starting application process");
       this.statusOverlay.addInfo("Starting application process");
 
+      // Check for success page first
+      const applied = this.checkSubmissionSuccess();
+      console.log("ALREADY APPLIED:", applied)
+      if (applied) {
+        await this.handleAlreadyApplied();
+        return;
+      }
+
       // Validate user profile (inherited validation logic)
       if (!this.userProfile) {
         this.log("⚠️ No user profile available, attempting to fetch...");
@@ -405,13 +413,6 @@ export default class LeverPlatform extends BasePlatformAutomation {
       if (this.isLeverJobListingPage(currentUrl)) {
         this.log("📋 On job listing page, need to click Apply button");
         await this.handleJobListingPage();
-      }
-
-      // Check for success page first
-      const applied = this.checkSubmissionSuccess();
-      if (applied) {
-        await this.handleAlreadyApplied();
-        return;
       }
 
       // Proceed with application process
@@ -695,6 +696,7 @@ export default class LeverPlatform extends BasePlatformAutomation {
       this.statusOverlay.addSuccess(
         "URL indicates success page - application submitted"
       );
+      console.log("URL indicates success page - application submitted")
       return true;
     }
 

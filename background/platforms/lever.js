@@ -1,15 +1,26 @@
-// background/platforms/lever.js - REFACTORED VERSION
+// background/platforms/lever.js - ENHANCED VERSION WITH APPLICATION TRACKING
 import BaseBackgroundHandler from "../../shared/base/base-background-handler.js";
+import {
+  ApplicationTrackerService,
+  UserService,
+} from "../../services/index.js";
 
 export default class LeverAutomationHandler extends BaseBackgroundHandler {
   constructor(messageHandler) {
     const devMode = messageHandler.devMode;
     super(messageHandler, "lever", devMode);
+
+    this.messageHandler = messageHandler;
+
+    if (!this.logCounts) {
+      this.logCounts = new Map();
+    }
   }
 
-  /**
-   * Platform-specific message handling - only Lever-specific logic here
-   */
+  getApiHost() {
+    return this.messageHandler.apiHost;
+  }
+
   async handlePlatformSpecificMessage(type, data, port) {
     switch (type) {
       case "GET_SEARCH_TASK":
@@ -40,7 +51,6 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         await this.handleSearchTaskDone(port, data);
         break;
 
-      // ✅ FIX: Add missing message types that the frontend sends
       case "CHECK_APPLICATION_STATUS":
       case "VERIFY_APPLICATION_STATUS":
         await this.handleVerifyApplicationStatus(port, data);
@@ -54,7 +64,6 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         await this.handleSearchNextReady(port, data);
         break;
 
-      // ✅ FIX: Add SEARCH_COMPLETED handler
       case "SEARCH_COMPLETED":
         await this.handleSearchCompleted(port, data);
         break;
@@ -68,52 +77,291 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     }
   }
 
-  async handleSearchCompleted(port, data) {
-    const windowId = port.sender?.tab?.windowId;
-    this.log(`🏁 Lever search completed for window ${windowId}`);
-
+  async handleSendCvTask(port, data) {
     try {
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icons/icon48.png",
-        title: "Lever Job Search Completed",
-        message: "All job applications have been processed.",
+      const { url, title } = data;
+      const windowId = port.sender?.tab?.windowId;
+
+      this.log(`🎯 Processing Lever job application: ${url}`);
+
+      let automation = null;
+      for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
+        if (auto.windowId === windowId) {
+          automation = auto;
+          break;
+        }
+      }
+
+      if (!automation) {
+        throw new Error("No Lever automation session found");
+      }
+
+      if (!automation.applicationTracker) {
+        automation.applicationTracker = new ApplicationTrackerService({
+          userId: automation.userId,
+          apiHost: this.getApiHost(),
+        });
+      }
+
+      if (!automation.userService) {
+        automation.userService = new UserService({
+          userId: automation.userId,
+          apiHost: this.getApiHost(),
+        });
+      }
+
+      const jobId = this.extractJobIdFromUrl(url);
+      if (!jobId) {
+        this.log(`⚠️ Could not extract job ID from URL: ${url}`);
+      }
+
+      this.log(`🔍 Checking if user can apply more jobs...`);
+      const canApply = await automation.userService.canApplyMore();
+      if (!canApply) {
+        this.log(`❌ User has reached application limit`);
+        this.safePortSend(port, {
+          type: "LIMIT_REACHED",
+          message: "You have reached your application limit for this billing period",
+          data: { url, reason: "APPLICATION_LIMIT_REACHED" }
+        });
+        return;
+      }
+
+      if (jobId) {
+        this.log(`🔍 Checking if already applied to job: ${jobId}`);
+        const alreadyApplied = await automation.applicationTracker.checkIfAlreadyApplied(jobId);
+        if (alreadyApplied) {
+          this.log(`⚠️ Job already applied: ${jobId}`);
+          this.safePortSend(port, {
+            type: "ALREADY_APPLIED",
+            message: "You have already applied to this job",
+            data: { url, jobId, reason: "ALREADY_APPLIED" }
+          });
+          return;
+        }
+      }
+
+      const normalizedUrl = this.messageHandler.normalizeUrl(url);
+      if (automation.platformState.submittedLinks?.some(
+        (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
+      )) {
+        this.safePortSend(port, {
+          type: "DUPLICATE",
+          message: "This job has already been processed in this session",
+          data: { url, reason: "SESSION_DUPLICATE" },
+        });
+        return;
+      }
+
+      if (automation.platformState.isProcessingJob) {
+        this.safePortSend(port, {
+          type: "ERROR",
+          message: "Already processing another job",
+          data: { url, reason: "PROCESSING_IN_PROGRESS" }
+        });
+        return;
+      }
+
+      this.log(`✅ All validation checks passed, proceeding with application`);
+
+      const leverApplyUrl = url.endsWith("/apply") ? url : url + "/apply";
+      const tab = await chrome.tabs.create({
+        url: leverApplyUrl,
+        windowId: windowId,
+        active: true,
       });
+
+      automation.platformState.isProcessingJob = true;
+      automation.platformState.currentJobUrl = url;
+      automation.platformState.currentJobTabId = tab.id;
+      automation.platformState.currentJobId = jobId;
+      automation.platformState.applicationStartTime = Date.now();
+
+      if (!automation.platformState.submittedLinks) {
+        automation.platformState.submittedLinks = [];
+      }
+      automation.platformState.submittedLinks.push({
+        url: url,
+        jobId: jobId,
+        status: "PROCESSING",
+        timestamp: Date.now(),
+      });
+
+      this.safePortSend(port, {
+        type: "SUCCESS",
+        message: "Lever apply tab will be created",
+        data: { url, jobId, tabId: tab.id }
+      });
+
+      this.log(`✅ Lever job tab created: ${tab.id} for URL: ${url}`);
     } catch (error) {
-      this.log("⚠️ Error showing notification:", error);
+      this.log("❌ Error handling Lever SEND_CV_TASK:", error);
+      this.safePortSend(port, {
+        type: "ERROR",
+        message: error.message,
+        data: { url: data.url, error: error.message }
+      });
+    }
+  }
+
+  async handleTaskCompletion(port, data, status) {
+    const windowId = port.sender?.tab?.windowId;
+
+    let automation = null;
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
+      if (auto.windowId === windowId) {
+        automation = auto;
+        break;
+      }
+    }
+
+    if (!automation) {
+      this.log(`⚠️ No automation found for task completion`);
+      return;
+    }
+
+    const currentJobUrl = automation.platformState.currentJobUrl;
+    const currentJobId = automation.platformState.currentJobId;
+    try {
+      if (status === "SUCCESS") {
+        console.log(`✅ Job application successful: ${currentJobUrl}`);
+
+        if (automation.applicationTracker && currentJobId) {
+          const applicationData = {
+            jobId: currentJobId,
+            title: data.title || "Job on Lever",
+            company: data.company || this.extractCompanyFromUrl(currentJobUrl),
+            location: data.location || "Not specified",
+            jobUrl: currentJobUrl,
+            salary: data.salary || "Not specified",
+            workplace: data.workplace || "Not specified",
+            postedDate: data.postedDate || null,
+            applicants: data.applicants || null,
+            platform: "lever",
+          };
+
+          const saved = await automation.applicationTracker.saveAppliedJob(applicationData);
+          if (saved) {
+            console.log(`✅ Applied job saved to database: ${currentJobId}`);
+          } else {
+            console.log(`⚠️ Failed to save applied job: ${currentJobId}`);
+          }
+        }
+
+        if (automation.userService) {
+          const updated = await automation.userService.updateApplicationCount();
+          if (updated) {
+            console.log(`✅ Application count updated successfully`);
+          } else {
+            console.log(`⚠️ Failed to update application count`);
+          }
+        }
+
+        if (automation.platformState.submittedLinks && currentJobUrl) {
+          const linkIndex = automation.platformState.submittedLinks.findIndex(
+            link => this.messageHandler.normalizeUrl(link.url) === this.messageHandler.normalizeUrl(currentJobUrl)
+          );
+          if (linkIndex !== -1) {
+            automation.platformState.submittedLinks[linkIndex].status = "SUCCESS";
+            automation.platformState.submittedLinks[linkIndex].completedAt = Date.now();
+          }
+        }
+
+      } else if (status === "ERROR") {
+        console.log(`❌ Job application failed: ${currentJobUrl}`);
+
+        if (automation.platformState.submittedLinks && currentJobUrl) {
+          const linkIndex = automation.platformState.submittedLinks.findIndex(
+            link => this.messageHandler.normalizeUrl(link.url) === this.messageHandler.normalizeUrl(currentJobUrl)
+          );
+          if (linkIndex !== -1) {
+            automation.platformState.submittedLinks[linkIndex].status = "ERROR";
+            automation.platformState.submittedLinks[linkIndex].error = data;
+            automation.platformState.submittedLinks[linkIndex].completedAt = Date.now();
+          }
+        }
+
+      } else if (status === "SKIPPED") {
+        this.log(`⚠️ Job application skipped: ${currentJobUrl}`);
+
+        if (automation.platformState.submittedLinks && currentJobUrl) {
+          const linkIndex = automation.platformState.submittedLinks.findIndex(
+            link => this.messageHandler.normalizeUrl(link.url) === this.messageHandler.normalizeUrl(currentJobUrl)
+          );
+          if (linkIndex !== -1) {
+            automation.platformState.submittedLinks[linkIndex].status = "SKIPPED";
+            automation.platformState.submittedLinks[linkIndex].reason = data;
+            automation.platformState.submittedLinks[linkIndex].completedAt = Date.now();
+          }
+        }
+      }
+
+    } catch (error) {
+      this.log(`❌ Error in task completion handling:`, error);
+    } finally {
+      automation.platformState.isProcessingJob = false;
+      automation.platformState.currentJobUrl = null;
+      automation.platformState.currentJobTabId = null;
+      automation.platformState.currentJobId = null;
+      automation.platformState.applicationStartTime = null;
+      
+
+      await this.continueOrComplete(automation, windowId, status, data);
     }
 
     this.safePortSend(port, {
-      type: "SUCCESS",
-      message: "Lever search completion acknowledged",
+      type: "TASK_COMPLETION_ACKNOWLEDGED",
+      data: { status, url: currentJobUrl }
     });
   }
 
-  /**
-   * Handle search task request - Lever specific data structure
-   */
+  extractJobIdFromUrl(url) {
+    try {
+      const matches = url.match(/\/([a-f0-9-]{36}|[a-zA-Z0-9-]+)(?:\/apply)?(?:\?.*)?$/);
+      return matches ? matches[1] : null;
+    } catch (error) {
+      this.log(`❌ Error extracting job ID from URL: ${url}`, error);
+      return null;
+    }
+  }
+
+  extractCompanyFromUrl(url) {
+    try {
+      const matches = url.match(/https:\/\/jobs\.(?:eu\.)?lever\.co\/([^\/]+)/);
+      return matches ? matches[1] : "Company on Lever";
+    } catch (error) {
+      this.log(`❌ Error extracting company from URL: ${url}`, error);
+      return "Company on Lever";
+    }
+  }
+
   async handleGetSearchTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
     let sessionData = null;
-    for (const [
-      sessionId,
-      automation,
-    ] of this.messageHandler.activeAutomations.entries()) {
+    for (const [sessionId, automation] of this.messageHandler.activeAutomations.entries()) {
       if (automation.windowId === windowId) {
         const platformState = automation.platformState;
+
+        if (!automation.applicationTracker) {
+          automation.applicationTracker = new ApplicationTrackerService({
+            userId: automation.userId,
+            apiHost: this.getApiHost(),
+          });
+        }
+
         sessionData = {
           tabId: tabId,
           limit: platformState.searchData.limit,
           current: platformState.searchData.current,
           domain: platformState.searchData.domain,
           submittedLinks: platformState.submittedLinks || [],
-          searchLinkPattern:
-            platformState.searchData.searchLinkPattern.toString(),
+          searchLinkPattern: platformState.searchData.searchLinkPattern.toString(),
+          userId: automation.userId,
+          hasApplicationTracker: !!automation.applicationTracker,
         };
 
-        // Update search tab ID
         platformState.searchTabId = tabId;
         break;
       }
@@ -125,25 +373,62 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     });
   }
 
-  /**
-   * Handle CV task request - Lever specific data structure
-   */
+  async handleSearchCompleted(port, data) {
+    const windowId = port.sender?.tab?.windowId;
+    this.log(`🏁 Lever search completed for window ${windowId}`);
+
+    let automation = null;
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
+      if (auto.windowId === windowId) {
+        automation = auto;
+        break;
+      }
+    }
+
+    let successCount = 0;
+    let errorCount = 0;
+    let skipCount = 0;
+
+    if (automation?.platformState.submittedLinks) {
+      automation.platformState.submittedLinks.forEach(link => {
+        switch (link.status) {
+          case "SUCCESS": successCount++; break;
+          case "ERROR": errorCount++; break;
+          case "SKIPPED": skipCount++; break;
+        }
+      });
+    }
+
+    try {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icons/icon48.png",
+        title: "Lever Job Search Completed",
+        message: `Successfully applied: ${successCount}, Errors: ${errorCount}, Skipped: ${skipCount}`,
+      });
+    } catch (error) {
+      this.log("⚠️ Error showing notification:", error);
+    }
+
+    this.safePortSend(port, {
+      type: "SUCCESS",
+      message: "Lever search completion acknowledged",
+      data: { successCount, errorCount, skipCount }
+    });
+  }
+
   async handleGetSendCvTask(port, data) {
     const tabId = port.sender?.tab?.id;
     const windowId = port.sender?.tab?.windowId;
 
-    this.log(
-      `🔍 GET_SEND_CV_TASK request from Lever tab ${tabId}, window ${windowId}`
-    );
+    console.log(this.getApiHost())
+
+    this.log(`🔍 GET_SEND_CV_TASK request from Lever tab ${tabId}, window ${windowId}`);
 
     let sessionData = null;
     let automation = null;
 
-    // Find automation by window ID
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
         this.log(`✅ Found Lever automation session: ${sessionId}`);
@@ -152,22 +437,18 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     }
 
     if (automation) {
-      // Ensure we have user profile data
       let userProfile = automation.userProfile;
 
-      // If no user profile in automation, try to fetch from user service
       if (!userProfile && automation.userId) {
         try {
-          this.log(
-            `📡 Fetching user profile for Lever user ${automation.userId}`
-          );
-          const { default: UserService } = await import(
-            "../../services/user-service.js"
-          );
-          const userService = new UserService({ userId: automation.userId });
+          this.log(`📡 Fetching user profile for Lever user ${automation.userId}`);
+          const { default: UserService } = await import("../../services/user-service.js");
+          const userService = new UserService({
+            userId: automation.userId,
+            apiHost: this.getApiHost()
+          });
           userProfile = await userService.getUserDetails();
 
-          // Cache it in automation for future use
           automation.userProfile = userProfile;
           this.log(`✅ User profile fetched and cached for Lever`);
         } catch (error) {
@@ -202,111 +483,18 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
       };
     }
 
-    // Send response
     const sent = this.safePortSend(port, {
       type: "SUCCESS",
       data: sessionData,
     });
 
     if (!sent) {
-      this.log(
-        `❌ Failed to send Lever CV task data to port ${port.name}`
-      );
+      this.log(`❌ Failed to send Lever CV task data to port ${port.name}`);
     } else {
       this.log(`✅ Lever CV task data sent successfully to tab ${tabId}`);
     }
   }
 
-  /**
-   * Handle CV task (opening job in new tab) - Lever specific logic
-   */
-  async handleSendCvTask(port, data) {
-    try {
-      const { url, title } = data;
-      const windowId = port.sender?.tab?.windowId;
-
-      this.log(`🎯 Opening Lever job in new tab: ${url}`);
-
-      let automation = null;
-      for (const [
-        sessionId,
-        auto,
-      ] of this.messageHandler.activeAutomations.entries()) {
-        if (auto.windowId === windowId) {
-          automation = auto;
-          break;
-        }
-      }
-
-      if (!automation) {
-        throw new Error("No Lever automation session found");
-      }
-
-      if (automation.platformState.isProcessingJob) {
-        this.safePortSend(port, {
-          type: "ERROR",
-          message: "Already processing another job",
-        });
-        return;
-      }
-
-      // Check for duplicates
-      const normalizedUrl = this.messageHandler.normalizeUrl(url);
-      if (
-        automation.platformState.submittedLinks?.some(
-          (link) => this.messageHandler.normalizeUrl(link.url) === normalizedUrl
-        )
-      ) {
-        this.safePortSend(port, {
-          type: "DUPLICATE",
-          message: "This job has already been processed",
-          data: { url },
-        });
-        return;
-      }
-
-      // Create new tab for job application - Lever specific URL format
-      const leverApplyUrl = url.endsWith("/apply") ? url : url + "/apply";
-      const tab = await chrome.tabs.create({
-        url: leverApplyUrl,
-        windowId: windowId,
-        active: true,
-      });
-
-      // Update automation state
-      automation.platformState.isProcessingJob = true;
-      automation.platformState.currentJobUrl = url;
-      automation.platformState.currentJobTabId = tab.id;
-      automation.platformState.applicationStartTime = Date.now();
-
-      // Add to submitted links
-      if (!automation.platformState.submittedLinks) {
-        automation.platformState.submittedLinks = [];
-      }
-      automation.platformState.submittedLinks.push({
-        url: url,
-        status: "PROCESSING",
-        timestamp: Date.now(),
-      });
-
-      this.safePortSend(port, {
-        type: "SUCCESS",
-        message: "Lever apply tab will be created",
-      });
-
-      this.log(`✅ Lever job tab created: ${tab.id} for URL: ${url}`);
-    } catch (error) {
-      this.log("❌ Error handling Lever SEND_CV_TASK:", error);
-      this.safePortSend(port, {
-        type: "ERROR",
-        message: error.message,
-      });
-    }
-  }
-
-  /**
-   * Handle search task completion
-   */
   async handleSearchTaskDone(port, data) {
     const windowId = port.sender?.tab?.windowId;
     this.log(`🏁 Lever search task completed for window ${windowId}`);
@@ -328,26 +516,18 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     });
   }
 
-  /**
-   * Handle application status verification
-   */
   async handleVerifyApplicationStatus(port, data) {
     const windowId = port.sender?.tab?.windowId;
 
     let automation = null;
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
         break;
       }
     }
 
-    const isActive = automation
-      ? automation.platformState.isProcessingJob
-      : false;
+    const isActive = automation ? automation.platformState.isProcessingJob : false;
 
     this.safePortSend(port, {
       type: "APPLICATION_STATUS_RESPONSE",
@@ -359,26 +539,18 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     });
   }
 
-  /**
-   * Handle job tab status check
-   */
   async handleCheckJobTabStatus(port, data) {
     const windowId = port.sender?.tab?.windowId;
 
     let automation = null;
-    for (const [
-      sessionId,
-      auto,
-    ] of this.messageHandler.activeAutomations.entries()) {
+    for (const [sessionId, auto] of this.messageHandler.activeAutomations.entries()) {
       if (auto.windowId === windowId) {
         automation = auto;
         break;
       }
     }
 
-    const isOpen = automation
-      ? automation.platformState.isProcessingJob
-      : false;
+    const isOpen = automation ? automation.platformState.isProcessingJob : false;
 
     this.safePortSend(port, {
       type: "JOB_TAB_STATUS",
@@ -390,9 +562,6 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     });
   }
 
-  /**
-   * Handle search next ready notification
-   */
   async handleSearchNextReady(port, data) {
     this.log("🔄 Lever search ready for next job");
 
@@ -402,9 +571,6 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
     });
   }
 
-  /**
-   * Override base class method to provide Lever-specific continuation logic
-   */
   async continueOrComplete(automation, windowId, status, data) {
     if (status === "SUCCESS") {
       automation.platformState.searchData.current++;
@@ -412,8 +578,9 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
 
     const oldUrl = automation.platformState.currentJobUrl;
 
-    // Lever-specific delay logic
-    const errorCount = this.logCounts.get(automation.sessionId) || 0;
+    // Safe access to logCounts with fallback
+    const sessionId = automation.sessionId || automation.sessionConfig?.sessionId;
+    const errorCount = sessionId && this.logCounts ? this.logCounts.get(sessionId) || 0 : 0;
     const delay = status === "ERROR" ? Math.min(3000 * errorCount, 15000) : 0;
 
     setTimeout(async () => {
@@ -421,12 +588,7 @@ export default class LeverAutomationHandler extends BaseBackgroundHandler {
         url: oldUrl,
         status: status,
         data: data,
-        message:
-          typeof data === "string"
-            ? data
-            : status === "ERROR"
-              ? "Application error"
-              : undefined,
+        message: typeof data === "string" ? data : status === "ERROR" ? "Application error" : undefined,
       });
     }, delay);
   }

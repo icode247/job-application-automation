@@ -13,11 +13,12 @@ import WellfoundAutomationHandler from "./platforms/wellfound.js";
 import GreenhouseAutomationHandler from "./platforms/greenhouse.js";
 
 export default class MessageHandler {
-  constructor(logger, sessionManager, windowManager, devMode = false) {
+  constructor(logger, sessionManager, windowManager, devMode = false, apiHost = null) {
     this.logger = logger;
     this.sessionManager = sessionManager;
     this.windowManager = windowManager;
     this.devMode = devMode;
+    this.apiHost = apiHost;
 
     this.orchestrator = new AutomationOrchestrator(this.logger, this.devMode);
     this.activeAutomations = new Map();
@@ -427,6 +428,10 @@ export default class MessageHandler {
         devMode
       } = request;
 
+      if (apiHost && !this.apiHost) {
+        this.apiHost = apiHost;
+      }
+
       let userProfile = null;
       try {
         const response = await fetch(`${apiHost}/api/user/${userId}`);
@@ -493,6 +498,7 @@ export default class MessageHandler {
         automationInstance.platform = platform;
         automationInstance.userId = userId;
         automationInstance.devMode = devMode;
+        automationInstance.apiHost = apiHost;
 
         if (userProfile && !userProfile.userId) {
           userProfile.userId = userId;
