@@ -1161,6 +1161,7 @@ export default class WorkableFormHandler {
       return null;
     }
   }
+  
   /**
    * Get fallback answer based on field type
    */

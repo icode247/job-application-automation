@@ -394,12 +394,8 @@ export default class LeverFormHandler {
   /**
    * Get AI answer for a form field
    */
-  async getAIAnswer(
-    question,
-    options = [],
-    fieldType = "text",
-    fieldContext = ""
-  ) {
+
+  async getAIAnswer(question, options = [], fieldType = "text", fieldContext = "") {
     try {
       const cacheKey = `${question}_${options.join("_")}_${fieldType}`;
 
@@ -408,26 +404,29 @@ export default class LeverFormHandler {
         return this.answerCache.get(cacheKey);
       }
 
-      this.logger(`Requesting AI answer for: "${question}"`);
+      this.logger(`Requesting AI answer for: "${question}" with ${options.length} options`);
 
-      const answer = await this.aiService.getAnswer(question, options, {
+      // Use standardized AI service
+      const context = {
         platform: "lever",
         userData: this.userData,
         jobDescription: this.jobDescription,
         fieldType,
         fieldContext,
-      });
+        required: fieldContext.includes('required')
+      };
+
+      const answer = await this.aiService.getAnswer(question, options, context);
 
       // Cache the answer
       this.answerCache.set(cacheKey, answer);
-
       return answer;
     } catch (error) {
       this.logger(`Error getting AI answer: ${error.message}`);
       return null;
     }
   }
-
+ 
   /**
    * Build context for AI field processing
    */
